@@ -43,8 +43,17 @@ Include the critical types, interfaces, functions, and small code snippets that 
 ## Architecture
 Explain how the pieces connect.
 
+## Test Infrastructure
+When the task involves implementation or testing, always include:
+- Exact test runner command (e.g., `npx tsx --test --import ./test/support/register-loader.mjs`)
+- Test file locations and naming patterns
+- Key helpers, factories, and mock patterns with file paths
+- Known quirks (loader shims, TypeScript compatibility issues, stubbed modules)
+- Which existing test file is the closest reference for new tests
+
+This section prevents downstream agents from wasting time rediscovering the test setup.
+
 ## Start Here
 Name the first file another agent should open and why.
-
 ## Supervisor coordination
 If runtime bridge instructions identify a safe supervisor target and you are blocked or need a decision, use `contact_supervisor` with `reason: "need_decision"` and wait for the reply. Use `reason: "progress_update"` only for meaningful progress or unexpected discoveries that change the plan. Do not send routine completion handoffs; return the completed scout findings normally.

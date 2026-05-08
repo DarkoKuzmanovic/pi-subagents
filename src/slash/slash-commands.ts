@@ -3,8 +3,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey } from "@mariozechner/pi-tui";
-import { discoverAgents, discoverAgentsAll, type ChainConfig } from "../agents/agents.ts";
+import { discoverAgents, discoverAgentsAll, saveBuiltinAgentOverride, type ChainConfig } from "../agents/agents.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import { SubagentHubComponent, type SubagentHubResult } from "../tui/subagent-hub.ts";
+import { toModelInfo } from "../shared/model-info.ts";
 import { isParallelStep, type ChainStep } from "../shared/settings.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import {
@@ -515,6 +517,35 @@ export function registerSlashCommands(
 		description: "Show subagent diagnostics",
 		handler: async (_args, ctx) => {
 			await runSlashSubagent(pi, ctx, { action: "doctor" });
+		},
+	});
+
+	pi.registerCommand("subagents", {
+		description: "Open subagent model configuration hub",
+		handler: async (_args, ctx) => {
+			const cwd = state.baseCwd;
+			const { agents } = discoverAgents(cwd, "both");
+			const availableModels = ctx.modelRegistry.getAvailable().map(toModelInfo);
+			const currentProvider = ctx.model?.provider;
+
+			if (!ctx.hasUI) {
+				ctx.ui.notify("TUI required for subagent hub", "error");
+				return;
+			}
+
+			const result = await ctx.ui.custom<SubagentHubResult>(
+				(tui, theme, _kb, done) =>
+					new SubagentHubComponent(tui, theme, agents, availableModels, currentProvider, done, cwd),
+				{ overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
+			);
+
+			if (!result) return;
+
+			for (const [agentName, modelOverride] of result.overrides) {
+				saveBuiltinAgentOverride(cwd, agentName, "user", { model: modelOverride });
+			}
+
+			ctx.ui.notify("Subagent model overrides saved", "success");
 		},
 	});
 

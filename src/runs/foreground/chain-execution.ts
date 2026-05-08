@@ -60,6 +60,20 @@ import {
 import { resolveModelCandidate } from "../shared/model-fallback.ts";
 import { validateFileOnlyOutputMode } from "../shared/single-output.ts";
 
+function formatChainStepStatus(agent: string, stepIndex: number, totalSteps: number, progress?: AgentProgress): string {
+	const step = `[${stepIndex + 1}/${totalSteps}] ${agent}`;
+	const parts: string[] = [step];
+	if (progress) {
+		if (progress.turnCount) parts.push(`turn ${progress.turnCount}`);
+		if (progress.toolCount) parts.push(`${progress.toolCount} tools`);
+		if (progress.durationMs) {
+			const s = Math.floor(progress.durationMs / 1000);
+			parts.push(s >= 60 ? `${Math.floor(s / 60)}m${s % 60}s` : `${s}s`);
+		}
+		if (progress.currentTool) parts.push(`▸ ${progress.currentTool}`);
+	}
+	return parts.join(" · ");
+}
 interface ChainExecutionDetailsInput {
 	results: SingleResult[];
 	includeProgress?: boolean;
@@ -493,6 +507,27 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	let globalTaskIndex = 0;
 	let progressCreated = false;
 
+	if (onUpdate) {
+		const stepNames = chainSteps
+			.map((s) => (isParallelStep(s) ? `parallel[${s.parallel.length}]` : (s as SequentialStep).agent))
+			.join(" → ");
+		const banner = [
+			`┃  Chain ${runId}`,
+			`┃  ${stepNames}`,
+			`┃  ${chainDir}`,
+		].join("\n");
+		onUpdate({
+			content: [{ type: "text", text: banner }],
+			details: {
+				mode: "chain" as const,
+				results: [],
+				chainAgents,
+				totalSteps,
+				currentStepIndex: 0,
+			},
+		});
+	}
+
 	for (let stepIndex = 0; stepIndex < chainSteps.length; stepIndex++) {
 		const step = chainSteps[stepIndex]!;
 		const stepTemplates = templates[stepIndex]!;
@@ -829,8 +864,11 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 							foregroundControl.toolCount = current?.toolCount;
 							foregroundControl.updatedAt = Date.now();
 						}
+						const statusLine = formatChainStepStatus(seqStep.agent, stepIndex, totalSteps, stepProgress[stepProgress.length - 1]);
+						const origText = p.content?.[0]?.type === "text" ? p.content[0].text : "";
 						onUpdate({
 							...p,
+							content: [{ type: "text", text: `${statusLine}\n${origText}` }],
 							details: {
 								mode: "chain",
 								results: results.concat(stepResults),
