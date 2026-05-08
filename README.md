@@ -36,7 +36,7 @@ Custom agents:
 - **`deslopper`**: Code cleanup agent with `contact_supervisor` tool for escalation. Designed for dead code removal, import cleanup, and structural simplification.
 - **`oracle-fresh`**: See Features above.
 
-All changes verified empirically across 10 Pi-internal tests. 407 unit + 314 integration tests pass.
+All changes verified empirically. 452 unit tests pass, 0 failures.
 
 
 ## Installation
@@ -221,6 +221,7 @@ The package includes reusable prompt templates for common workflows. You do not 
 | `/parallel-handoff-plan` | Combine external research and `context-builder` passes into an implementation handoff plan and meta-prompt. |
 | `/gather-context-and-clarify` | Scout/research first, then ask the user the clarification questions that matter. |
 | `/parallel-cleanup` | Run review-only cleanup passes after implementation. |
+| `/reflect-chain` | Analyze a chain run's artifacts and suggest improvements to chain templates, agents, and prompts. |
 
 Add `autofix` to `/parallel-review` or `/parallel-cleanup` to apply only the synthesized fixes worth doing now after reviewers return.
 
@@ -554,6 +555,13 @@ Create chains by writing `.chain.md` files directly or with the `subagent({ acti
 /run-chain scout-planner -- refactor authentication
 ```
 
+### Built-in chain templates
+
+| Chain | Steps | Description |
+|-------|-------|-------------|
+| `go` | scout → context-builder → worker → delegate (test-writer) → reviewer | Full implementation pipeline: gather context, plan, implement, write tests, review. |
+| `review` | 3× parallel reviewer → context-builder (synthesis) | Multi-model adversarial review with correctness, test quality, and simplicity perspectives. |
+
 ## Chain variables
 
 Task templates support:
@@ -621,6 +629,8 @@ What the bundled skill covers:
 - **Control and diagnostics**: attention signals, soft interrupts, status, and the `doctor` action
 
 If you are writing an agent that orchestrates subagents, the bundled skill helps it behave correctly without guessing the patterns. If you are a human user, you do not need to read it directly; the README and prompt shortcuts encode the same workflows in user-facing form.
+
+The package also bundles a `test-writer` skill (`skills/test-writer/SKILL.md`) for subagents tasked with writing tests. It guides the agent through mandatory test infrastructure discovery — finding the exact test runner command, loader shims, existing helpers, and mock patterns — before writing any test code. The `go` chain template uses this skill on its delegate step.
 
 ## Programmatic tool usage
 
@@ -1011,6 +1021,7 @@ The main runtime files are:
 | `src/runs/foreground/chain-execution.ts` / `src/agents/chain-serializer.ts` | Chain orchestration and `.chain.md` parsing. |
 | `src/shared/settings.ts` | Chain behavior, instructions, and config helpers. |
 | `src/runs/shared/worktree.ts` | Git worktree isolation. |
+| `src/tui/subagent-hub.ts` | Subagent hub TUI for browsing agents and configuring model overrides before launch. |
 | `src/intercom/intercom-bridge.ts` | Runtime intercom bridge instructions and diagnostics. |
 | `src/extension/schemas.ts` / `src/shared/types.ts` | Tool schemas, shared types, and event constants. |
 | `test/unit/` / `test/integration/` | Unit and loader-based integration tests. |

@@ -45,6 +45,7 @@ Packaged prompt shortcuts are also available for repeatable workflows. Treat the
 - `/parallel-handoff-plan` — external-reference research plus local `context-builder` passes, followed by a synthesis handoff plan and implementation-ready meta-prompt
 - `/gather-context-and-clarify` — scout/research first, then ask the user clarifying questions with `interview`
 - `/parallel-cleanup` — two fresh-context reviewers (deslop + verbosity passes) for an adversarial cleanup review of the current diff
+- `/reflect-chain` — analyze a chain run's artifacts and suggest improvements to chain templates, agents, and prompts
 
 ## Applying Prompt Techniques Without Slash Commands
 
@@ -186,6 +187,9 @@ Chains live in:
 - `~/.pi/agent/chains/**/*.chain.md` — user scope
 - `.pi/chains/**/*.chain.md` — project scope
 
+Built-in chain templates bundled with the package:
+- `go` — scout → context-builder → worker → delegate (test-writer) → reviewer
+- `review` — 3× parallel reviewer → context-builder synthesis
 Discovery is recursive. `.chain.md` files do not define agents. Agents and chains can set optional frontmatter `package: code-analysis`; `name: scout` plus `package: code-analysis` registers as runtime name `code-analysis.scout` while serialization keeps `name` and `package` separate.
 
 Precedence is by parsed runtime name:

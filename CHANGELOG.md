@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Added
+- Added subagent hub TUI (`src/tui/subagent-hub.ts`) for browsing and configuring agent model overrides before launch.
+- Added `go` chain template (`chains/go.chain.md`): scout → context-builder → worker → test-writer delegate → reviewer pipeline.
+- Added `review` chain template (`chains/review.chain.md`): parallel model-diverse reviewers → synthesis pipeline.
+- Added `test-writer` skill (`skills/test-writer/SKILL.md`) for guided test infrastructure discovery before writing tests.
+- Added `/reflect-chain` prompt template for analyzing chain run artifacts and suggesting improvements.
+- Added `dead-code-cleanup.test.ts` verifying removed exports, consolidated functions, and non-optional state fields.
+
+### Changed
+- Updated `scout` agent with a mandatory Test Infrastructure output section for downstream agents.
+- Extended chain execution with recovery telemetry for parallel mode and recovered output in chain summaries.
+- Consolidated `findLatestSessionFile` into `src/shared/utils.ts`; removed duplicate copies from `session-tokens.ts` and `subagent-runner.ts`.
+- Replaced `MAX_PARALLEL_CONCURRENCY` with canonical `MAX_CONCURRENCY` from `types.ts`; removed duplicate from `parallel-utils.ts`.
+- Aliased `ControlEventType` to `ActivityState` in `types.ts`.
+- Made `SubagentState.foregroundRuns` and `SubagentState.pendingForegroundControlNotices` non-optional; removed dead null-guards and `??=` fallbacks in `control-notices.ts` and `subagent-executor.ts`.
+- Renamed `POLL_INTERVAL_MS` to `WATCHER_POLL_INTERVAL_MS` in `result-watcher.ts` for clarity.
+
+### Removed
+- Removed unused `getOutputTail`, `writePrompt` from `utils.ts`.
+- Removed unused `fuzzyScore`, `fuzzyFilter`, `formatPath` from `render-helpers.ts`.
+- Removed `MAX_PARALLEL_CONCURRENCY` export from `parallel-utils.ts`.
+
+### Fixed
+- Fixed stray tab indentation on `getLastActivity` in `utils.ts`.
+- Fixed broken imports in `subagent-runner.ts` (duplicate `aggregateParallelOutputs`, dangling `findLatestSessionFile` line).
+
 ## [0.24.0] - 2026-05-03
 
 ### Changed
