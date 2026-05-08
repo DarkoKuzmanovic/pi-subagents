@@ -6,9 +6,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const renderPiCodingAgentShim = `export function getMarkdownTheme() { return {}; }`;
+const piCodingAgentShim = `
+export function getMarkdownTheme() { return {}; }
+`;
 
-const renderPiTuiShim = `
+const piTuiShim = `
 function wrapText(text, width) {
   if (!width || width <= 0) return [text];
   const lines = [];
@@ -25,14 +27,36 @@ function wrapText(text, width) {
 }
 
 export function visibleWidth(text) {
-  return String(text).length;
+  return String(text).replace(/\\x1b\\[[0-9;]*m/g, "").length;
+}
+
+export function truncateToWidth(text, width) {
+  if (typeof text !== "string") return "";
+  const stripped = text.replace(/\\x1b\\[[0-9;]*m/g, "");
+  if (stripped.length <= width) return text;
+  return stripped.slice(0, width);
+}
+
+export function wrapTextWithAnsi(text, width) {
+  return wrapText(text, width);
+}
+
+export function matchesKey() { return false; }
+
+export const Key = {};
+
+export class Box {
+  constructor(opts) { this.opts = opts; this.children = []; }
+  addChild(child) { this.children.push(child); }
+  render(width) {
+    return this.children.flatMap((child) => child.render ? child.render(width) : [String(child)]);
+  }
 }
 
 export class Text {
   constructor(text) {
     this.text = text;
   }
-
   render(width) {
     return wrapText(this.text, width);
   }
@@ -42,7 +66,6 @@ export class Spacer {
   constructor(lines = 1) {
     this.lines = lines;
   }
-
   render() {
     return Array.from({ length: this.lines }, () => "");
   }
@@ -52,7 +75,6 @@ export class Markdown {
   constructor(text) {
     this.text = text;
   }
-
   render(width) {
     return wrapText(this.text, width);
   }
@@ -62,11 +84,9 @@ export class Container {
   constructor() {
     this.children = [];
   }
-
   addChild(child) {
     this.children.push(child);
   }
-
   render(width) {
     return this.children.flatMap((child) => child.render(width));
   }
@@ -78,13 +98,14 @@ function asDataModule(source) {
 }
 
 export function resolve(specifier, context, nextResolve) {
-  if (context.parentURL?.endsWith("/render.ts")) {
-    if (specifier === "@mariozechner/pi-coding-agent") {
-      return { url: asDataModule(renderPiCodingAgentShim), shortCircuit: true };
-    }
-    if (specifier === "@mariozechner/pi-tui") {
-      return { url: asDataModule(renderPiTuiShim), shortCircuit: true };
-    }
+  // Shim peer dependencies globally — they are optional peer deps not installed in the test env.
+  // The render.ts-specific shim was too narrow and missed imports from index.ts, render-helpers.ts,
+  // slash-commands.ts, chain-clarify.ts, and direct test file imports.
+  if (specifier === "@mariozechner/pi-coding-agent") {
+    return { url: asDataModule(piCodingAgentShim), shortCircuit: true };
+  }
+  if (specifier === "@mariozechner/pi-tui") {
+    return { url: asDataModule(piTuiShim), shortCircuit: true };
   }
 
   if (!specifier.startsWith(".") || !specifier.endsWith(".js")) {
