@@ -27,7 +27,6 @@ function noticeTimerKey(details: SubagentControlMessageDetails): string {
 
 export function clearPendingForegroundControlNotices(state: SubagentState, runId?: string): void {
 	const pending = state.pendingForegroundControlNotices;
-	if (!pending) return;
 	for (const [key, timer] of pending) {
 		if (runId !== undefined && !key.startsWith(`${runId}:`)) continue;
 		clearTimeout(timer);
@@ -77,8 +76,7 @@ export function handleSubagentControlNotice(input: {
 		return;
 	}
 
-	const pending = input.state.pendingForegroundControlNotices ?? new Map<string, ReturnType<typeof setTimeout>>();
-	input.state.pendingForegroundControlNotices = pending;
+	const pending = input.state.pendingForegroundControlNotices;
 	const timerKey = noticeTimerKey(input.details);
 	const existing = pending.get(timerKey);
 	if (existing) clearTimeout(existing);

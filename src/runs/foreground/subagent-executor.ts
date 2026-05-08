@@ -213,7 +213,6 @@ function foregroundStatusResult(control: SubagentState["foregroundControls"] ext
 }
 
 function rememberForegroundRun(state: SubagentState, input: { runId: string; mode: "single" | "parallel" | "chain"; cwd: string; results: SingleResult[] }): void {
-	state.foregroundRuns ??= new Map();
 	state.foregroundRuns.set(input.runId, {
 		runId: input.runId,
 		mode: input.mode,
@@ -235,7 +234,7 @@ function rememberForegroundRun(state: SubagentState, input: { runId: string; mod
 
 function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState): { runId: string; mode: "single" | "parallel" | "chain"; state: "complete"; agent: string; index: number; intercomTarget: string; cwd: string; sessionFile: string } | undefined {
 	const requested = (params.id ?? params.runId)?.trim();
-	if (!requested || !state.foregroundRuns?.size) return undefined;
+	if (!requested || !state.foregroundRuns.size) return undefined;
 	const direct = state.foregroundRuns.get(requested);
 	const matches = direct ? [direct] : [...state.foregroundRuns.values()].filter((run) => run.runId.startsWith(requested));
 	if (matches.length === 0) return undefined;
@@ -2082,7 +2081,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	): Promise<AgentToolResult<Details>> => {
 		deps.state.baseCwd = ctx.cwd;
 		clearInlineReadCache();
-		deps.state.foregroundRuns ??= new Map();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
 		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);

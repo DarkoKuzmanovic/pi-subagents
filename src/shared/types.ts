@@ -50,7 +50,7 @@ export interface TokenUsage {
 }
 
 export type ActivityState = "active_long_running" | "needs_attention";
-export type ControlEventType = "active_long_running" | "needs_attention";
+export type ControlEventType = ActivityState;
 export type ControlNotificationChannel = "event" | "async" | "intercom";
 
 export interface ControlConfig {
@@ -382,7 +382,7 @@ export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
 	asyncJobs: Map<string, AsyncJobState>;
-	foregroundRuns?: Map<string, ForegroundResumeRun>;
+	foregroundRuns: Map<string, ForegroundResumeRun>;
 	foregroundControls: Map<string, {
 		runId: string;
 		mode: SubagentRunMode;
@@ -401,7 +401,7 @@ export interface SubagentState {
 		interrupt?: () => boolean;
 	}>;
 	lastForegroundControlId: string | null;
-	pendingForegroundControlNotices?: Map<string, ReturnType<typeof setTimeout>>;
+	pendingForegroundControlNotices: Map<string, ReturnType<typeof setTimeout>>;
 	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
 	lastUiContext: ExtensionContext | null;
 	poller: NodeJS.Timeout | null;

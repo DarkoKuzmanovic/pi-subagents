@@ -14,7 +14,7 @@ import {
 } from "../../intercom/result-intercom.ts";
 
 const WATCHER_RESTART_DELAY_MS = 3000;
-const POLL_INTERVAL_MS = 3000;
+const WATCHER_POLL_INTERVAL_MS = 3000;
 
 type ResultWatcherFs = Pick<typeof fs, "existsSync" | "readFileSync" | "unlinkSync" | "readdirSync" | "mkdirSync" | "watch">;
 
@@ -176,7 +176,7 @@ export function createResultWatcher(
 			`Subagent result watcher for '${resultsDir}' fell back to polling because native fs.watch is unavailable (${getErrorCode(reason) ?? "unknown error"}).`,
 		);
 		primeExistingResults();
-		state.watcherRestartTimer = timers.setInterval(primeExistingResults, POLL_INTERVAL_MS);
+		state.watcherRestartTimer = timers.setInterval(primeExistingResults, WATCHER_POLL_INTERVAL_MS);
 		state.watcherRestartTimer.unref?.();
 	};
 

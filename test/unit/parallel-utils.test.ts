@@ -5,11 +5,11 @@ import {
 	flattenSteps,
 	mapConcurrent,
 	aggregateParallelOutputs,
-	MAX_PARALLEL_CONCURRENCY,
 	type RunnerSubagentStep,
 	type ParallelStepGroup,
 	type RunnerStep,
-} from "../../src/runs/shared/parallel-utils.ts";
+	} from "../../src/runs/shared/parallel-utils.ts";
+import { MAX_CONCURRENCY } from "../../src/shared/types.ts";
 
 describe("isParallelGroup", () => {
 	it("returns true for a parallel step group", () => {
@@ -195,8 +195,8 @@ describe("aggregateParallelOutputs", () => {
 	});
 });
 
-describe("MAX_PARALLEL_CONCURRENCY", () => {
+describe("MAX_CONCURRENCY", () => {
 	it("is 4", () => {
-		assert.equal(MAX_PARALLEL_CONCURRENCY, 4);
+		assert.equal(MAX_CONCURRENCY, 4);
 	});
 });

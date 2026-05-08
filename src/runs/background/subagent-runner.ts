@@ -20,6 +20,7 @@ import {
 	type Usage,
 	DEFAULT_MAX_OUTPUT,
 	type MaxOutputConfig,
+	MAX_CONCURRENCY,
 	truncateOutput,
 	getSubagentDepthEnv,
 } from "../../shared/types.ts";
@@ -38,12 +39,11 @@ import {
 	flattenSteps,
 	mapConcurrent,
 	aggregateParallelOutputs,
-	MAX_PARALLEL_CONCURRENCY,
 } from "../shared/parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { formatModelAttemptNote, isRetryableModelFailure } from "../shared/model-fallback.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
-import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "../../shared/utils.ts";
+import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput, findLatestSessionFile } from "../../shared/utils.ts";
 import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
 import {
 	createMutatingFailureState,
@@ -111,21 +111,6 @@ interface StepResult {
 
 const require = createRequire(import.meta.url);
 const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
-
-function findLatestSessionFile(sessionDir: string): string | null {
-	try {
-		const files = fs
-			.readdirSync(sessionDir)
-			.filter((f) => f.endsWith(".jsonl"))
-			.map((f) => path.join(sessionDir, f));
-		if (files.length === 0) return null;
-		files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-		return files[0] ?? null;
-	} catch {
-		// Session lookup is optional metadata.
-		return null;
-	}
-}
 
 function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
@@ -1220,7 +1205,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 		if (isParallelGroup(step)) {
 			const group = step;
-			const concurrency = group.concurrency ?? MAX_PARALLEL_CONCURRENCY;
+			const concurrency = group.concurrency ?? MAX_CONCURRENCY;
 			const failFast = group.failFast ?? false;
 			const groupStartFlatIndex = flatIndex;
 			let aborted = false;
