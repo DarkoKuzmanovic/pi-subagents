@@ -47,7 +47,7 @@ export function buildChainSummary(
 	results: SingleResult[],
 	chainDir: string,
 	status: "completed" | "failed",
-	failedStep?: { index: number; error: string },
+	failedStep?: { index: number; error: string; recoveredOutput?: string },
 ): string {
 	const stepNames = steps
 		.map((step) => (isParallelStep(step) ? `parallel[${step.parallel.length}]` : step.agent))
@@ -73,10 +73,13 @@ export function buildChainSummary(
 	} else {
 		const stepInfo = failedStep ? ` at step ${failedStep.index + 1}` : "";
 		const errorInfo = failedStep?.error ? `: ${failedStep.error}` : "";
+		const recoveredBlock = failedStep?.recoveredOutput
+			? `\n\n---\n**Recovered output (produced before failure):**\n${failedStep.recoveredOutput}`
+			: "";
 		return `❌ Chain failed${stepInfo}${errorInfo}${skillsLine ? `\n${skillsLine}` : ""}
 
 📋 Progress: ${hasProgress ? progressPath : "(none)"}
-📁 Artifacts: ${chainDir}`;
+📁 Artifacts: ${chainDir}${recoveredBlock}`;
 	}
 }
 

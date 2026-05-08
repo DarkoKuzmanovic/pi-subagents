@@ -1659,6 +1659,23 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			recordRun(run.agent, taskTexts[i]!, run.exitCode, run.progressSummary?.durationMs ?? 0);
 		}
 
+		// Recovery telemetry for parallel tasks that failed but produced output
+		for (let i = 0; i < results.length; i++) {
+			const r = results[i]!;
+			if (r.exitCode !== 0 && r.finalOutput) {
+				emitRecoveryEvent(ctx, {
+					runId: r.sessionFile ?? undefined,
+					agent: r.agent,
+					exitCode: r.exitCode,
+					errorString: r.error || "Failed",
+					recoveredChars: r.finalOutput.length,
+					elapsedMs: r.progressSummary?.durationMs,
+					mode: "parallel",
+					stepIndex: i,
+				});
+			}
+		}
+
 		for (const result of results) {
 			if (result.progress) allProgress.push(result.progress);
 			if (result.artifactPaths) allArtifactPaths.push(result.artifactPaths);

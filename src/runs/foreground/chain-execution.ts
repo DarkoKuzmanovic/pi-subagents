@@ -649,9 +649,17 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						.map((failure) => `- Task ${failure.originalIndex + 1} (${failure.agent}): ${failure.error || "failed"}`)
 						.join("\n");
 					const errorMsg = `Parallel step ${stepIndex + 1} failed:\n${failureSummary}`;
+					const recoveredParts = failures
+						.map((f) => {
+							const out = getSingleResultOutput(f).trim();
+							return out ? `[Task ${f.originalIndex + 1} (${f.agent})]:\n${out}` : null;
+						})
+						.filter(Boolean);
+					const recoveredOutput = recoveredParts.length > 0 ? recoveredParts.join("\n\n") : undefined;
 					const summary = buildChainSummary(chainSteps, results, chainDir, "failed", {
 						index: stepIndex,
 						error: errorMsg,
+						recoveredOutput,
 					});
 					return {
 						content: [{ type: "text", text: summary }],
@@ -879,9 +887,11 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			}
 
 			if (r.exitCode !== 0) {
+				const recovered = getSingleResultOutput(r).trim();
 				const summary = buildChainSummary(chainSteps, results, chainDir, "failed", {
 					index: stepIndex,
 					error: r.error || "Chain failed",
+					recoveredOutput: recovered || undefined,
 				});
 				return {
 					content: [{ type: "text", text: summary }],

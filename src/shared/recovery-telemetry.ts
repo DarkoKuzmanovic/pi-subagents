@@ -11,7 +11,7 @@ export interface RecoveryDetails {
 	errorString: string;
 	recoveredChars: number;
 	elapsedMs?: number;
-	mode: "single" | "chain";
+	mode: "single" | "chain" | "parallel";
 	stepIndex?: number;
 }
 
