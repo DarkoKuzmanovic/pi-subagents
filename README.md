@@ -1,14 +1,43 @@
-<p>
-  <img src="https://raw.githubusercontent.com/nicobailon/pi-subagents/main/banner.png" alt="pi-subagents" width="1100">
-</p>
-
 # pi-subagents
 
 > **Fork of [nicobailon/pi-subagents](https://github.com/nicobailon/pi-subagents)** — diverged with local modifications and custom agent configs.
 
 `pi-subagents` lets Pi delegate work to focused child agents. Use it for code review, scouting, implementation, parallel audits, saved workflows, background jobs, and anything else that benefits from a second or third set of model eyes.
 
-https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1
+## Changes from upstream
+
+Bug fixes:
+
+- **Fix 1 — Output recovery on non-zero exit**: When a child exits with an error but produced partial output, the recovered text is returned with an `[Subagent exited with error: …]` footer instead of bare `"terminated"`. No more losing useful output to a non-zero exit code.
+- **Bug A — `defaultReads` dropped on fresh-context single-mode**: An agent's frontmatter `defaultReads` was silently ignored when called without explicit `reads` in single-mode fresh context. Now flows through correctly; only `reads: false` explicitly opts out.
+- **Bug B — "Pre-loaded files" lying when a read fails**: Failed reads were wrapped in the `Pre-loaded files (do not Read these)` header, telling the child not to Read a file it manifestly should. Failed entries are now pulled out and emitted as a separate `[Read from: <failed paths>]` hint.
+- **Bug C — Truncation marker mislabel**: Truncation footer said `bytes` but sliced characters (up to 4× off on multi-byte text). Now says `characters` and uses `Buffer.byteLength` for the cap comparison.
+- **Bug D — `parseReadSpec` regex greedily eats colons in filenames**: A file named `foo:5-10.bak` was mis-parsed as path `foo` + range `5-10`. Now stat-checks the literal path first; only parses as a range when the literal doesn't exist.
+- **Bug F — Tilde expansion in glob specs**: `reads: ["~/.pi/.../*.ts"]` failed because `~` wasn't expanded before `fs.globSync`. Fixed with the same tilde-expansion pattern as `resolveChainPath`.
+
+Features:
+
+- **Auto-inline reads on `context: "fresh"`**: Files listed in `reads` are pre-loaded into the child's first user message, saving the child a full context-fork (~261K tokens → ~13K tokens observed). This was partially upstream (parallel/chain paths); our fork extends it to single-agent paths and fixes the plumbing.
+- **Glob support in `reads`**: `reads: ["src/**/*.ts"]` expands glob patterns with deterministic sorting and a 50-match cap. Literal files with glob characters (`weird[brackets].ts`) are handled via stat-fallback (same pattern as Bug D). Zero-match globs emit a `[Read from glob (no matches): ...]` hint.
+- **Config-exposed `inlineReadMaxBytes`**: The 200KB inline-read cap is now configurable via `inlineReadMaxBytes` in extension config, with a `[1024, 8MB]` range guard.
+- **Token-economy footer**: Fresh-context results append `[mode=fresh, in=…, out=…, cache_read=…, cache_write=…]` so savings are observable without digging into JSONL.
+- **Recovery telemetry**: When Fix 1's output-recovery triggers, a structured `subagent_recovery` event (with `runId`, `agent`, `exitCode`, `recoveredChars`, `elapsedMs`) is emitted into the parent's session JSONL (`display: false`).
+- **`oracle-fresh` agent**: A drift-check oracle that reads chain artifacts (`context.md`, `plan.md`, `progress.md`) instead of forking the parent. Cheaper alternative to `oracle` for chain-artifact validation.
+- **`planner` flipped to `defaultContext: fresh`**: The bundled planner now defaults to fresh context with curated `defaultReads`, routing every existing caller through the cheaper path without code changes.
+- **`--no-context-files` for fresh children**: Fresh-context children now get `--no-context-files` in their spawn args, preventing `AGENTS.md`/`CLAUDE.md` from leaking into the child's system prompt. Forked children keep their normal context loading.
+
+Optimizations:
+
+- **Cache + deduplicate inline reads**: A process-scoped `Map<string, string>` keyed by `(absPath, mtimeMs, size)` caches `readFileSync` results. Same file across N parallel tasks = 1 read, N-1 cache hits. Automatic invalidation on file change via mtime+size.
+- **Drop redundant `resolveStepBehavior` call**: The single-mode fresh-reads patch resolved output/skills/model/progress just to extract `reads`. Replaced with an inline fallback: `const reads = readsOverride ?? agentConfig.defaultReads ?? false`.
+
+Custom agents:
+
+- **`deslopper`**: Code cleanup agent with `contact_supervisor` tool for escalation. Designed for dead code removal, import cleanup, and structural simplification.
+- **`oracle-fresh`**: See Features above.
+
+All changes verified empirically across 10 Pi-internal tests. 407 unit + 314 integration tests pass.
+
 
 ## Installation
 
