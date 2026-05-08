@@ -6,6 +6,7 @@ thinking: high
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
+defaultContext: fresh
 defaultReads: plan.md, progress.md
 ---
 

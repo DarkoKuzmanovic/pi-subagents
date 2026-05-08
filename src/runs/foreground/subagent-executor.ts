@@ -30,6 +30,7 @@ import {
 	type ResolvedStepBehavior,
 	type SequentialStep,
 	type StepOverrides,
+	clearInlineReadCache,
 } from "../../shared/settings.ts";
 import { discoverAvailableSkills, normalizeSkillInput } from "../../agents/skills.ts";
 import { executeAsyncChain, executeAsyncSingle, formatAsyncStartedMessage, isAsyncAvailable } from "../background/async-execution.ts";
@@ -2063,6 +2064,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
 		deps.state.baseCwd = ctx.cwd;
+		clearInlineReadCache();
 		deps.state.foregroundRuns ??= new Map();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;

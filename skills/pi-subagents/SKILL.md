@@ -110,16 +110,18 @@ Use this after implementation when the user wants cleanup review or when a final
 Builtin agents load at the lowest priority. Project agents override user agents,
 and user/project agents override builtins with the same name.
 
-| Agent | Purpose | Model | Typical output / role |
-|-------|---------|-------|------------------------|
-| `scout` | Fast codebase recon | inherits default | Writes `context.md` handoff material |
-| `planner` | Creates implementation plans | inherits default | Writes `plan.md` |
-| `worker` | Implementation and approved oracle handoffs | inherits default | Single-writer implementation with decision escalation |
-| `reviewer` | Review-and-fix specialist | inherits default | Can edit/fix reviewed code |
-| `context-builder` | Requirements/codebase handoff builder | inherits default | Writes structured context files |
-| `researcher` | Web research brief generator | inherits default | Writes `research.md` |
-| `delegate` | Lightweight generic delegate | inherits default | No fixed output; generic delegated work |
-| `oracle` | Decision-consistency advisory review | inherits default | Advisory review, intercom coordination |
+| Agent | Purpose | Context | Typical output / role |
+|-------|---------|---------|------------------------|
+| `scout` | Fast codebase recon | fresh (implicit) | Writes `context.md` handoff material |
+| `planner` | Creates implementation plans | fresh | Writes `plan.md`; reads `context.md` |
+| `worker` | Implementation and approved oracle handoffs | fork | Single-writer implementation with decision escalation |
+| `reviewer` | Review-and-fix specialist | fresh (implicit) | Can edit/fix reviewed code |
+| `context-builder` | Requirements/codebase handoff builder | fresh (implicit) | Writes structured context files |
+| `researcher` | Web research brief generator | fresh (implicit) | Writes `research.md` |
+| `delegate` | Lightweight generic delegate | fresh (implicit) | No fixed output; generic delegated work |
+| `oracle` | Decision-consistency advisory review | fork | Advisory review, intercom coordination |
+| `oracle-fresh` | Drift-check oracle for chain workflows | fresh | Reads chain artifacts instead of forking; cheaper alternative to `oracle` |
+| `deslopper` | Codebase cleanup and dead-code removal | fresh | Read-only audit (`--review`) or surgical cleanup with verification |
 
 Builtin agents inherit the current Pi default model unless a run, user setting, or project setting overrides `model`. Override builtin defaults before copying full agent files when a small tweak is enough.
 
@@ -619,7 +621,7 @@ subagent({
 
 When you are the orchestrating agent for a new feature or non-trivial change, factor in the packaged prompt workflows without literally invoking slash commands. Use the same patterns through tools and subagents.
 
-Keep builtin agent defaults unless the user explicitly asks for a different model, thinking level, skills, output behavior, context mode, or other override. Do not add overrides just because you are orchestrating; the defaults encode the intended role behavior. In particular, packaged `planner`, `worker`, and `oracle` default to forked context.
+Keep builtin agent defaults unless the user explicitly asks for a different model, thinking level, skills, output behavior, context mode, or other override. Do not add overrides just because you are orchestrating; the defaults encode the intended role behavior. In particular, packaged `worker` and `oracle` default to forked context; `planner` and `oracle-fresh` default to fresh context with curated `defaultReads`.
 
 When the user approves launching a subagent to carry out a plan or workflow, treat that as approval to generate a proper role-specific meta prompt for that subagent. Include the approved plan path or summary, clarified requirements, non-goals, relevant context, role boundaries, files or areas to inspect, acceptance criteria, expected output, and validation expectations. Do not pass vague instructions like “implement the plan fully” or “review this” by themselves.
 

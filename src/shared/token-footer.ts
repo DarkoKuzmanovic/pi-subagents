@@ -32,6 +32,8 @@ function aggregateUsage(results: { usage: Usage }[]): Usage {
 			agg.output += r.usage.output;
 			agg.cacheRead += r.usage.cacheRead;
 			agg.cacheWrite += r.usage.cacheWrite;
+			agg.cost += r.usage.cost;
+			agg.turns += r.usage.turns;
 		}
 	}
 	return agg;

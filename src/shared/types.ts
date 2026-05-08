@@ -296,6 +296,7 @@ export interface AsyncStatus {
 	parallelGroups?: AsyncParallelGroupStatus[];
 	steps?: Array<{
 		agent: string;
+		/** Note: both "complete" and "completed" accepted for backwards compatibility. Prefer "complete" when setting. */
 		status: "pending" | "running" | "complete" | "completed" | "failed" | "paused";
 		sessionFile?: string;
 		activityState?: ActivityState;

@@ -20,6 +20,7 @@ import {
 	createParallelDirs,
 	suppressProgressForReadOnlyTask,
 	aggregateParallelOutputs,
+	stripStaleAgentBlocks,
 	isParallelStep,
 	type StepOverrides,
 	type ChainStep,
@@ -683,7 +684,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						outputTargetExists: outputTargetPath ? fs.existsSync(outputTargetPath) : undefined,
 					};
 				});
-				prev = aggregateParallelOutputs(taskResults);
+				prev = stripStaleAgentBlocks(aggregateParallelOutputs(taskResults));
 				prev = appendParallelWorktreeSummary(
 					prev,
 					worktreeSetup,
@@ -916,7 +917,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				}
 			}
 
-			prev = getSingleResultOutput(r);
+			prev = stripStaleAgentBlocks(getSingleResultOutput(r));
 		}
 	}
 

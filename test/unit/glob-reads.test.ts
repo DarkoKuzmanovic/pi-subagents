@@ -63,6 +63,18 @@ describe("parseReadSpec", () => {
 		assert.equal(result.range!.end, 20);
 		// The spec is treated as range parsing but the base file doesn't exist either
 	});
+
+	it("treats inverted range (start > end) as full-file read", () => {
+		const result = parseReadSpec("/tmp/foo.ts:20-10", "/tmp");
+		assert.equal(result.filePath, "/tmp/foo.ts");
+		assert.equal(result.range, undefined);
+	});
+
+	it("treats range with start < 1 as full-file read", () => {
+		const result = parseReadSpec("/tmp/foo.ts:0-5", "/tmp");
+		assert.equal(result.filePath, "/tmp/foo.ts");
+		assert.equal(result.range, undefined);
+	});
 });
 
 describe("readInlineRead", () => {

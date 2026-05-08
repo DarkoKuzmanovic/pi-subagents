@@ -268,8 +268,28 @@ const DEFAULT_INLINE_READ_MAX_BYTES = 200 * 1024;
 const GLOB_MAX_MATCHES = 50;
 let inlineReadMaxBytes = DEFAULT_INLINE_READ_MAX_BYTES;
 
-/** Module-scoped cache for deduplicating inline reads across a single run. */
+/**
+ * Module-scoped cache for deduplicating inline reads across a single run.
+ * Capped at CACHE_MAX_ENTRIES to prevent unbounded memory growth in long-lived processes.
+ * LRU eviction: oldest entries are deleted when the cap is reached.
+ */
+const CACHE_MAX_ENTRIES = 128;
 const inlineReadCache = new Map<string, string>();
+
+/** Clear the inline read cache. Call at the start of each top-level run. */
+export function clearInlineReadCache(): void {
+	inlineReadCache.clear();
+}
+
+/** Set a cache entry with LRU eviction when the cap is reached. */
+function cacheSet(key: string, value: string): void {
+	// Map insertion order = iteration order; delete+set moves to end (newest)
+	if (inlineReadCache.size >= CACHE_MAX_ENTRIES) {
+		const oldest = inlineReadCache.keys().next().value;
+		if (oldest !== undefined) inlineReadCache.delete(oldest);
+	}
+	inlineReadCache.set(key, value);
+}
 
 /** Get the current inline read max bytes limit. */
 export function getInlineReadMaxBytes(): number {
@@ -311,6 +331,10 @@ export function parseReadSpec(spec: string, chainDir: string): { filePath: strin
 		const resolved = resolveChainPath(base!, chainDir);
 		const start = Number(startStr);
 		const end = Number(endStr);
+		// Guard: inverted or zero-width ranges are treated as full-file reads
+		if (start > end || start < 1) {
+			return { filePath: resolved, label: spec };
+		}
 		return { filePath: resolved, range: { start, end }, label: `${base}:${start}-${end}` };
 	}
 	return { filePath: resolveChainPath(spec, chainDir), label: spec };
@@ -348,7 +372,7 @@ export function readInlineRead(spec: string, chainDir: string): { label: string;
 	}
 
 	// Cache the full content
-	inlineReadCache.set(cacheKey, raw);
+	cacheSet(cacheKey, raw);
 
 	return { label, body: applyRange(raw, range, MAX), ok: true };
 }
@@ -604,3 +628,21 @@ export function createParallelDirs(
 
 export type { ParallelTaskResult } from "../runs/shared/parallel-utils.ts";
 export { aggregateParallelOutputs } from "../runs/shared/parallel-utils.ts";
+
+// =============================================================================
+// Chain Prompt Hygiene
+// =============================================================================
+
+/** Regex to strip stale XML blocks that would confuse downstream chain agents. */
+const STALE_XML_BLOCK_RE = /<(?:sub_agent_context|runtime_truth)>[\s\S]*?<\/(?:sub_agent_context|runtime_truth)>/g;
+
+/**
+ * Strip stale <sub_agent_context> and <runtime_truth> blocks from text
+ * before passing it as chain context to the next agent.
+ * Prevents Agent B from thinking it has Agent A's context/tools.
+ */
+export function stripStaleAgentBlocks(text: string): string {
+	if (!text) return text;
+	const cleaned = text.replace(STALE_XML_BLOCK_RE, "").trim();
+	return cleaned || text; // If stripping removed everything, return original
+}
