@@ -112,6 +112,7 @@ interface ParallelChainRunInput {
 	totalSteps: number;
 	worktreeSetup?: WorktreeSetup;
 	maxSubagentDepth: number;
+	inlineReads?: boolean;
 }
 
 function buildChainExecutionDetails(input: ChainExecutionDetailsInput): Details {
@@ -187,8 +188,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				input.chainDir,
 				false,
 				templateHasPrevious ? undefined : input.prev,
-				params.inlineReads,
-
+				input.inlineReads,
+			);
 			let taskStr = taskTemplate;
 			taskStr = taskStr.replace(/\{task\}/g, input.originalTask);
 			taskStr = taskStr.replace(/\{previous\}/g, input.prev);
@@ -240,7 +241,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				outputPath,
 				outputMode: behavior.outputMode,
 				maxSubagentDepth,
-				skipContextFiles: params.inlineReads === true,
+				skipContextFiles: input.inlineReads === true,
 				controlConfig: input.controlConfig,
 				onControlEvent: input.onControlEvent,
 				intercomSessionName: input.childIntercomTarget?.(task.agent, input.globalTaskIndex + taskIndex),
@@ -595,6 +596,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					foregroundControl,
 					worktreeSetup,
 					maxSubagentDepth: params.maxSubagentDepth,
+				inlineReads: params.inlineReads,
 				});
 				globalTaskIndex += step.parallel.length;
 
@@ -730,7 +732,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				isFirstProgress,
 				templateHasPrevious ? undefined : prev,
 			params.inlineReads,
-
+			);
 			let stepTask = stepTemplate;
 			stepTask = stepTask.replace(/\{task\}/g, originalTask);
 			stepTask = stepTask.replace(/\{previous\}/g, prev);
