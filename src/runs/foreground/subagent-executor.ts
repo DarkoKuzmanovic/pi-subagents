@@ -1944,12 +1944,18 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		};
 	}
 
-	if (r.exitCode !== 0)
+	if (r.exitCode !== 0) {
+		const recovered = finalizedOutput.displayOutput?.trim();
+		const errStr = r.error || "Failed";
+		const text = recovered
+			? `${recovered}\n\n---\n[Subagent exited with error: ${errStr}. Output above was produced before the failure.]`
+			: errStr;
 		return {
-			content: [{ type: "text", text: r.error || "Failed" }],
+			content: [{ type: "text", text }],
 			details,
 			isError: true,
 		};
+	}
 	return {
 		content: [{ type: "text", text: finalizedOutput.displayOutput || "(no output)" }],
 		details,
