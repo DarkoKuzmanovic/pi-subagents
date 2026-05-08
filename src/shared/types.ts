@@ -480,6 +480,8 @@ export interface RunSyncOptions {
 	preferredModelProvider?: string;
 	/** Skills to inject (overrides agent default if provided) */
 	skills?: string[];
+	/** Skip loading context files (AGENTS.md etc.) for fresh-context children */
+	skipContextFiles?: boolean;
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";
@@ -504,6 +506,7 @@ export interface ExtensionConfig {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	intercomBridge?: IntercomBridgeConfig;
+	inlineReadMaxBytes?: number;
 }
 
 // ============================================================================

@@ -54,15 +54,28 @@ Do work
 		assert.equal(worker?.defaultContext, "fork");
 	});
 
-	it("loads packaged planner, worker, and oracle with fork defaultContext", () => {
+	it("loads packaged planner with fresh defaultContext and worker/oracle with fork", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-default-context-"));
 		tempDirs.push(dir);
 		const agents = discoverAgents(dir, "both").agents;
 
-		for (const name of ["planner", "worker", "oracle"]) {
+		for (const name of ["worker", "oracle"]) {
 			const agent = agents.find((candidate) => candidate.name === name && candidate.source === "builtin");
 			assert.equal(agent?.defaultContext, "fork", `${name} should default to fork context`);
 		}
+		const planner = agents.find((a) => a.name === "planner" && a.source === "builtin");
+		assert.equal(planner?.defaultContext, "fresh", "planner should default to fresh context");
+	})
+
+	it("loads oracle-fresh with fresh defaultContext and curated defaultReads", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-oracle-fresh-"));
+		tempDirs.push(dir);
+		const agents = discoverAgents(dir, "both").agents;
+		const oracleFresh = agents.find((a) => a.name === "oracle-fresh" && a.source === "builtin");
+		assert.ok(oracleFresh, "oracle-fresh agent should be bundled");
+		assert.equal(oracleFresh?.defaultContext, "fresh", "oracle-fresh should default to fresh context");
+		assert.ok(Array.isArray(oracleFresh?.defaultReads), "oracle-fresh should have defaultReads");
+		assert.ok(oracleFresh!.defaultReads!.length > 0, "oracle-fresh defaultReads should be non-empty");
 	});
 });
 

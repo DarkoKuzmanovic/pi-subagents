@@ -33,6 +33,7 @@ interface BuildPiArgsInput {
 	runId?: string;
 	childAgentName?: string;
 	childIndex?: number;
+	skipContextFiles?: boolean;
 }
 
 interface BuildPiArgsResult {
@@ -123,6 +124,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	const env: Record<string, string | undefined> = {};
 	env[SUBAGENT_CHILD_ENV] = "1";
 	env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT = input.inheritProjectContext ? "1" : "0";
+	if (input.skipContextFiles) {
+		args.push("--no-context-files");
+	}
 	env.PI_SUBAGENT_INHERIT_SKILLS = input.inheritSkills ? "1" : "0";
 	if (input.intercomSessionName) {
 		env.PI_SUBAGENT_INTERCOM_SESSION_NAME = input.intercomSessionName;

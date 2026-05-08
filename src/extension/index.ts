@@ -21,7 +21,7 @@ import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWi
 import { discoverAgents } from "../agents/agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
-import { cleanupOldChainDirs } from "../shared/settings.ts";
+import { cleanupOldChainDirs, setInlineReadMaxBytes } from "../shared/settings.ts";
 import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "../tui/render.ts";
 import { SubagentParams } from "./schemas.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
@@ -238,6 +238,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const config = loadConfig();
 	const asyncByDefault = config.asyncByDefault === true;
+	setInlineReadMaxBytes(config.inlineReadMaxBytes);
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
 

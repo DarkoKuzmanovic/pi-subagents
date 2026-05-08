@@ -32,7 +32,7 @@ const ReadsOverride = Type.Unsafe({
 		{ type: "array", items: { type: "string" } },
 		{ type: "boolean" },
 	],
-	description: "Files to read before running (array of filenames), or false to disable",
+	description: "Files to read before running (array of filenames, supports globs like src/**/*.ts), or false to disable",
 });
 
 const TaskItem = Type.Object({
@@ -165,4 +165,5 @@ export const SubagentParams = Type.Object({
 	outputMode: Type.Optional(OutputModeOverride),
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for single agent (e.g. 'anthropic/claude-sonnet-4')" })),
+	reads: Type.Optional(ReadsOverride),
 });

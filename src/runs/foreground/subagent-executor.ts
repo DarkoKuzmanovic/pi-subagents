@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { appendTokenFooter } from "../../shared/token-footer.ts";
+import { emitRecoveryEvent } from "../../shared/recovery-telemetry.ts";
 import { type AgentConfig, type AgentScope } from "../../agents/agents.ts";
 import { getArtifactsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
@@ -127,6 +129,7 @@ export interface SubagentParamsLike {
 	outputMode?: "inline" | "file-only";
 	agentScope?: unknown;
 	chainDir?: string;
+	reads?: string[] | boolean;
 }
 
 interface ExecutorDeps {
@@ -1062,6 +1065,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		foregroundControl,
 		chainSkills,
 		chainDir: params.chainDir,
+		inlineReads: params.context === "fresh",
 		maxSubagentDepth: currentMaxSubagentDepth,
 		worktreeSetupHook: deps.config.worktreeSetupHook,
 		worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
@@ -1125,7 +1129,32 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		};
 	}
 
-	return chainDetails ? { ...chainResult, details: chainDetails } : chainResult;
+	const chainText = chainResult.content?.[0]?.text ?? "";
+	const chainHasError = chainDetails?.results?.some(r => r.exitCode !== 0) ?? false;
+	const chainFooterText = appendTokenFooter(chainText, chainDetails, { mode: params.context ?? "fork", hasError: chainHasError });
+
+	// Recovery telemetry for chain steps
+	if (chainDetails?.results) {
+		for (let i = 0; i < chainDetails.results.length; i++) {
+			const stepResult = chainDetails.results[i]!;
+			if (stepResult.exitCode !== 0 && stepResult.finalOutput) {
+				emitRecoveryEvent(ctx, {
+					runId: stepResult.sessionFile ?? undefined,
+					agent: stepResult.agent,
+					exitCode: stepResult.exitCode,
+					errorString: stepResult.error || "Failed",
+					recoveredChars: stepResult.finalOutput.length,
+					elapsedMs: stepResult.progressSummary?.durationMs,
+					mode: "chain",
+					stepIndex: i,
+				});
+			}
+		}
+	}
+
+	return chainDetails
+		? { ...chainResult, content: [{ type: "text", text: chainFooterText }], details: chainDetails }
+		: chainResult;
 }
 
 interface ForegroundParallelRunInput {
@@ -1158,6 +1187,7 @@ interface ForegroundParallelRunInput {
 	liveProgress: (AgentProgress | undefined)[];
 	onUpdate?: (r: AgentToolResult<Details>) => void;
 	worktreeSetup?: WorktreeSetup;
+	skipContextFiles?: boolean;
 }
 
 function buildParallelModeError(message: string): AgentToolResult<Details> {
@@ -1570,6 +1600,27 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			}
 		}
 
+		// Inline reads on fresh context for parallel tasks
+		if (params.context === "fresh" && params.reads !== false) {
+			for (let i = 0; i < taskTexts.length; i++) {
+				const readsOverride = params.reads === true ? undefined : (Array.isArray(params.reads) ? params.reads : undefined);
+				const taskReads = behaviors[i]?.reads;
+				const defaultReads = agents[i]?.defaultReads;
+				const resolvedReads = (taskReads && taskReads !== true && (taskReads as string[]).length > 0)
+					? taskReads as string[]
+					: (readsOverride && readsOverride.length > 0 ? readsOverride : defaultReads);
+				if (resolvedReads && resolvedReads.length > 0) {
+					const { prefix } = buildChainInstructions(
+						{ output: behaviors[i]?.output ?? false, outputMode: behaviors[i]?.outputMode ?? "inline", reads: resolvedReads, progress: false, skills: [], model: undefined } as ResolvedStepBehavior,
+						effectiveCwd,
+						false,
+						undefined,
+						true, // inlineReads
+					);
+					if (prefix) taskTexts[i] = prefix + taskTexts[i]!;
+				}
+			}
+		}
 		const results = await runForegroundParallelTasks({
 			tasks,
 			taskTexts,
@@ -1600,6 +1651,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			liveProgress,
 			onUpdate,
 			worktreeSetup,
+			skipContextFiles: params.context === "fresh",
 		});
 		for (let i = 0; i < results.length; i++) {
 			const run = results[i]!;
@@ -1668,7 +1720,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			: `${summary}\n\n${aggregatedOutput}`;
 
 		return {
-			content: [{ type: "text", text: fullContent }],
+			content: [{ type: "text", text: appendTokenFooter(fullContent, details, { mode: params.context ?? "fork", hasError: results.some(r => r.exitCode !== 0) }) }],
 			details,
 		};
 	} finally {
@@ -1806,6 +1858,23 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 	task = injectSingleOutputInstruction(task, outputPath);
 
+	// Bug A fix + inline reads on fresh context
+	// Optimization 4: use inline reads resolution instead of full resolveStepBehavior
+	if (params.context === "fresh" && params.reads !== false) {
+		const readsOverride = params.reads === true ? undefined : (Array.isArray(params.reads) ? params.reads : undefined);
+		const resolvedReads = readsOverride && readsOverride.length > 0 ? readsOverride : agentConfig.defaultReads;
+		if (resolvedReads && resolvedReads.length > 0) {
+			const { prefix } = buildChainInstructions(
+			{ output: effectiveOutput ?? false, outputMode: params.outputMode ?? "inline", reads: resolvedReads, progress: false, skills: [], model: undefined } as ResolvedStepBehavior,
+				effectiveCwd,
+				false,
+				undefined,
+				true, // inlineReads
+			);
+			if (prefix) task = prefix + task;
+		}
+	}
+
 	let effectiveSkills: string[] | undefined;
 	if (skillOverride === false) {
 		effectiveSkills = [];
@@ -1874,6 +1943,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		availableModels,
 		preferredModelProvider: currentProvider,
 		skills: effectiveSkills,
+		skipContextFiles: params.context === "fresh",
 	});
 	if (foregroundControl?.currentIndex === 0) {
 		foregroundControl.interrupt = undefined;
@@ -1950,6 +2020,20 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		const text = recovered
 			? `${recovered}\n\n---\n[Subagent exited with error: ${errStr}. Output above was produced before the failure.]`
 			: errStr;
+
+		// Recovery telemetry: emit structured event for recovered output
+		if (recovered && recovered.length > 0) {
+			emitRecoveryEvent(ctx, {
+				runId: r.sessionFile ?? undefined,
+				agent: params.agent!,
+				exitCode: r.exitCode,
+				errorString: errStr,
+				recoveredChars: recovered.length,
+				elapsedMs: r.progressSummary?.durationMs,
+				mode: "single",
+			});
+		}
+
 		return {
 			content: [{ type: "text", text }],
 			details,
@@ -1957,7 +2041,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		};
 	}
 	return {
-		content: [{ type: "text", text: finalizedOutput.displayOutput || "(no output)" }],
+		content: [{ type: "text", text: appendTokenFooter(finalizedOutput.displayOutput || "(no output)", details, { mode: params.context ?? "fork", hasError: false }) }],
 		details,
 	};
 }

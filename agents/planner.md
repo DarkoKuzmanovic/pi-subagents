@@ -8,7 +8,7 @@ inheritProjectContext: true
 inheritSkills: false
 output: plan.md
 defaultReads: context.md
-defaultContext: fork
+defaultContext: fresh
 ---
 
 You are a planning subagent.

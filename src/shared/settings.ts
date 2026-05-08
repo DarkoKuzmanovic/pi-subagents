@@ -3,6 +3,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "../agents/agents.ts";
 import { normalizeSkillInput } from "../agents/skills.ts";
@@ -247,7 +248,8 @@ export function suppressProgressForReadOnlyTask(behavior: ResolvedStepBehavior, 
  * Resolve a file path: absolute paths pass through, relative paths get chainDir prepended.
  */
 function resolveChainPath(filePath: string, chainDir: string): string {
-	return path.isAbsolute(filePath) ? filePath : path.join(chainDir, filePath);
+	const expanded = filePath.startsWith("~/") ? path.join(os.homedir(), filePath.slice(2)) : filePath;
+	return path.isAbsolute(expanded) ? expanded : path.join(chainDir, expanded);
 }
 
 /**
@@ -258,19 +260,226 @@ export function writeInitialProgressFile(progressDir: string): void {
 	fs.writeFileSync(path.join(progressDir, "progress.md"), INITIAL_PROGRESS_CONTENT);
 }
 
+// =============================================================================
+// Inline Read Support
+// =============================================================================
+
+const DEFAULT_INLINE_READ_MAX_BYTES = 200 * 1024;
+const GLOB_MAX_MATCHES = 50;
+let inlineReadMaxBytes = DEFAULT_INLINE_READ_MAX_BYTES;
+
+/** Module-scoped cache for deduplicating inline reads across a single run. */
+const inlineReadCache = new Map<string, string>();
+
+/** Get the current inline read max bytes limit. */
+export function getInlineReadMaxBytes(): number {
+	return inlineReadMaxBytes;
+}
+
+/** Set the inline read max bytes limit with range guard. */
+export function setInlineReadMaxBytes(value: number | undefined): void {
+	if (value === undefined) {
+		inlineReadMaxBytes = DEFAULT_INLINE_READ_MAX_BYTES;
+		return;
+	}
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		console.warn(`inlineReadMaxBytes: invalid value ${value}, using default ${DEFAULT_INLINE_READ_MAX_BYTES}`);
+		inlineReadMaxBytes = DEFAULT_INLINE_READ_MAX_BYTES;
+		return;
+	}
+	const clamped = Math.max(1024, Math.min(value, 8 * 1024 * 1024));
+	if (clamped !== value) {
+		console.warn(`inlineReadMaxBytes: ${value} out of range [1024, 8MB], clamped to ${clamped}`);
+	}
+	inlineReadMaxBytes = clamped;
+}
+
+/** Parse a read spec into file path and optional line range. Bug-D defense: if the literal spec exists as a file, treat it as a file, not a range. */
+export function parseReadSpec(spec: string, chainDir: string): { filePath: string; range?: { start: number; end: number }; label: string } {
+	const rangeMatch = spec.match(/^(.*):(\d+)-(\d+)$/);
+	if (rangeMatch) {
+		const resolvedLiteral = resolveChainPath(spec, chainDir);
+		// Bug-D defense: if the literal spec (with colons) exists as a file, treat as file
+		try {
+			if (fs.statSync(resolvedLiteral).isFile()) {
+				return { filePath: resolvedLiteral, label: spec };
+			}
+		} catch {
+			// Not a file — proceed with range parsing
+		}
+		const [, base, startStr, endStr] = rangeMatch;
+		const resolved = resolveChainPath(base!, chainDir);
+		const start = Number(startStr);
+		const end = Number(endStr);
+		return { filePath: resolved, range: { start, end }, label: `${base}:${start}-${end}` };
+	}
+	return { filePath: resolveChainPath(spec, chainDir), label: spec };
+}
+
+/** Read a single file for inline injection. Returns { label, body, ok }. */
+export function readInlineRead(spec: string, chainDir: string): { label: string; body: string; ok: boolean } {
+	const { filePath, range, label } = parseReadSpec(spec, chainDir);
+	const MAX = getInlineReadMaxBytes();
+	let stat: fs.Stats;
+	try {
+		stat = fs.statSync(filePath);
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+		return { label, body: `[unreadable: ${code}: ${filePath}]`, ok: false };
+	}
+	if (!stat.isFile()) {
+		return { label, body: `[not a file: ${filePath}]`, ok: false };
+	}
+
+	// Check cache
+	const cacheKey = `${filePath}\0${stat.mtimeMs}\0${stat.size}`;
+	const cached = inlineReadCache.get(cacheKey);
+	if (cached !== undefined) {
+		const raw = cached;
+		return { label, body: applyRange(raw, range, MAX), ok: true };
+	}
+
+	let raw: string;
+	try {
+		raw = fs.readFileSync(filePath, "utf8");
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code ?? "UNKNOWN";
+		return { label, body: `[unreadable: ${code}: ${filePath}]`, ok: false };
+	}
+
+	// Cache the full content
+	inlineReadCache.set(cacheKey, raw);
+
+	return { label, body: applyRange(raw, range, MAX), ok: true };
+}
+
+function applyRange(raw: string, range: { start: number; end: number } | undefined, maxBytes: number): string {
+	let content = raw;
+	if (range) {
+		const lines = content.split("\n");
+		const sliced = lines.slice(range.start - 1, range.end);
+		content = sliced.join("\n");
+	}
+	// Bug C: compare encoded byte length, label as characters
+	if (Buffer.byteLength(content, "utf8") > maxBytes) {
+		content = content.slice(0, maxBytes);
+		content += `\n... [truncated at ~${maxBytes} characters]`;
+	}
+	return content;
+}
+
+/** Check if a string contains glob characters. */
+function hasGlobChars(s: string): boolean {
+	return /[*?\[]/.test(s);
+}
+
+/** Expand glob patterns in read specs. Bug-D defense: if literal path with glob chars exists as file, treat as literal. Bug-F: expand ~ before globSync. */
+export function expandReadGlobs(specs: string[], chainDir: string): { specs: string[]; emptyGlobs: string[] } {
+	const result: string[] = [];
+	const emptyGlobs: string[] = [];
+
+	for (const spec of specs) {
+		if (!hasGlobChars(spec)) {
+			result.push(spec);
+			continue;
+		}
+
+		// Bug-D defense: if the literal spec with glob chars exists as a real file, treat as literal
+		const resolvedLiteral = resolveChainPath(spec, chainDir);
+		try {
+			if (fs.statSync(resolvedLiteral).isFile()) {
+				result.push(spec);
+				continue;
+			}
+		} catch {
+			// Not a file — proceed with glob expansion
+		}
+
+		// Bug-F: expand ~ before glob matching
+		const expanded = spec.startsWith("~/") ? path.join(os.homedir(), spec.slice(2)) : spec;
+
+		let cwd: string;
+		let pattern: string;
+		if (path.isAbsolute(expanded)) {
+			cwd = path.dirname(expanded);
+			pattern = path.basename(expanded);
+		} else {
+			cwd = chainDir;
+			pattern = expanded;
+		}
+
+		let matches: string[];
+		try {
+			matches = fs.globSync(pattern, { cwd });
+		} catch {
+			matches = [];
+		}
+
+		if (matches.length === 0) {
+			emptyGlobs.push(spec);
+			continue;
+		}
+
+		// Lex-sort and cap
+		matches.sort();
+		if (matches.length > GLOB_MAX_MATCHES) {
+			matches = matches.slice(0, GLOB_MAX_MATCHES);
+		}
+
+		for (const match of matches) {
+			result.push(path.resolve(cwd, match));
+		}
+	}
+
+	return { specs: result, emptyGlobs };
+}
+
 export function buildChainInstructions(
 	behavior: ResolvedStepBehavior,
 	chainDir: string,
 	isFirstProgressAgent: boolean,
 	previousSummary?: string,
+	inlineReads?: boolean,
 ): { prefix: string; suffix: string } {
 	const prefixParts: string[] = [];
 	const suffixParts: string[] = [];
 
-	// READS - prepend to override any hardcoded filenames in task text
+	// READS
 	if (behavior.reads && behavior.reads.length > 0) {
-		const files = behavior.reads.map((f) => resolveChainPath(f, chainDir));
-		prefixParts.push(`[Read from: ${files.join(", ")}]`);
+		// Expand globs first
+		const { specs: expandedSpecs, emptyGlobs } = expandReadGlobs(behavior.reads, chainDir);
+
+		if (inlineReads) {
+			// Inline mode: pre-load file contents, separate ok from failed
+			const okEntries: { label: string; body: string }[] = [];
+			const failedPaths: string[] = [];
+
+			for (const spec of expandedSpecs) {
+				const result = readInlineRead(spec, chainDir);
+				if (result.ok) {
+					okEntries.push({ label: result.label, body: result.body });
+				} else {
+					failedPaths.push(resolveChainPath(spec, chainDir));
+				}
+			}
+
+			if (okEntries.length > 0) {
+				const blocks = okEntries.map((e) => `### ${e.label}\n\n${e.body}`).join("\n\n");
+			prefixParts.push(`Pre-loaded files (do not Read these — contents are below):\n\n${blocks}`);
+			}
+			if (failedPaths.length > 0) {
+				prefixParts.push(`[Read from: ${failedPaths.join(", ")}]`);
+			}
+		} else {
+			// Legacy mode: just list file paths
+			const files = expandedSpecs.map((f) => resolveChainPath(f, chainDir));
+			prefixParts.push(`[Read from: ${files.join(", ")}]`);
+		}
+
+		// Emit empty-glob hints
+		for (const pattern of emptyGlobs) {
+			prefixParts.push(`[Read from glob (no matches): ${pattern}]`);
+		}
 	}
 
 	// OUTPUT - prepend so agent knows where to write
@@ -294,10 +503,10 @@ export function buildChainInstructions(
 		suffixParts.push(`Previous step output:\n${previousSummary.trim()}`);
 	}
 
-	const prefix = prefixParts.length > 0 
+	const prefix = prefixParts.length > 0
 		? prefixParts.join("\n") + "\n\n"
 		: "";
-	
+
 	const suffix = suffixParts.length > 0
 		? "\n\n---\n" + suffixParts.join("\n")
 		: "";

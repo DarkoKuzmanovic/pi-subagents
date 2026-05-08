@@ -157,6 +157,7 @@ async function runSingleAttempt(
 		runId: options.runId,
 		childAgentName: agent.name,
 		childIndex: options.index ?? 0,
+		skipContextFiles: options.skipContextFiles,
 	});
 
 	const result: SingleResult = {

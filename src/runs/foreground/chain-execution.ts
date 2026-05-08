@@ -187,7 +187,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				input.chainDir,
 				false,
 				templateHasPrevious ? undefined : input.prev,
-			);
+				params.inlineReads,
 
 			let taskStr = taskTemplate;
 			taskStr = taskStr.replace(/\{task\}/g, input.originalTask);
@@ -240,6 +240,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				outputPath,
 				outputMode: behavior.outputMode,
 				maxSubagentDepth,
+				skipContextFiles: params.inlineReads === true,
 				controlConfig: input.controlConfig,
 				onControlEvent: input.onControlEvent,
 				intercomSessionName: input.childIntercomTarget?.(task.agent, input.globalTaskIndex + taskIndex),
@@ -333,7 +334,8 @@ interface ChainExecutionParams {
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
-}
+	inlineReads?: boolean;
+	}
 
 interface ChainExecutionResult {
 	content: Array<{ type: "text"; text: string }>;
@@ -727,7 +729,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				chainDir,
 				isFirstProgress,
 				templateHasPrevious ? undefined : prev,
-			);
+			params.inlineReads,
 
 			let stepTask = stepTemplate;
 			stepTask = stepTask.replace(/\{task\}/g, originalTask);
@@ -789,6 +791,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				outputPath,
 				outputMode: behavior.outputMode,
 				maxSubagentDepth,
+				skipContextFiles: params.inlineReads === true,
 				controlConfig,
 				onControlEvent,
 				intercomSessionName: childIntercomTarget?.(seqStep.agent, globalTaskIndex),
