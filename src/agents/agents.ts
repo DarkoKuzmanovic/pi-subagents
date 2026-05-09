@@ -721,6 +721,7 @@ function resolveNearestProjectChainDirs(cwd: string): { readDirs: string[]; pref
 	};
 }
 const BUILTIN_AGENTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "agents");
+const BUILTIN_CHAINS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "chains");
 
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
@@ -798,6 +799,7 @@ export function discoverAgentsAll(cwd: string): {
 		}
 	}
 	const chains = [
+		...loadChainsFromDir(BUILTIN_CHAINS_DIR, "builtin"),
 		...loadChainsFromDir(userChainDir, "user"),
 		...Array.from(chainMap.values()),
 	];

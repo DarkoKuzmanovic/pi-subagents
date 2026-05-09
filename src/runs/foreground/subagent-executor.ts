@@ -678,6 +678,13 @@ function validateExecutionInput(
 					details: { mode: "chain" as const, results: [] },
 				};
 			}
+			if (isParallelStep(step) && "agent" in step && step.agent) {
+				return {
+					content: [{ type: "text", text: `Step ${i + 1} has both 'agent' and 'parallel' — use one or the other` }],
+					isError: true,
+					details: { mode: "chain" as const, results: [] },
+				};
+			}
 		}
 	}
 
@@ -2083,6 +2090,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		clearInlineReadCache();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
+		deps.state.pendingForegroundControlNotices ??= new Map();
 		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);
 		const paramsWithResolvedCwd = params.cwd === undefined ? params : { ...params, cwd: requestCwd };
 		if (params.action) {

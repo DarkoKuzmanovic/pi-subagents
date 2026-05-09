@@ -547,7 +547,7 @@ Review
 
 		const result = discoverAgentsAll(dir);
 		assert.equal(result.project.some((agent) => agent.filePath.endsWith("scout.md")), false);
-		assert.equal(result.chains.some((chain) => chain.filePath.endsWith("review.chain.md")), false);
+		assert.equal(result.chains.some((chain) => chain.filePath.startsWith(dir) && chain.filePath.endsWith("review.chain.md")), false);
 	});
 });
 
