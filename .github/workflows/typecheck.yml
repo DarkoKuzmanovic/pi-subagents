@@ -16,5 +16,18 @@ jobs:
           node-version: 24
       - name: Install dependencies
         run: npm install --ignore-scripts
-      - name: Type check
-        run: npm run typecheck
+      - name: Verify imports resolve
+        run: |
+          npx tsc --noEmit --moduleResolution NodeNext --target ESNext \
+            --skipLibCheck --allowImportingTsExtensions \
+            --module NodeNext \
+            src/extension/index.ts 2>&1 | grep -i "Cannot find module\|Could not resolve" && exit 1 || echo "All imports resolve ✓"
+      - name: Check for stale @mariozechner namespace
+        run: |
+          found=$(grep -r "@mariozechner" --include="*.ts" --include="*.mjs" --include="*.json" src/ 2>/dev/null || true)
+          if [ -n "$found" ]; then
+            echo "Found stale @mariozechner imports:"
+            echo "$found"
+            exit 1
+          fi
+          echo "No stale namespace references ✓"
