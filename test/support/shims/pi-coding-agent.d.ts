@@ -36,6 +36,6 @@ export interface Theme {
 	[key: string]: any;
 }
 
-export function getMarkdownTheme(): Theme {
+export function getMarkdownTheme(...args: any[]): Theme {
 	return {} as Theme;
 }
