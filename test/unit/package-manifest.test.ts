@@ -6,7 +6,7 @@ import test from "node:test";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const sourceImportPattern = /from\s+["'](@mariozechner\/[^"']+)["']|import\s+["'](@mariozechner\/[^"']+)["']/g;
+const sourceImportPattern = /from\s+["'](@earendil-works\/[^"']+)["']|import\s+["'](@earendil-works\/[^"']+)["']/g;
 
 function collectTsFiles(dir: string): string[] {
 	const files: string[] = [];
@@ -21,7 +21,7 @@ function collectTsFiles(dir: string): string[] {
 	return files;
 }
 
-test("direct @mariozechner runtime imports are declared for CI installs", () => {
+test("direct @earendil-works runtime imports are declared for CI installs", () => {
 	const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf-8"));
 	const declared = new Set([
 		...Object.keys(packageJson.dependencies ?? {}),

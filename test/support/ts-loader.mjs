@@ -101,10 +101,10 @@ export function resolve(specifier, context, nextResolve) {
   // Shim peer dependencies globally — they are optional peer deps not installed in the test env.
   // The render.ts-specific shim was too narrow and missed imports from index.ts, render-helpers.ts,
   // slash-commands.ts, chain-clarify.ts, and direct test file imports.
-  if (specifier === "@mariozechner/pi-coding-agent") {
+  if (specifier === "@earendil-works/pi-coding-agent") {
     return { url: asDataModule(piCodingAgentShim), shortCircuit: true };
   }
-  if (specifier === "@mariozechner/pi-tui") {
+  if (specifier === "@earendil-works/pi-tui") {
     return { url: asDataModule(piTuiShim), shortCircuit: true };
   }
 
