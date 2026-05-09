@@ -1,5 +1,5 @@
 // Type shim for @earendil-works/pi-coding-agent
-// Provides just the types that pi-subagents imports
+// Broad types — the goal is import resolution, not type precision
 
 export interface ExtensionAPI {
 	registerProvider: any;
@@ -9,6 +9,8 @@ export interface ExtensionAPI {
 	exec: any;
 	getThinkingLevel: any;
 	events: any;
+	sendMessage: any;
+	[key: string]: any;
 }
 
 export interface ExtensionContext {
