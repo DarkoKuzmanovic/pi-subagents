@@ -2,16 +2,16 @@
   "name": "pi-subagents",
   "version": "0.25.0",
   "description": "Pi extension for delegating tasks to subagents with chains, parallel execution, and TUI clarification",
-  "author": "Darko Kuzmanovic"
+  "author": "Darko Kuzmanovic",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DarkoKuzmanovic/pi-subagents.git"
   },
-  "homepage": "https://github.com/nicobailon/pi-subagents#readme",
+  "homepage": "https://github.com/DarkoKuzmanovic/pi-subagents#readme",
   "bugs": {
-    "url": "https://github.com/nicobailon/pi-subagents/issues"
+    "url": "https://github.com/DarkoKuzmanovic/pi-subagents/issues"
   },
   "keywords": [
     "pi-package",
@@ -81,4 +81,5 @@
     "@earendil-works/pi-coding-agent": "^0.74.0",
     "@earendil-works/pi-tui": "^0.74.0",
     "typescript": "^5.8.0"
+  }
 }
