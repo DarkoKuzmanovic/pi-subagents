@@ -62,8 +62,16 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 const parseAgentToken = (token: string): { name: string; config: InlineConfig } => {
 	const bracket = token.indexOf("[");
 	if (bracket === -1) return { name: token, config: {} };
-	const end = token.lastIndexOf("]");
-	return { name: token.slice(0, bracket), config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)) };
+	let depth = 1;
+	let end = bracket + 1;
+	while (end < token.length && depth > 0) {
+		const ch = token[end]!;
+		if (ch === "[") depth++;
+		else if (ch === "]") depth--;
+		end++;
+	}
+	const configStr = depth === 0 ? token.slice(bracket + 1, end - 1) : token.slice(bracket + 1);
+	return { name: token.slice(0, bracket), config: parseInlineConfig(configStr) };
 };
 
 const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fork: boolean } => {
