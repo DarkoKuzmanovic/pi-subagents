@@ -72,14 +72,13 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 	}
 
 	statusCache.set(statusPath, { mtime: stat.mtimeMs, status });
+	if (statusCache.size > 50) {
 		const oldestKey = [...statusCache.entries()]
 			.sort(([, a], [, b]) => (a.mtime ?? 0) - (b.mtime ?? 0))[0]?.[0];
 		if (oldestKey) statusCache.delete(oldestKey);
+	}
 	return status;
 }
-
-
-
 /**
  * Get human-readable last activity time for a file
  */
@@ -199,13 +198,11 @@ export function compactForegroundResult(result: SingleResult): SingleResult {
 	const toolCalls = result.toolCalls?.length ? result.toolCalls : extractToolCallSummaries(result.messages);
 	return {
 		...result,
+		messages: undefined,
 		progress: undefined,
 		toolCalls: toolCalls.length ? toolCalls : undefined,
-		messages: result.messages ? result.messages.map((msg) => ({
-			...msg,
-			...(msg.content ? { content: "[content omitted: compact mode]" } : {}),
-		})) : undefined,
 	};
+}
 
 export function compactForegroundDetails(details: Details): Details {
 	return {
