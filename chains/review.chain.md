@@ -30,7 +30,7 @@ task: |
 
   Read changed files and nearby test files directly. Return concise,
   evidence-backed findings with exact file:line references. Do not edit files.
-model: wafer/MiniMax-M2.7
+model: crofai/kimi-k2.6
 output: review/findings-tests.md
 
 ## simplicity
@@ -45,7 +45,7 @@ task: |
 
   Read changed files directly. Return concise, evidence-backed findings with
   exact file:line references. Do not edit files.
-model: wafer/DeepSeek-V4-Pro
+model: wafer/Qwen3.5-397B-A17B
 output: review/findings-simplicity.md
 
 ## synthesis

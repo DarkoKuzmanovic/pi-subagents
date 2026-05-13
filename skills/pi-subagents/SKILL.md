@@ -32,13 +32,14 @@ Humans often use the slash-command layer instead:
 - `/run` — launch a single agent
 - `/chain` — launch a chain of steps
 - `/parallel` — launch top-level parallel tasks
-- `/run-chain` — launch a saved `.chain.md` workflow
+- `/chain <chainName> -- <task>` — launch a saved `.chain.md` workflow (also supports inline `agent "task" -> agent` syntax)
 - `/subagents-doctor` — diagnose setup, discovery, async paths, and intercom bridge state
 
 Prefer the tool when you are writing agent logic. Prefer the slash commands when
 you are guiding a human through an interactive flow.
 
 Packaged prompt shortcuts are also available for repeatable workflows. Treat them as reusable orchestration recipes, not just human slash commands. When the user asks for one of these shapes, or when the workflow clearly fits, apply the same pattern directly with `subagent(...)` and other tools:
+
 - `/parallel-review` — fresh-context reviewers with distinct review angles, then synthesis
 - `/parallel-research` — combine `researcher` and `scout` for external evidence plus local code context
 - `/parallel-context-build` — parallel `context-builder` passes that produce planning handoff context and meta-prompts
@@ -67,15 +68,29 @@ Example shape:
 
 ```typescript
 subagent({
-  chain: [{
-    parallel: [
-      { agent: "context-builder", task: "Build request/scope context for: ...", output: "context-build/request-and-scope.md" },
-      { agent: "context-builder", task: "Build codebase/pattern context for: ...", output: "context-build/codebase-and-patterns.md" },
-      { agent: "context-builder", task: "Build validation/risk context for: ...", output: "context-build/validation-and-risks.md" }
-    ]
-  }],
-  context: "fresh"
-})
+  chain: [
+    {
+      parallel: [
+        {
+          agent: "context-builder",
+          task: "Build request/scope context for: ...",
+          output: "context-build/request-and-scope.md",
+        },
+        {
+          agent: "context-builder",
+          task: "Build codebase/pattern context for: ...",
+          output: "context-build/codebase-and-patterns.md",
+        },
+        {
+          agent: "context-builder",
+          task: "Build validation/risk context for: ...",
+          output: "context-build/validation-and-risks.md",
+        },
+      ],
+    },
+  ],
+  context: "fresh",
+});
 ```
 
 ### Parallel handoff-plan technique
@@ -87,15 +102,33 @@ Example shape:
 ```typescript
 subagent({
   chain: [
-    { parallel: [
-      { agent: "researcher", task: "Research the external reference and transferable implementation ideas for: ...", output: "handoff/external-reference.md" },
-      { agent: "context-builder", task: "Build local codebase context for: ...", output: "handoff/local-context.md" },
-      { agent: "context-builder", task: "Compare evidence and propose implementation strategy for: ...", output: "handoff/implementation-strategy.md" }
-    ] },
-    { agent: "context-builder", task: "Read {previous} and synthesize the final handoff plan and implementation-ready meta-prompt.", output: "handoff/final-handoff-plan.md" }
+    {
+      parallel: [
+        {
+          agent: "researcher",
+          task: "Research the external reference and transferable implementation ideas for: ...",
+          output: "handoff/external-reference.md",
+        },
+        {
+          agent: "context-builder",
+          task: "Build local codebase context for: ...",
+          output: "handoff/local-context.md",
+        },
+        {
+          agent: "context-builder",
+          task: "Compare evidence and propose implementation strategy for: ...",
+          output: "handoff/implementation-strategy.md",
+        },
+      ],
+    },
+    {
+      agent: "context-builder",
+      task: "Read {previous} and synthesize the final handoff plan and implementation-ready meta-prompt.",
+      output: "handoff/final-handoff-plan.md",
+    },
   ],
-  context: "fresh"
-})
+  context: "fresh",
+});
 ```
 
 ### Gather-context-and-clarify technique
@@ -111,18 +144,18 @@ Use this after implementation when the user wants cleanup review or when a final
 Builtin agents load at the lowest priority. Project agents override user agents,
 and user/project agents override builtins with the same name.
 
-| Agent | Purpose | Context | Typical output / role |
-|-------|---------|---------|------------------------|
-| `scout` | Fast codebase recon | fresh (implicit) | Writes `context.md` handoff material |
-| `planner` | Creates implementation plans | fresh | Writes `plan.md`; reads `context.md` |
-| `worker` | Implementation and approved oracle handoffs | fork | Single-writer implementation with decision escalation |
-| `reviewer` | Review-and-fix specialist | fresh (implicit) | Can edit/fix reviewed code |
-| `context-builder` | Requirements/codebase handoff builder | fresh (implicit) | Writes structured context files |
-| `researcher` | Web research brief generator | fresh (implicit) | Writes `research.md` |
-| `delegate` | Lightweight generic delegate | fresh (implicit) | No fixed output; generic delegated work |
-| `oracle` | Decision-consistency advisory review | fork | Advisory review, intercom coordination |
-| `oracle-fresh` | Drift-check oracle for chain workflows | fresh | Reads chain artifacts instead of forking; cheaper alternative to `oracle` |
-| `deslopper` | Codebase cleanup and dead-code removal | fresh | Read-only audit (`--review`) or surgical cleanup with verification |
+| Agent             | Purpose                                     | Context          | Typical output / role                                                     |
+| ----------------- | ------------------------------------------- | ---------------- | ------------------------------------------------------------------------- |
+| `scout`           | Fast codebase recon                         | fresh (implicit) | Writes `context.md` handoff material                                      |
+| `planner`         | Creates implementation plans                | fresh            | Writes `plan.md`; reads `context.md`                                      |
+| `worker`          | Implementation and approved oracle handoffs | fork             | Single-writer implementation with decision escalation                     |
+| `reviewer`        | Review-and-fix specialist                   | fresh (implicit) | Can edit/fix reviewed code                                                |
+| `context-builder` | Requirements/codebase handoff builder       | fresh (implicit) | Writes structured context files                                           |
+| `researcher`      | Web research brief generator                | fresh (implicit) | Writes `research.md`                                                      |
+| `delegate`        | Lightweight generic delegate                | fresh (implicit) | No fixed output; generic delegated work                                   |
+| `oracle`          | Decision-consistency advisory review        | fork             | Advisory review, intercom coordination                                    |
+| `oracle-fresh`    | Drift-check oracle for chain workflows      | fresh            | Reads chain artifacts instead of forking; cheaper alternative to `oracle` |
+| `deslopper`       | Codebase cleanup and dead-code removal      | fresh            | Read-only audit (`--review`) or surgical cleanup with verification        |
 
 Builtin agents inherit the current Pi default model unless a run, user setting, or project setting overrides `model`. Override builtin defaults before copying full agent files when a small tweak is enough.
 
@@ -139,6 +172,7 @@ For persistent tweaks, edit `subagents.agentOverrides` in user or project settin
 Builtin role agents inherit the current Pi default model unless you override them. When launching them, write the task prompt as a compact contract, not a long procedural script. Define the destination and let the role choose the efficient path.
 
 A strong subagent prompt usually includes:
+
 - **Goal**: the concrete outcome the child should produce.
 - **Context/evidence**: relevant plan paths, files, diffs, decisions, or user constraints already approved.
 - **Success criteria**: what must be true before the child can finish.
@@ -152,6 +186,7 @@ Avoid carrying over old prompt habits that over-specify every step. Use `must`, 
 For implementation handoffs, name the approved scope and success criteria more clearly than the process. Good prompts say what to change, what not to change, where the evidence lives, how to validate, and when to escalate. They should not ask the child to create another subagent plan or continue the parent conversation.
 
 Settings locations:
+
 - User scope: `~/.pi/agent/settings.json`
 - Project scope: `.pi/settings.json`
 
@@ -179,20 +214,24 @@ agent with the same name only when you want a substantially different agent.
 ## Discovery and Scope Rules
 
 Agent files can live in:
+
 - `~/.pi/agent/agents/**/*.md` — user scope
 - `.pi/agents/**/*.md` — canonical project scope
 - legacy `.agents/**/*.md` — still read for compatibility, but `.pi/agents/` wins on conflicts
 
 Chains live in:
+
 - `~/.pi/agent/chains/**/*.chain.md` — user scope
 - `.pi/chains/**/*.chain.md` — project scope
 
 Built-in chain templates bundled with the package:
+
 - `go` — scout → context-builder → worker → delegate (test-writer) → reviewer
 - `review` — 3× parallel reviewer → context-builder synthesis
-Discovery is recursive. `.chain.md` files do not define agents. Agents and chains can set optional frontmatter `package: code-analysis`; `name: scout` plus `package: code-analysis` registers as runtime name `code-analysis.scout` while serialization keeps `name` and `package` separate.
+  Discovery is recursive. `.chain.md` files do not define agents. Agents and chains can set optional frontmatter `package: code-analysis`; `name: scout` plus `package: code-analysis` registers as runtime name `code-analysis.scout` while serialization keeps `name` and `package` separate.
 
 Precedence is by parsed runtime name:
+
 1. project scope
 2. user scope
 3. builtin agents
@@ -204,8 +243,8 @@ Precedence is by parsed runtime name:
 ```typescript
 subagent({
   agent: "oracle",
-  task: "Review my current direction and challenge assumptions."
-})
+  task: "Review my current direction and challenge assumptions.",
+});
 ```
 
 ### Forked context
@@ -213,8 +252,8 @@ subagent({
 ```typescript
 subagent({
   agent: "oracle",
-  task: "Review my current direction and challenge assumptions."
-})
+  task: "Review my current direction and challenge assumptions.",
+});
 ```
 
 `context: "fork"` creates a branched child session from the current persisted
@@ -228,9 +267,9 @@ or execution thread that can still reference the parent session history.
 subagent({
   tasks: [
     { agent: "scout", task: "Explore the auth module" },
-    { agent: "reviewer", task: "Review the API client" }
-  ]
-})
+    { agent: "reviewer", task: "Review the API client" },
+  ],
+});
 ```
 
 Top-level parallel tasks can override per-task behavior:
@@ -238,12 +277,25 @@ Top-level parallel tasks can override per-task behavior:
 ```typescript
 subagent({
   tasks: [
-    { agent: "scout", task: "Map auth", output: "auth-context.md", progress: true },
-    { agent: "researcher", task: "Research OAuth best practices", output: "oauth-research.md" },
-    { agent: "reviewer", task: "Review auth tests", model: "anthropic/claude-sonnet-4" }
+    {
+      agent: "scout",
+      task: "Map auth",
+      output: "auth-context.md",
+      progress: true,
+    },
+    {
+      agent: "researcher",
+      task: "Research OAuth best practices",
+      output: "oauth-research.md",
+    },
+    {
+      agent: "reviewer",
+      task: "Review auth tests",
+      model: "anthropic/claude-sonnet-4",
+    },
   ],
-  concurrency: 3
-})
+  concurrency: 3,
+});
 ```
 
 Avoid duplicate output paths in parallel tasks. Concurrent children should not write to the same file. For large saved outputs, set `outputMode: "file-only"` together with an `output` path. The parent result then contains only a compact reference like `Output saved to: /abs/report.md (48.2 KB, 2847 lines). Read this file if needed.` instead of the full saved content. Do not use `output: false` for this; `output: false` means no file output. Failed runs and save errors still return inline details for debugging.
@@ -255,9 +307,12 @@ subagent({
   chain: [
     { agent: "scout", task: "Map the auth flow and summarize key files" },
     { agent: "planner", task: "Create an implementation plan from {previous}" },
-    { agent: "worker", task: "Implement the approved plan based on {previous}" }
-  ]
-})
+    {
+      agent: "worker",
+      task: "Implement the approved plan based on {previous}",
+    },
+  ],
+});
 ```
 
 Chain steps can use templated variables such as `{task}`, `{previous}`, and
@@ -274,8 +329,8 @@ Do not end your turn immediately after launching an async child if you promised 
 subagent({
   agent: "worker",
   task: "Run the full test suite",
-  async: true
-})
+  async: true,
+});
 ```
 
 File-only output mode also works for async single runs, top-level parallel task items, sequential chain steps, and chain parallel task items. In chains, `{previous}` receives the compact saved-file reference when the prior step used file-only mode.
@@ -287,8 +342,8 @@ const run = subagent({
   agent: "reviewer",
   task: "Review the current diff for correctness issues. Do not edit files.",
   async: true,
-  context: "fresh"
-})
+  context: "fresh",
+});
 // Continue local inspection, then later call status with the returned id.
 ```
 
@@ -297,11 +352,21 @@ Inspect async runs with `subagent({ action: "status", id: "..." })` or `subagent
 Use `resume` for follow-up work after a delegated run:
 
 ```typescript
-subagent({ action: "resume", id: "run-id", message: "Follow up on this point." })
-subagent({ action: "resume", id: "run-id", index: 1, message: "Continue reviewer 2." })
+subagent({
+  action: "resume",
+  id: "run-id",
+  message: "Follow up on this point.",
+});
+subagent({
+  action: "resume",
+  id: "run-id",
+  index: 1,
+  message: "Continue reviewer 2.",
+});
 ```
 
 Resume behavior:
+
 - If an async child is still running and reachable, `resume` sends the follow-up to that live child over intercom.
 - If an async child has completed, `resume` revives it by starting a new async child from the persisted child session file.
 - Multi-child async runs require `index` unless only one running child is selectable.
@@ -312,7 +377,7 @@ Resume behavior:
 Use diagnostics when setup or child startup looks wrong:
 
 ```typescript
-subagent({ action: "doctor" })
+subagent({ action: "doctor" });
 ```
 
 Humans can use `/subagents-doctor` for the same read-only report. It checks runtime paths, discovery counts, async support, current session context, and intercom bridge state.
@@ -326,13 +391,13 @@ Default behavior is intentionally conservative. When no activity has been observ
 Use soft interrupt when a child is clearly blocked or drifting and the parent needs to regain control:
 
 ```typescript
-subagent({ action: "interrupt" })
+subagent({ action: "interrupt" });
 ```
 
 Pass `id` when targeting a specific controllable run:
 
 ```typescript
-subagent({ action: "interrupt", id: "abc123" })
+subagent({ action: "interrupt", id: "abc123" });
 ```
 
 A soft interrupt cancels the current child turn and leaves the run paused. It does not mean the delegated task succeeded or failed. After an interrupt, decide the next explicit action: resume with clearer instructions, replace the task, ask the user, or stop the workflow.
@@ -345,9 +410,9 @@ subagent({
   task: "Run the slow migration test suite",
   control: {
     needsAttentionAfterMs: 300000,
-    notifyOn: ["needs_attention"]
-  }
-})
+    notifyOn: ["needs_attention"],
+  },
+});
 ```
 
 If the run already has an active intercom bridge target, needs-attention notifications can also prepare a compact intercom ping for the orchestrator. When a child route is available, the ping tells the orchestrator which agent needs attention and includes the exact `intercom({ action: "send", to: "..." })` target for a nudge. Do not invent a target or ask the child to self-report when no bridge exists.
@@ -361,13 +426,12 @@ edit parameters before launch:
 subagent({
   agent: "worker",
   task: "Implement feature X",
-  clarify: true
-})
+  clarify: true,
+});
 ```
 
 Chains default to clarify mode; set `clarify: false` to skip it. Clarify edits affect only the next run; use management actions, settings, or markdown files for persistent changes.
 For programmatic background launches, use `clarify: false, async: true`.
-
 
 ## Worktree Isolation
 
@@ -378,10 +442,10 @@ them share one filesystem view.
 subagent({
   tasks: [
     { agent: "worker", task: "Implement feature A" },
-    { agent: "worker", task: "Implement feature B" }
+    { agent: "worker", task: "Implement feature B" },
   ],
-  worktree: true
-})
+  worktree: true,
+});
 ```
 
 `worktree: true` gives each parallel task its own git worktree branched from
@@ -392,6 +456,7 @@ prefer a single-writer pattern instead.
 ## The Oracle Workflow
 
 The intended oracle loop is:
+
 1. the main agent forks to `oracle`
 2. `oracle` reviews direction, drift, assumptions, and risks
 3. `oracle` can coordinate back through `contact_supervisor` when the bridge injects it
@@ -402,14 +467,14 @@ The intended oracle loop is:
 // Advisory review in a branched thread. Oracle defaults to forked context.
 subagent({
   agent: "oracle",
-  task: "Review my current direction, challenge assumptions, and propose the best next move."
-})
+  task: "Review my current direction, challenge assumptions, and propose the best next move.",
+});
 
 // Implementation only after explicit approval. Worker defaults to forked context.
 subagent({
   agent: "worker",
-  task: "Implement the approved approach: ..."
-})
+  task: "Implement the approved approach: ...",
+});
 ```
 
 `oracle` is not a fresh-context reviewer in the Cognition article sense. It is
@@ -423,6 +488,7 @@ history as a baseline contract.
 Most agents should not call generic `intercom` directly unless bridge instructions provide a target and `contact_supervisor` is unavailable. Do not invent a target. Prefer the tool from the injected bridge instructions.
 
 Use `contact_supervisor` with `reason: "need_decision"` when:
+
 - a subagent is blocked on a decision
 - a child needs clarification instead of guessing
 - an approval, product, API, or scope choice is required before continuing safely
@@ -430,11 +496,13 @@ Use `contact_supervisor` with `reason: "need_decision"` when:
 Do not use `contact_supervisor` just to resolve review-only/no-edit versus progress-writing or artifact-writing instructions. No-edit wins, and the child should return review findings without touching files.
 
 Use `contact_supervisor` with `reason: "progress_update"` when:
+
 - a child is explicitly asked for progress
 - a meaningful discovery changes the plan
 - a long-running child needs to report a blocked/progress checkpoint without waiting for normal tool return flow
 
 Message conventions:
+
 - `reason: "need_decision"` waits for the parent reply and returns it to the child.
 - `reason: "progress_update"` is non-blocking and should stay concise.
 - Child-side routine completion handoffs are not expected. With the intercom bridge active, parent-side `pi-subagents` sends grouped completion results through `pi-intercom`: one grouped message per foreground parent run and one per completed async result file. Acknowledged foreground delivery returns a compact receipt with artifact/session paths; if unacknowledged, the normal full output is preserved. Grouped messages include child intercom targets and full child summaries.
@@ -444,20 +512,20 @@ If bridge instructions provide the child-facing tool, a child can ask:
 ```typescript
 contact_supervisor({
   reason: "need_decision",
-  message: "Should I optimize for readability or performance here?"
-})
+  message: "Should I optimize for readability or performance here?",
+});
 ```
 
 The parent replies with:
 
 ```typescript
-intercom({ action: "reply", message: "Optimize for readability." })
+intercom({ action: "reply", message: "Optimize for readability." });
 ```
 
 Or inspects unresolved asks first:
 
 ```typescript
-intercom({ action: "pending" })
+intercom({ action: "pending" });
 ```
 
 If intercom messages do not show up, run `subagent({ action: "doctor" })` or `/subagents-doctor`.
@@ -469,7 +537,7 @@ The `subagent(...)` tool also supports management actions.
 ### List available agents and chains
 
 ```typescript
-subagent({ action: "list" })
+subagent({ action: "list" });
 ```
 
 ### Create an agent
@@ -484,9 +552,9 @@ subagent({
     systemPrompt: "Your system prompt here.",
     systemPromptMode: "replace",
     model: "openai-codex/gpt-5.4",
-    tools: "read,grep,find,ls,bash"
-  }
-})
+    tools: "read,grep,find,ls,bash",
+  },
+});
 ```
 
 ### Update an agent
@@ -496,15 +564,15 @@ subagent({
   action: "update",
   agent: "code-analysis.my-agent",
   config: {
-    thinking: "high"
-  }
-})
+    thinking: "high",
+  },
+});
 ```
 
 ### Delete an agent
 
 ```typescript
-subagent({ action: "delete", agent: "code-analysis.my-agent" })
+subagent({ action: "delete", agent: "code-analysis.my-agent" });
 ```
 
 Use management actions when the system needs to create or edit subagents on
@@ -533,6 +601,7 @@ Your system prompt here.
 ```
 
 That is only a starting point. Omit `package` for the traditional unqualified runtime name. Common optional fields include:
+
 - `defaultProgress`
 - `defaultReads`
 - `output`
@@ -616,9 +685,9 @@ subagent({
   chain: [
     { agent: "scout", task: "Map the auth flow and summarize relevant files" },
     { agent: "planner", task: "Plan the migration from {previous}" },
-    { agent: "worker", task: "Implement the approved plan from {previous}" }
-  ]
-})
+    { agent: "worker", task: "Implement the approved plan from {previous}" },
+  ],
+});
 ```
 
 ### Clarify → Plan → Implement → Review (self-orchestrated workflow)
@@ -658,8 +727,8 @@ Example implementation handoff after clarification and optional planning:
 ```typescript
 subagent({
   agent: "worker",
-  task: "Implement the approved feature.\n\nClarified requirements:\n- ...\n\nPlan: see ~/Documents/docs/...-plan.md\n\nValidation expected:\n- ..."
-})
+  task: "Implement the approved feature.\n\nClarified requirements:\n- ...\n\nPlan: see ~/Documents/docs/...-plan.md\n\nValidation expected:\n- ...",
+});
 ```
 
 Example review pass after implementation:
@@ -667,13 +736,25 @@ Example review pass after implementation:
 ```typescript
 subagent({
   tasks: [
-    { agent: "reviewer", task: "Review the current diff for correctness and regressions. Inspect changed files directly.", output: false },
-    { agent: "reviewer", task: "Review the current diff for tests and validation quality. Inspect changed files directly.", output: false },
-    { agent: "reviewer", task: "Review the current diff for simplicity and maintainability. Inspect changed files directly.", output: false }
+    {
+      agent: "reviewer",
+      task: "Review the current diff for correctness and regressions. Inspect changed files directly.",
+      output: false,
+    },
+    {
+      agent: "reviewer",
+      task: "Review the current diff for tests and validation quality. Inspect changed files directly.",
+      output: false,
+    },
+    {
+      agent: "reviewer",
+      task: "Review the current diff for simplicity and maintainability. Inspect changed files directly.",
+      output: false,
+    },
   ],
   concurrency: 3,
-  context: "fresh"
-})
+  context: "fresh",
+});
 ```
 
 Example fix worker after parallel reviews:
@@ -681,8 +762,8 @@ Example fix worker after parallel reviews:
 ```typescript
 subagent({
   agent: "worker",
-  task: "Apply the synthesized reviewer feedback below. Only apply fixes worth doing now; preserve user-approved scope; ask before unapproved product or architecture changes. Run focused validation and summarize what changed.\n\nReviewer synthesis:\n..."
-})
+  task: "Apply the synthesized reviewer feedback below. Only apply fixes worth doing now; preserve user-approved scope; ask before unapproved product or architecture changes. Run focused validation and summarize what changed.\n\nReviewer synthesis:\n...",
+});
 ```
 
 ### Review loop
@@ -695,15 +776,18 @@ Do not treat review as the final step for implementation work. Use the implement
 subagent({
   tasks: [
     { agent: "scout", task: "Audit frontend auth flow" },
-    { agent: "researcher", task: "Research current retry/backoff best practices" }
-  ]
-})
+    {
+      agent: "researcher",
+      task: "Research current retry/backoff best practices",
+    },
+  ],
+});
 ```
 
 ### Saved chain
 
 ```text
-/run-chain review-chain -- review this branch
+/chain review-chain -- review this branch
 ```
 
 Use saved `.chain.md` workflows when the user wants a repeatable multi-agent flow without rewriting the chain each time.
@@ -711,43 +795,51 @@ Use saved `.chain.md` workflows when the user wants a repeatable multi-agent flo
 ## Error Handling
 
 **"Unknown agent"**
+
 ```typescript
-subagent({ action: "list" })
+subagent({ action: "list" });
 // Check available agents and chains, then confirm scope/precedence.
 ```
 
 **Setup, discovery, or intercom confusion**
+
 ```typescript
-subagent({ action: "doctor" })
+subagent({ action: "doctor" });
 // Check runtime paths, async support, discovery counts, current session, and intercom bridge state.
 ```
 
 **"Max subagent depth exceeded"**
+
 ```typescript
 // Flatten the workflow or raise maxSubagentDepth in config.
 ```
 
 **"Session manager did not return a session file"**
+
 ```typescript
 // Persist the current session before using context: "fork".
 ```
 
 **Intercom "Already waiting for a reply"**
+
 ```typescript
 // Resolve the current outbound ask before starting another one.
 ```
 
 **Parallel output-path conflict**
+
 ```typescript
 // Give each parallel task a distinct output path, or disable output for tasks that do not need it.
 ```
 
 **Worktree launch fails**
+
 ```typescript
 // Ensure the git working tree is clean and task cwd overrides match the shared cwd.
 ```
 
 **Child fails before starting**
+
 ```typescript
 // Inspect `subagent({ action: "status", id: "..." })`, artifact metadata/output logs, and run doctor. Extension loader errors usually appear in child output logs.
 ```

@@ -1,14 +1,28 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
-import { discoverAgents, discoverAgentsAll, saveBuiltinAgentOverride, type ChainConfig } from "../agents/agents.ts";
+import {
+	discoverAgents,
+	discoverAgentsAll,
+	saveBuiltinAgentOverride,
+	type ChainConfig,
+} from "../agents/agents.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
-import { SubagentHubComponent, type SubagentHubResult } from "../tui/subagent-hub.ts";
+import {
+	SubagentHubComponent,
+	type SubagentHubResult,
+} from "../tui/subagent-hub.ts";
 import { toModelInfo } from "../shared/model-info.ts";
 import { isParallelStep, type ChainStep } from "../shared/settings.ts";
-import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
+import type {
+	SlashSubagentResponse,
+	SlashSubagentUpdate,
+} from "./slash-bridge.ts";
 import {
 	applySlashUpdate,
 	buildSlashInitialResult,
@@ -48,18 +62,33 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 		const key = trimmed.slice(0, eq).trim();
 		const val = trimmed.slice(eq + 1).trim();
 		switch (key) {
-			case "output": config.output = val === "false" ? false : val; break;
-			case "outputMode": if (val === "inline" || val === "file-only") config.outputMode = val; break;
-			case "reads": config.reads = val === "false" ? false : val.split("+").filter(Boolean); break;
-			case "model": config.model = val || undefined; break;
-			case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
-			case "progress": config.progress = val !== "false"; break;
+			case "output":
+				config.output = val === "false" ? false : val;
+				break;
+			case "outputMode":
+				if (val === "inline" || val === "file-only") config.outputMode = val;
+				break;
+			case "reads":
+				config.reads = val === "false" ? false : val.split("+").filter(Boolean);
+				break;
+			case "model":
+				config.model = val || undefined;
+				break;
+			case "skill":
+			case "skills":
+				config.skill = val === "false" ? false : val.split("+").filter(Boolean);
+				break;
+			case "progress":
+				config.progress = val !== "false";
+				break;
 		}
 	}
 	return config;
 };
 
-const parseAgentToken = (token: string): { name: string; config: InlineConfig } => {
+const parseAgentToken = (
+	token: string,
+): { name: string; config: InlineConfig } => {
 	const bracket = token.indexOf("[");
 	if (bracket === -1) return { name: token, config: {} };
 	let depth = 1;
@@ -70,11 +99,17 @@ const parseAgentToken = (token: string): { name: string; config: InlineConfig } 
 		else if (ch === "]") depth--;
 		end++;
 	}
-	const configStr = depth === 0 ? token.slice(bracket + 1, end - 1) : token.slice(bracket + 1);
-	return { name: token.slice(0, bracket), config: parseInlineConfig(configStr) };
+	const configStr =
+		depth === 0 ? token.slice(bracket + 1, end - 1) : token.slice(bracket + 1);
+	return {
+		name: token.slice(0, bracket),
+		config: parseInlineConfig(configStr),
+	};
 };
 
-const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fork: boolean } => {
+const extractExecutionFlags = (
+	rawArgs: string,
+): { args: string; bg: boolean; fork: boolean } => {
 	let args = rawArgs.trim();
 	let bg = false;
 	let fork = false;
@@ -96,26 +131,61 @@ const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fo
 	return { args, bg, fork };
 };
 
-const makeAgentCompletions = (state: SubagentState, multiAgent: boolean) => (prefix: string) => {
-	const agents = discoverAgents(state.baseCwd, "both").agents;
-	if (!multiAgent) {
-		if (prefix.includes(" ")) return null;
-		return agents.filter((a) => a.name.startsWith(prefix)).map((a) => ({ value: a.name, label: a.name }));
-	}
+const makeAgentCompletions =
+	(state: SubagentState, multiAgent: boolean, includeChains = false) =>
+	(prefix: string) => {
+		const agents = discoverAgents(state.baseCwd, "both").agents;
+		if (!multiAgent) {
+			if (prefix.includes(" ")) return null;
+			const completions = agents
+				.filter((a) => a.name.startsWith(prefix))
+				.map((a) => ({ value: a.name, label: a.name }));
+			if (includeChains) {
+				const chains = discoverSavedChains(state.baseCwd).filter((c) =>
+					c.name.startsWith(prefix),
+				);
+				completions.push(
+					...chains.map((c) => ({ value: c.name, label: `${c.name} (chain)` })),
+				);
+			}
+			return completions;
+		}
 
-	const lastArrow = prefix.lastIndexOf(" -> ");
-	const segment = lastArrow !== -1 ? prefix.slice(lastArrow + 4) : prefix;
-	if (segment.includes(" -- ") || segment.includes('"') || segment.includes("'")) return null;
+		const lastArrow = prefix.lastIndexOf(" -> ");
+		const segment = lastArrow !== -1 ? prefix.slice(lastArrow + 4) : prefix;
+		if (
+			segment.includes(" -- ") ||
+			segment.includes('"') ||
+			segment.includes("'")
+		)
+			return null;
 
-	const lastWord = (prefix.match(/(\S*)$/) || ["", ""])[1];
-	const beforeLastWord = prefix.slice(0, prefix.length - lastWord.length);
+		const lastWord = (prefix.match(/(\S*)$/) || ["", ""])[1];
+		const beforeLastWord = prefix.slice(0, prefix.length - lastWord.length);
 
-	if (lastWord === "->") {
-		return agents.map((a) => ({ value: `${prefix} ${a.name}`, label: a.name }));
-	}
+		if (lastWord === "->") {
+			return agents.map((a) => ({
+				value: `${prefix} ${a.name}`,
+				label: a.name,
+			}));
+		}
 
-	return agents.filter((a) => a.name.startsWith(lastWord)).map((a) => ({ value: `${beforeLastWord}${a.name}`, label: a.name }));
-};
+		const completions = agents
+			.filter((a) => a.name.startsWith(lastWord))
+			.map((a) => ({ value: `${beforeLastWord}${a.name}`, label: a.name }));
+		if (includeChains && !prefix.includes(" -> ")) {
+			// Offer chain names as completions when user is typing the first token
+			completions.push(
+				...discoverSavedChains(state.baseCwd)
+					.filter((c) => c.name.startsWith(lastWord))
+					.map((c) => ({
+						value: `${beforeLastWord}${c.name}`,
+						label: `${c.name} (chain)`,
+					})),
+			);
+		}
+		return completions;
+	};
 
 const discoverSavedChains = (cwd: string): ChainConfig[] => {
 	const chainsByName = new Map<string, ChainConfig>();
@@ -125,27 +195,26 @@ const discoverSavedChains = (cwd: string): ChainConfig[] => {
 	return Array.from(chainsByName.values());
 };
 
-const makeChainCompletions = (state: SubagentState) => (prefix: string) => {
-	if (prefix.includes(" ")) return null;
-	return discoverSavedChains(state.baseCwd)
-		.filter((chain) => chain.name.startsWith(prefix))
-		.map((chain) => ({ value: chain.name, label: chain.name }));
-};
-
-const mapSavedChainSteps = (chain: ChainConfig, worktree = false): ChainStep[] => {
-	return (chain.steps as Array<ChainStep & { skills?: string[] | false }>).map((step) => {
-		if (isParallelStep(step)) return worktree ? { ...step, worktree: true } : { ...step };
-		return {
-			agent: step.agent,
-			task: step.task || undefined,
-			output: step.output,
-			outputMode: step.outputMode,
-			reads: step.reads,
-			progress: step.progress,
-			skill: step.skill ?? step.skills,
-			model: step.model,
-		};
-	});
+const mapSavedChainSteps = (
+	chain: ChainConfig,
+	worktree = false,
+): ChainStep[] => {
+	return (chain.steps as Array<ChainStep & { skills?: string[] | false }>).map(
+		(step) => {
+			if (isParallelStep(step))
+				return worktree ? { ...step, worktree: true } : { ...step };
+			return {
+				agent: step.agent,
+				task: step.task || undefined,
+				output: step.output,
+				outputMode: step.outputMode,
+				reads: step.reads,
+				progress: step.progress,
+				skill: step.skill ?? step.skills,
+				model: step.model,
+			};
+		},
+	);
 };
 
 async function requestSlashRun(
@@ -160,9 +229,13 @@ async function requestSlashRun(
 
 		const startTimeoutMs = 15_000;
 		const startTimeout = setTimeout(() => {
-			finish(() => reject(new Error(
-				"Slash subagent bridge did not start within 15s. Ensure the extension is loaded correctly.",
-			)));
+			finish(() =>
+				reject(
+					new Error(
+						"Slash subagent bridge did not start within 15s. Ensure the extension is loaded correctly.",
+					),
+				),
+			);
 		}, startTimeoutMs);
 
 		const onStarted = (data: unknown) => {
@@ -189,20 +262,26 @@ async function requestSlashRun(
 			if (!ctx.hasUI) return;
 			const tool = update.currentTool ? ` ${update.currentTool}` : "";
 			const count = update.toolCount ?? 0;
-			ctx.ui.setStatus("subagent-slash", `${count} tools${tool} | Ctrl+O live detail`);
+			ctx.ui.setStatus(
+				"subagent-slash",
+				`${count} tools${tool} | Ctrl+O live detail`,
+			);
 		};
 
 		const onTerminalInput = ctx.hasUI
 			? ctx.ui.onTerminalInput((input) => {
-				if (!matchesKey(input, Key.escape)) return undefined;
-				pi.events.emit(SLASH_SUBAGENT_CANCEL_EVENT, { requestId });
-				finish(() => reject(new Error("Cancelled")));
-				return { consume: true };
-			})
+					if (!matchesKey(input, Key.escape)) return undefined;
+					pi.events.emit(SLASH_SUBAGENT_CANCEL_EVENT, { requestId });
+					finish(() => reject(new Error("Cancelled")));
+					return { consume: true };
+				})
 			: undefined;
 
 		const unsubStarted = pi.events.on(SLASH_SUBAGENT_STARTED_EVENT, onStarted);
-		const unsubResponse = pi.events.on(SLASH_SUBAGENT_RESPONSE_EVENT, onResponse);
+		const unsubResponse = pi.events.on(
+			SLASH_SUBAGENT_RESPONSE_EVENT,
+			onResponse,
+		);
 		const unsubUpdate = pi.events.on(SLASH_SUBAGENT_UPDATE_EVENT, onUpdate);
 
 		const finish = (next: () => void) => {
@@ -222,18 +301,27 @@ async function requestSlashRun(
 		// If not started, no bridge received the request.
 		if (!started && done) return;
 		if (!started) {
-			finish(() => reject(new Error(
-				"No slash subagent bridge responded. Ensure the subagent extension is loaded correctly.",
-			)));
+			finish(() =>
+				reject(
+					new Error(
+						"No slash subagent bridge responded. Ensure the subagent extension is loaded correctly.",
+					),
+				),
+			);
 		}
 	});
 }
 
-function extractSlashMessageText(content: string | Array<{ type?: string; text?: string }>): string {
+function extractSlashMessageText(
+	content: string | Array<{ type?: string; text?: string }>,
+): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
 	return content
-		.filter((part): part is { type: "text"; text: string } => part?.type === "text" && typeof part.text === "string")
+		.filter(
+			(part): part is { type: "text"; text: string } =>
+				part?.type === "text" && typeof part.text === "string",
+		)
 		.map((part) => part.text)
 		.join("\n");
 }
@@ -242,22 +330,45 @@ function formatExportPathList(paths: string[]): string {
 	return paths.map((file) => `- \`${file}\``).join("\n");
 }
 
-function collectResultPaths(results: SingleResult[], getPath: (result: SingleResult) => string | undefined): string[] {
+function collectResultPaths(
+	results: SingleResult[],
+	getPath: (result: SingleResult) => string | undefined,
+): string[] {
 	return results
 		.map(getPath)
-		.filter((file): file is string => typeof file === "string" && file.length > 0);
+		.filter(
+			(file): file is string => typeof file === "string" && file.length > 0,
+		);
 }
 
 function buildSlashExportText(response: SlashSubagentResponse): string {
-	const output = extractSlashMessageText(response.result.content) || response.errorText || "(no output)";
+	const output =
+		extractSlashMessageText(response.result.content) ||
+		response.errorText ||
+		"(no output)";
 	const results = response.result.details?.results ?? [];
-	const sessionFiles = collectResultPaths(results, (result) => result.sessionFile);
-	const savedOutputs = collectResultPaths(results, (result) => result.savedOutputPath);
-	const artifactOutputs = collectResultPaths(results, (result) => result.artifactPaths?.outputPath);
+	const sessionFiles = collectResultPaths(
+		results,
+		(result) => result.sessionFile,
+	);
+	const savedOutputs = collectResultPaths(
+		results,
+		(result) => result.savedOutputPath,
+	);
+	const artifactOutputs = collectResultPaths(
+		results,
+		(result) => result.artifactPaths?.outputPath,
+	);
 	const sections = ["## Subagent result", output];
-	if (sessionFiles.length > 0) sections.push("## Child session exports", formatExportPathList(sessionFiles));
-	if (savedOutputs.length > 0) sections.push("## Saved outputs", formatExportPathList(savedOutputs));
-	if (artifactOutputs.length > 0) sections.push("## Artifact outputs", formatExportPathList(artifactOutputs));
+	if (sessionFiles.length > 0)
+		sections.push(
+			"## Child session exports",
+			formatExportPathList(sessionFiles),
+		);
+	if (savedOutputs.length > 0)
+		sections.push("## Saved outputs", formatExportPathList(savedOutputs));
+	if (artifactOutputs.length > 0)
+		sections.push("## Artifact outputs", formatExportPathList(artifactOutputs));
 	return sections.join("\n\n");
 }
 
@@ -269,12 +380,16 @@ function persistSlashSessionSnapshot(ctx: ExtensionContext): void {
 			flushed?: boolean;
 		};
 		const sessionFile = sessionManager.getSessionFile();
-		if (!sessionFile || typeof sessionManager._rewriteFile !== "function") return;
+		if (!sessionFile || typeof sessionManager._rewriteFile !== "function")
+			return;
 		fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
 		sessionManager._rewriteFile();
 		sessionManager.flushed = true;
 	} catch (error) {
-		console.error("Failed to persist slash session snapshot for export:", error);
+		console.error(
+			"Failed to persist slash session snapshot for export:",
+			error,
+		);
 	}
 }
 
@@ -286,7 +401,9 @@ async function runSlashSubagent(
 	if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
 	const requestId = randomUUID();
 	const initialDetails = buildSlashInitialResult(requestId, params);
-	const initialText = extractSlashMessageText(initialDetails.result.content) || "Running subagent...";
+	const initialText =
+		extractSlashMessageText(initialDetails.result.content) ||
+		"Running subagent...";
 	pi.sendMessage({
 		customType: SLASH_RESULT_TYPE,
 		content: initialText,
@@ -332,8 +449,11 @@ async function runSlashSubagent(
 	}
 }
 
-
-interface ParsedStep { name: string; config: InlineConfig; task?: string }
+interface ParsedStep {
+	name: string;
+	config: InlineConfig;
+	task?: string;
+}
 
 const parseAgentArgs = (
 	state: SubagentState,
@@ -356,7 +476,9 @@ const parseAgentArgs = (
 			if (!trimmed) continue;
 			let agentPart: string;
 			let task: string | undefined;
-			const qMatch = trimmed.match(/^(\S+(?:\[[^\]]*\])?)\s+(?:"([^"]*)"|'([^']*)')$/);
+			const qMatch = trimmed.match(
+				/^(\S+(?:\[[^\]]*\])?)\s+(?:"([^"]*)"|'([^']*)')$/,
+			);
 			if (qMatch) {
 				agentPart = qMatch[1]!;
 				task = (qMatch[2] ?? qMatch[3]) || undefined;
@@ -385,7 +507,10 @@ const parseAgentArgs = (
 			ctx.ui.notify(usage, "error");
 			return null;
 		}
-		steps = agentsPart.split(/\s+/).filter(Boolean).map((t) => parseAgentToken(t));
+		steps = agentsPart
+			.split(/\s+/)
+			.filter(Boolean)
+			.map((t) => parseAgentToken(t));
 	}
 
 	if (steps.length === 0) {
@@ -400,7 +525,10 @@ const parseAgentArgs = (
 		}
 	}
 	if (command === "chain" && !steps[0]?.task && (perStep || !sharedTask)) {
-		ctx.ui.notify(`First step must have a task: /chain agent "task" -> agent2`, "error");
+		ctx.ui.notify(
+			`First step must have a task: /chain agent "task" -> agent2`,
+			"error",
+		);
 		return null;
 	}
 	if (command === "parallel" && !steps.some((s) => s.task) && !sharedTask) {
@@ -415,26 +543,45 @@ export function registerSlashCommands(
 	state: SubagentState,
 ): void {
 	pi.registerCommand("run", {
-		description: "Run a subagent directly: /run agent[output=file] [task] [--bg] [--fork]",
+		description:
+			"Run a subagent directly: /run agent[output=file] [task] [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, false),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
 			const firstSpace = input.indexOf(" ");
-			if (!input) { ctx.ui.notify("Usage: /run <agent> [task] [--bg] [--fork]", "error"); return; }
-			const { name: agentName, config: inline } = parseAgentToken(firstSpace === -1 ? input : input.slice(0, firstSpace));
+			if (!input) {
+				ctx.ui.notify("Usage: /run <agent> [task] [--bg] [--fork]", "error");
+				return;
+			}
+			const { name: agentName, config: inline } = parseAgentToken(
+				firstSpace === -1 ? input : input.slice(0, firstSpace),
+			);
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
 
 			const agents = discoverAgents(state.baseCwd, "both").agents;
-			if (!agents.find((a) => a.name === agentName)) { ctx.ui.notify(`Unknown agent: ${agentName}`, "error"); return; }
+			if (!agents.find((a) => a.name === agentName)) {
+				ctx.ui.notify(`Unknown agent: ${agentName}`, "error");
+				return;
+			}
 
 			let finalTask = task;
-			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
+			if (
+				inline.reads &&
+				Array.isArray(inline.reads) &&
+				inline.reads.length > 0
+			) {
 				finalTask = `[Read from: ${inline.reads.join(", ")}]\n\n${finalTask}`;
 			}
-			const params: SubagentParamsLike = { agent: agentName, task: finalTask, clarify: false, agentScope: "both" };
+			const params: SubagentParamsLike = {
+				agent: agentName,
+				task: finalTask,
+				clarify: false,
+				agentScope: "both",
+			};
 			if (inline.output !== undefined) params.output = inline.output;
-			if (inline.outputMode !== undefined) params.outputMode = inline.outputMode;
+			if (inline.outputMode !== undefined)
+				params.outputMode = inline.outputMode;
 			if (inline.skill !== undefined) params.skill = inline.skill;
 			if (inline.model) params.model = inline.model;
 			if (bg) params.async = true;
@@ -443,61 +590,117 @@ export function registerSlashCommands(
 		},
 	});
 
-	pi.registerCommand("chain", {
-		description: "Run agents in sequence: /chain scout \"task\" -> planner [--bg] [--fork]",
-		getArgumentCompletions: makeAgentCompletions(state, true),
-		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
-			const parsed = parseAgentArgs(state, cleanedArgs, "chain", ctx);
-			if (!parsed) return;
-			const chain = parsed.steps.map(({ name, config, task: stepTask }, i) => ({
-				agent: name,
-				...(stepTask ? { task: stepTask } : i === 0 && parsed.task ? { task: parsed.task } : {}),
-				...(config.output !== undefined ? { output: config.output } : {}),
-				...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
-				...(config.reads !== undefined ? { reads: config.reads } : {}),
-				...(config.model ? { model: config.model } : {}),
-				...(config.skill !== undefined ? { skill: config.skill } : {}),
-				...(config.progress !== undefined ? { progress: config.progress } : {}),
-			}));
-			const params: SubagentParamsLike = { chain, task: parsed.task, clarify: false, agentScope: "both" };
-			if (bg) params.async = true;
-			if (fork) params.context = "fork";
-			await runSlashSubagent(pi, ctx, params);
-		},
-	});
+	// Merged /chain: supports both inline chain syntax and saved chain files.
+	// Inline: /chain scout "task" -> planner
+	// Saved:  /chain go -- "fix the bug"
+	// Detection: if the first token (before any ` -> ` or quote) matches a saved chain name
+	//           AND " -- " is present, treat as saved-chain mode. Otherwise parse inline.
+	const savedChainNames = new Set(
+		discoverSavedChains(state.baseCwd).map((c) => c.name),
+	);
 
-	pi.registerCommand("run-chain", {
-		description: "Run a saved chain: /run-chain chainName -- task [--bg] [--fork]",
-		getArgumentCompletions: makeChainCompletions(state),
+	function looksLikeSavedChain(input: string): boolean {
+		// Must contain " -- " separator
+		if (!input.includes(" -- ")) return false;
+		// Extract the first token (the potential chain name)
+		const beforeDelimiter = input.slice(0, input.indexOf(" -- ")).trim();
+		const firstToken = beforeDelimiter.split(/\s+/)[0] ?? "";
+		// Known chain name → definitely saved-chain mode
+		if (savedChainNames.has(firstToken)) return true;
+		// No inline chain markers (no -> or quotes) → assume saved-chain attempt
+		if (!input.includes(" -> ") && !input.includes('"') && !input.includes("'"))
+			return true;
+		return false;
+	}
+
+	function handleSavedChain(
+		cleanedArgs: string,
+		ctx: ExtensionContext,
+		bg: boolean,
+		fork: boolean,
+	): Promise<void> | undefined {
+		const delimiterIndex = cleanedArgs.indexOf(" -- ");
+		const usage = "Usage: /chain <chainName> -- <task> [--bg] [--fork]";
+		if (delimiterIndex === -1) {
+			ctx.ui.notify(usage, "error");
+			return;
+		}
+		const chainName = cleanedArgs.slice(0, delimiterIndex).trim();
+		const task = cleanedArgs.slice(delimiterIndex + 4).trim();
+		if (!chainName || !task) {
+			ctx.ui.notify(usage, "error");
+			return;
+		}
+		const chain = discoverSavedChains(state.baseCwd).find(
+			(candidate) => candidate.name === chainName,
+		);
+		if (!chain) {
+			ctx.ui.notify(`Unknown chain: ${chainName}`, "error");
+			return;
+		}
+		const params: SubagentParamsLike = {
+			chain: mapSavedChainSteps(chain),
+			task,
+			clarify: false,
+			agentScope: "both",
+		};
+		if (bg) params.async = true;
+		if (fork) params.context = "fork";
+		return runSlashSubagent(pi, ctx, params);
+	}
+
+	function handleInlineChain(
+		cleanedArgs: string,
+		ctx: ExtensionContext,
+		bg: boolean,
+		fork: boolean,
+	): Promise<void> | undefined {
+		const parsed = parseAgentArgs(state, cleanedArgs, "chain", ctx);
+		if (!parsed) return;
+		const chain = parsed.steps.map(({ name, config, task: stepTask }, i) => ({
+			agent: name,
+			...(stepTask
+				? { task: stepTask }
+				: i === 0 && parsed.task
+					? { task: parsed.task }
+					: {}),
+			...(config.output !== undefined ? { output: config.output } : {}),
+			...(config.outputMode !== undefined
+				? { outputMode: config.outputMode }
+				: {}),
+			...(config.reads !== undefined ? { reads: config.reads } : {}),
+			...(config.model ? { model: config.model } : {}),
+			...(config.skill !== undefined ? { skill: config.skill } : {}),
+			...(config.progress !== undefined ? { progress: config.progress } : {}),
+		}));
+		const params: SubagentParamsLike = {
+			chain,
+			task: parsed.task,
+			clarify: false,
+			agentScope: "both",
+		};
+		if (bg) params.async = true;
+		if (fork) params.context = "fork";
+		return runSlashSubagent(pi, ctx, params);
+	}
+
+	pi.registerCommand("chain", {
+		description:
+			'Run agents in sequence: /chain scout "task" -> planner  OR  /chain chainName -- task [--bg] [--fork]',
+		getArgumentCompletions: makeAgentCompletions(state, true, true),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
-			const delimiterIndex = cleanedArgs.indexOf(" -- ");
-			const usage = "Usage: /run-chain <chainName> -- <task> [--bg] [--fork]";
-			if (delimiterIndex === -1) {
-				ctx.ui.notify(usage, "error");
-				return;
+			if (looksLikeSavedChain(cleanedArgs)) {
+				await handleSavedChain(cleanedArgs, ctx, bg, fork);
+			} else {
+				await handleInlineChain(cleanedArgs, ctx, bg, fork);
 			}
-			const chainName = cleanedArgs.slice(0, delimiterIndex).trim();
-			const task = cleanedArgs.slice(delimiterIndex + 4).trim();
-			if (!chainName || !task) {
-				ctx.ui.notify(usage, "error");
-				return;
-			}
-			const chain = discoverSavedChains(state.baseCwd).find((candidate) => candidate.name === chainName);
-			if (!chain) {
-				ctx.ui.notify(`Unknown chain: ${chainName}`, "error");
-				return;
-			}
-			const params: SubagentParamsLike = { chain: mapSavedChainSteps(chain), task, clarify: false, agentScope: "both" };
-			if (bg) params.async = true;
-			if (fork) params.context = "fork";
-			await runSlashSubagent(pi, ctx, params);
 		},
 	});
 
 	pi.registerCommand("parallel", {
-		description: "Run agents in parallel: /parallel scout \"task1\" -> reviewer \"task2\" [--bg] [--fork]",
+		description:
+			'Run agents in parallel: /parallel scout "task1" -> reviewer "task2" [--bg] [--fork]',
 		getArgumentCompletions: makeAgentCompletions(state, true),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
@@ -507,19 +710,24 @@ export function registerSlashCommands(
 				agent: name,
 				task: stepTask ?? parsed.task,
 				...(config.output !== undefined ? { output: config.output } : {}),
-				...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
+				...(config.outputMode !== undefined
+					? { outputMode: config.outputMode }
+					: {}),
 				...(config.reads !== undefined ? { reads: config.reads } : {}),
 				...(config.model ? { model: config.model } : {}),
 				...(config.skill !== undefined ? { skill: config.skill } : {}),
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
-			const params: SubagentParamsLike = { tasks, clarify: false, agentScope: "both" };
+			const params: SubagentParamsLike = {
+				tasks,
+				clarify: false,
+				agentScope: "both",
+			};
 			if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashSubagent(pi, ctx, params);
 		},
 	});
-
 
 	pi.registerCommand("subagents-doctor", {
 		description: "Show subagent diagnostics",
@@ -543,18 +751,30 @@ export function registerSlashCommands(
 
 			const result = await ctx.ui.custom<SubagentHubResult>(
 				(tui, theme, _kb, done) =>
-					new SubagentHubComponent(tui, theme, agents, availableModels, currentProvider, done, cwd),
-				{ overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
+					new SubagentHubComponent(
+						tui,
+						theme,
+						agents,
+						availableModels,
+						currentProvider,
+						done,
+						cwd,
+					),
+				{
+					overlay: true,
+					overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" },
+				},
 			);
 
 			if (!result) return;
 
 			for (const [agentName, modelOverride] of result.overrides) {
-				saveBuiltinAgentOverride(cwd, agentName, "user", { model: modelOverride });
+				saveBuiltinAgentOverride(cwd, agentName, "user", {
+					model: modelOverride,
+				});
 			}
 
 			ctx.ui.notify("Subagent model overrides saved", "success");
 		},
 	});
-
 }
