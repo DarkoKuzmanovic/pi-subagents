@@ -7,7 +7,7 @@
  * Security: symlink rejection, path traversal checks, line cap enforcement.
  */
 
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, openSync, closeSync, constants } from "node:fs";
 import { join } from "node:path";
 
 export type MemoryScope = "project";
@@ -36,16 +36,19 @@ export function readMemoryIndex(memoryDir: string): string | undefined {
 	if (isSymlink(memoryDir)) return undefined;
 
 	const memoryFile = join(memoryDir, "MEMORY.md");
-	if (!existsSync(memoryFile)) return undefined;
-	if (isSymlink(memoryFile)) return undefined;
 
 	try {
-		const content = readFileSync(memoryFile, "utf-8");
-		const lines = content.split("\n");
-		if (lines.length > MAX_MEMORY_LINES) {
-			return lines.slice(0, MAX_MEMORY_LINES).join("\n") + "\n\n[MEMORY.md truncated at 200 lines]";
+		const fd = openSync(memoryFile, constants.O_RDONLY | constants.O_NOFOLLOW);
+		try {
+			const content = readFileSync(fd, "utf-8");
+			const lines = content.split("\n");
+			if (lines.length > MAX_MEMORY_LINES) {
+				return lines.slice(0, MAX_MEMORY_LINES).join("\n") + "\n\n[MEMORY.md truncated at 200 lines]";
+			}
+			return content;
+		} finally {
+			closeSync(fd);
 		}
-		return content;
 	} catch {
 		return undefined;
 	}
