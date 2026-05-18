@@ -6,6 +6,9 @@
 
 - Added subagent hub TUI (`src/tui/subagent-hub.ts`) for browsing and configuring agent model overrides before launch.
 - Added `go` chain template (`chains/go.chain.md`): scout → context-builder → worker → test-writer delegate → reviewer pipeline.
+- Added `disallowedTools` denylist for built-in tools on agent frontmatter.
+- Added persistent agent memory (project scope) with `MEMORY.md` index per agent.
+- Added tests for skill preloading from agent frontmatter.
 - Added `review` chain template (`chains/review.chain.md`): parallel model-diverse reviewers → synthesis pipeline.
 - Added `test-writer` skill (`skills/test-writer/SKILL.md`) for guided test infrastructure discovery before writing tests.
 - Added `/reflect-chain` prompt template for analyzing chain run artifacts and suggesting improvements.
