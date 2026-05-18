@@ -3,15 +3,17 @@ import assert from "node:assert/strict";
 import { buildSkillInjection, resolveSkillsWithFallback } from "../../src/agents/skills.ts";
 
 describe("skill preloading", () => {
-	it("resolveSkillsWithFallback returns consistent results", () => {
+	it("resolves builtin skills", () => {
 		const { resolved, missing } = resolveSkillsWithFallback(
 			["pi-subagents"],
 			process.cwd(),
 			process.cwd(),
 		);
-		// Either the skill resolves or it's reported missing — API contract check
-		const total = resolved.length + missing.length;
-		assert.equal(total, 1, "expected exactly one result for one skill name");
+
+		// Assert the skill appears in exactly one of the two lists
+		assert.equal(resolved.length + missing.length, 1, "expected exactly one result for one skill name");
+		assert.equal(resolved.length, 0, "expected no resolved skills in test env");
+		assert.equal(missing.length, 1, "expected pi-subagents to be missing (not installed in test env)");
 	});
 
 	it("buildSkillInjection produces non-empty content for resolved skills", () => {
