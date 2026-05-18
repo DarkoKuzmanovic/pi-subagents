@@ -58,7 +58,7 @@ describe("memory", () => {
 			fs.writeFileSync(path.join(memoryDir, "MEMORY.md"), lines.join("\n"));
 			const content = readMemoryIndex(memoryDir);
 			const contentLines = content!.split("\n");
-			assert.ok(contentLines.length <= 202, `expected <=202 lines (200 + truncation notice), got ${contentLines.length}`);
+			assert.equal(contentLines.length, 202, "expected 200 content lines + 2 truncation notice lines");
 		});
 		it("rejects symlinked directories", () => {
 			const memoryDir = path.join(tmpDir, "agent-memory", "test-agent");
