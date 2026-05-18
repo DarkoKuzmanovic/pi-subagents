@@ -41,6 +41,7 @@ import {
 	extractTextFromContent,
 } from "../../shared/utils.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "../../agents/skills.ts";
+import { buildMemoryBlock } from "../../shared/memory.ts";
 import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
@@ -770,6 +771,12 @@ export async function runSync(
 		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${skillInjection}` : skillInjection;
 	}
 
+	// Inject persistent memory block if agent has memory configured
+	const memoryBlock = buildMemoryBlock(agent.memory, agent.name, runtimeCwd, isReadOnlyAgent(agent));
+	if (memoryBlock) {
+		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${memoryBlock}` : memoryBlock;
+	}
+
 	const candidates = buildModelCandidates(
 		options.modelOverride ?? agent.model,
 		agent.fallbackModels,
@@ -901,4 +908,11 @@ export async function runSync(
 	}
 
 	return result;
+}
+
+/** An agent is read-only if it has no write/edit/bash tools. */
+function isReadOnlyAgent(agent: AgentConfig): boolean {
+	const writeTools = new Set(["write", "edit", "bash"]);
+	const agentTools = agent.tools ?? [];
+	return !agentTools.some((t) => writeTools.has(t));
 }

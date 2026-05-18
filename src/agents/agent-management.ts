@@ -9,6 +9,7 @@ import {
 	type ChainConfig,
 	type ChainStepConfig,
 	defaultInheritProjectContext,
+	type MemoryScope,
 	defaultInheritSkills,
 	defaultSystemPromptMode,
 	discoverAgentsAll,
@@ -252,6 +253,11 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 		if (cfg.skills === false || cfg.skills === "") target.skills = undefined;
 		else if (typeof cfg.skills === "string") { const skills = parseCsv(cfg.skills); target.skills = skills.length ? skills : undefined; }
 		else return "config.skills must be a comma-separated string or false when provided.";
+	}
+	if (hasKey(cfg, "memory")) {
+		if (cfg.memory === "project") target.memory = "project";
+		else if (cfg.memory === false || cfg.memory === "") target.memory = undefined;
+		else return "config.memory must be 'project' or false when provided.";
 	}
 	if (hasKey(cfg, "extensions")) {
 		if (cfg.extensions === false) target.extensions = undefined;

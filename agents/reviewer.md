@@ -7,6 +7,7 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 skills: requesting-code-review,receiving-code-review
+memory: project
 defaultContext: fresh
 defaultReads: plan.md, progress.md
 ---

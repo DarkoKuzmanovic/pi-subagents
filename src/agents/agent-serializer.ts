@@ -22,6 +22,7 @@ export const KNOWN_FIELDS = new Set([
 	"interactive",
 	"maxSubagentDepth",
 	"disallowedTools",
+	"memory",
 	]);
 
 function joinComma(values: string[] | undefined): string | undefined {

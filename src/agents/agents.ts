@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OutputMode } from "../shared/types.ts";
+import type { MemoryScope } from "../shared/memory.ts";
 import { KNOWN_FIELDS } from "./agent-serializer.ts";
 import { parseChain } from "./chain-serializer.ts";
 import { mergeAgentsForScope } from "./agent-selection.ts";
@@ -46,6 +47,8 @@ export interface BuiltinAgentOverrideBase {
 	tools?: string[];
 	mcpDirectTools?: string[];
 	disallowedTools?: string[];
+	/** Persistent agent memory scope — agents with memory get a persistent directory and MEMORY.md */
+	memory?: MemoryScope;
 }
 
 interface BuiltinAgentOverrideConfig {
@@ -61,6 +64,7 @@ interface BuiltinAgentOverrideConfig {
 	skills?: string[] | false;
 	tools?: string[] | false;
 	disallowedTools?: string[] | false;
+	memory?: MemoryScope | false;
 }
 
 interface BuiltinAgentOverrideInfo {
@@ -187,6 +191,7 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		tools: agent.tools ? [...agent.tools] : undefined,
 		mcpDirectTools: agent.mcpDirectTools ? [...agent.mcpDirectTools] : undefined,
 		disallowedTools: agent.disallowedTools ? [...agent.disallowedTools] : undefined,
+		memory: agent.memory,
 	};
 }
 
@@ -591,6 +596,9 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			.map((t) => t.trim())
 			.filter(Boolean);
 
+		const memory = frontmatter.memory === "project"
+			? "project" as const
+			: undefined;
 		const defaultReads = frontmatter.defaultReads
 			?.split(",")
 			.map((f) => f.trim())
@@ -649,6 +657,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			tools: tools.length > 0 ? tools : undefined,
 			mcpDirectTools: mcpDirectTools.length > 0 ? mcpDirectTools : undefined,
 			disallowedTools: rawDisallowedTools && rawDisallowedTools.length > 0 ? rawDisallowedTools : undefined,
+			memory,
 			model: frontmatter.model,
 			fallbackModels: fallbackModels && fallbackModels.length > 0 ? fallbackModels : undefined,
 			thinking: frontmatter.thinking,
