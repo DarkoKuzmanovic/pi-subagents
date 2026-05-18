@@ -242,6 +242,12 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 		else if (typeof cfg.tools === "string") { const parsed = parseTools(cfg.tools); target.tools = parsed.tools; target.mcpDirectTools = parsed.mcpDirectTools; }
 		else return "config.tools must be a comma-separated string or false when provided.";
 	}
+	if (hasKey(cfg, "disallowedTools")) {
+		if (cfg.disallowedTools === false || cfg.disallowedTools === "") target.disallowedTools = undefined;
+		else if (typeof cfg.disallowedTools === "string") { const dt = parseCsv(cfg.disallowedTools); target.disallowedTools = dt.length ? dt : undefined; }
+		else if (Array.isArray(cfg.disallowedTools) && cfg.disallowedTools.every((t: unknown) => typeof t === "string")) target.disallowedTools = (cfg.disallowedTools as string[]).map((t) => t.trim()).filter(Boolean);
+		else return "config.disallowedTools must be a comma-separated string, string array, or false when provided.";
+	}
 	if (hasKey(cfg, "skills")) {
 		if (cfg.skills === false || cfg.skills === "") target.skills = undefined;
 		else if (typeof cfg.skills === "string") { const skills = parseCsv(cfg.skills); target.skills = skills.length ? skills : undefined; }

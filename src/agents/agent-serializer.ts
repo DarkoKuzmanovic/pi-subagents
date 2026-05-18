@@ -21,7 +21,8 @@ export const KNOWN_FIELDS = new Set([
 	"defaultProgress",
 	"interactive",
 	"maxSubagentDepth",
-]);
+	"disallowedTools",
+	]);
 
 function joinComma(values: string[] | undefined): string | undefined {
 	if (!values || values.length === 0) return undefined;

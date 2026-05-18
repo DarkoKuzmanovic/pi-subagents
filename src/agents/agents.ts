@@ -45,6 +45,7 @@ export interface BuiltinAgentOverrideBase {
 	skills?: string[];
 	tools?: string[];
 	mcpDirectTools?: string[];
+	disallowedTools?: string[];
 }
 
 interface BuiltinAgentOverrideConfig {
@@ -59,6 +60,7 @@ interface BuiltinAgentOverrideConfig {
 	systemPrompt?: string;
 	skills?: string[] | false;
 	tools?: string[] | false;
+	disallowedTools?: string[] | false;
 }
 
 interface BuiltinAgentOverrideInfo {
@@ -74,6 +76,8 @@ export interface AgentConfig {
 	description: string;
 	tools?: string[];
 	mcpDirectTools?: string[];
+	/** Tool denylist — these built-in tools are removed even if `tools` includes them. */
+	disallowedTools?: string[];
 	model?: string;
 	fallbackModels?: string[];
 	thinking?: string;
@@ -182,6 +186,7 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		skills: agent.skills ? [...agent.skills] : undefined,
 		tools: agent.tools ? [...agent.tools] : undefined,
 		mcpDirectTools: agent.mcpDirectTools ? [...agent.mcpDirectTools] : undefined,
+		disallowedTools: agent.disallowedTools ? [...agent.disallowedTools] : undefined,
 	};
 }
 
@@ -581,6 +586,11 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			}
 		}
 
+		const rawDisallowedTools = frontmatter.disallowedTools
+			?.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean);
+
 		const defaultReads = frontmatter.defaultReads
 			?.split(",")
 			.map((f) => f.trim())
@@ -638,6 +648,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			description: frontmatter.description,
 			tools: tools.length > 0 ? tools : undefined,
 			mcpDirectTools: mcpDirectTools.length > 0 ? mcpDirectTools : undefined,
+			disallowedTools: rawDisallowedTools && rawDisallowedTools.length > 0 ? rawDisallowedTools : undefined,
 			model: frontmatter.model,
 			fallbackModels: fallbackModels && fallbackModels.length > 0 ? fallbackModels : undefined,
 			thinking: frontmatter.thinking,

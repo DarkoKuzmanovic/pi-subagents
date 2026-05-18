@@ -24,6 +24,7 @@ interface BuildPiArgsInput {
 	inheritProjectContext: boolean;
 	inheritSkills: boolean;
 	tools?: string[];
+	disallowedTools?: string[];
 	extensions?: string[];
 	systemPrompt?: string | null;
 	mcpDirectTools?: string[];
@@ -79,6 +80,12 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 			} else {
 				builtinTools.push(tool);
 			}
+		}
+		if (input.disallowedTools?.length) {
+			const denied = new Set(input.disallowedTools);
+			const filtered = builtinTools.filter((t) => !denied.has(t));
+			builtinTools.length = 0;
+			builtinTools.push(...filtered);
 		}
 		if (builtinTools.length > 0) {
 			args.push("--tools", builtinTools.join(","));

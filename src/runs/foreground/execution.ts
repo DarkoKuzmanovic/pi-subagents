@@ -151,6 +151,7 @@ async function runSingleAttempt(
 		extensions: agent.extensions,
 		systemPrompt: shared.systemPrompt,
 		mcpDirectTools: agent.mcpDirectTools,
+		disallowedTools: agent.disallowedTools,
 		promptFileStem: agent.name,
 		intercomSessionName: options.intercomSessionName,
 		orchestratorIntercomTarget: options.orchestratorIntercomTarget,
