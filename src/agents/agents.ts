@@ -210,6 +210,10 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 		...(override.systemPrompt !== undefined ? { systemPrompt: override.systemPrompt } : {}),
 		...(override.skills !== undefined ? { skills: override.skills === false ? false : [...override.skills] } : {}),
 		...(override.tools !== undefined ? { tools: override.tools === false ? false : [...override.tools] } : {}),
+		...(override.disallowedTools !== undefined
+			? { disallowedTools: override.disallowedTools === false ? false : [...override.disallowedTools] }
+			: {}),
+		...(override.memory !== undefined ? { memory: override.memory } : {}),
 	};
 }
 

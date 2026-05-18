@@ -367,6 +367,8 @@ function formatAgentDetail(agent: AgentConfig): string {
 	if (agent.fallbackModels?.length) lines.push(`Fallback models: ${agent.fallbackModels.join(", ")}`);
 	if (tools.length) lines.push(`Tools: ${tools.join(", ")}`);
 	if (agent.skills?.length) lines.push(`Skills: ${agent.skills.join(", ")}`);
+	if (agent.disallowedTools?.length) lines.push(`Disallowed tools: ${agent.disallowedTools.join(", ")}`);
+	if (agent.memory) lines.push(`Memory: ${agent.memory}`);
 	lines.push(`System prompt mode: ${agent.systemPromptMode}`);
 	lines.push(`Inherit project context: ${agent.inheritProjectContext ? "true" : "false"}`);
 	lines.push(`Inherit skills: ${agent.inheritSkills ? "true" : "false"}`);

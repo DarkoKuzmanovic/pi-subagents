@@ -55,6 +55,10 @@ export function serializeAgent(config: AgentConfig): string {
 
 	const skillsValue = joinComma(config.skills);
 	if (skillsValue) lines.push(`skills: ${skillsValue}`);
+	const disallowedToolsValue = joinComma(config.disallowedTools);
+	if (disallowedToolsValue) lines.push(`disallowedTools: ${disallowedToolsValue}`);
+
+	if (config.memory) lines.push(`memory: ${config.memory}`);
 
 	if (config.extensions !== undefined) {
 		const extensionsValue = joinComma(config.extensions);
