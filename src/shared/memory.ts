@@ -8,7 +8,7 @@
  */
 
 import { existsSync, lstatSync, readFileSync, openSync, closeSync, constants } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 export type MemoryScope = "project";
 
@@ -24,14 +24,23 @@ export function enforceLineCap(content: string, maxLines = MAX_MEMORY_LINES): st
 	return lines.slice(0, maxLines).join("\n") + "\n\n[MEMORY.md truncated at 200 lines]";
 }
 
-/** Check if an agent name contains path traversal characters. */
-export function isUnsafeName(name: string): boolean {
-	return name.includes("..") || name.includes("/") || name.includes("\\") || name.includes("\0");
+/** Check if an agent name contains path traversal characters.
+ * Also guards against Unicode normalization attacks (e.g. ONE DOT LEADER normalizing to ".." on HFS+/APFS)
+ * by resolving the path and verifying it stays within the expected root. */
+export function isUnsafeName(name: string, cwd: string): boolean {
+	// Resolve to check path stays within expected root
+	const expectedRoot = resolve(cwd, ".pi", "agent-memory");
+	const resolved = resolve(expectedRoot, name);
+	if (!resolved.startsWith(expectedRoot + sep)) return true;
+
+	// Simple ASCII safety checks for the name itself
+	if (name.includes("..") || name.includes("/") || name.includes("\\") || name.includes("\0")) return true;
+	return false;
 }
 
 /** Resolve the memory directory path for a given agent + scope + cwd. */
 export function resolveMemoryDir(agentName: string, scope: MemoryScope, cwd: string): string {
-	if (isUnsafeName(agentName)) {
+	if (isUnsafeName(agentName, cwd)) {
 		throw new Error(`Unsafe agent name for memory directory: "${agentName}"`);
 	}
 	switch (scope) {

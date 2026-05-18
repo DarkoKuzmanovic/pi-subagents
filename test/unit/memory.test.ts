@@ -16,12 +16,12 @@ describe("memory", () => {
 
 	describe("isUnsafeName", () => {
 		it("rejects path traversal", () => {
-			assert.ok(isUnsafeName("../../etc"));
-			assert.ok(isUnsafeName("agent/../../../etc"));
+			assert.ok(isUnsafeName("../../etc", tmpDir));
+			assert.ok(isUnsafeName("agent/../../../etc", tmpDir));
 		});
 		it("accepts normal names", () => {
-			assert.ok(!isUnsafeName("scout"));
-			assert.ok(!isUnsafeName("my-agent"));
+			assert.ok(!isUnsafeName("scout", tmpDir));
+			assert.ok(!isUnsafeName("my-agent", tmpDir));
 		});
 	});
 
