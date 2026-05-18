@@ -46,6 +46,9 @@ export function resolveMemoryDir(agentName: string, scope: MemoryScope, cwd: str
 	switch (scope) {
 		case "project":
 			return join(cwd, ".pi", "agent-memory", agentName);
+		default:
+			const _exhaustive: never = scope;
+			throw new Error(`Unknown memory scope: "${_exhaustive}"`);
 	}
 }
 
