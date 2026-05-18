@@ -14,6 +14,16 @@ export type MemoryScope = "project";
 
 const MAX_MEMORY_LINES = 200;
 
+/**
+ * Enforce a maximum line count on memory content, with a truncation notice.
+ * This is the canonical enforcement point for the line cap.
+ */
+export function enforceLineCap(content: string, maxLines = MAX_MEMORY_LINES): string {
+	const lines = content.split("\n");
+	if (lines.length <= maxLines) return content;
+	return lines.slice(0, maxLines).join("\n") + "\n\n[MEMORY.md truncated at 200 lines]";
+}
+
 /** Check if an agent name contains path traversal characters. */
 export function isUnsafeName(name: string): boolean {
 	return name.includes("..") || name.includes("/") || name.includes("\\") || name.includes("\0");
@@ -41,11 +51,7 @@ export function readMemoryIndex(memoryDir: string): string | undefined {
 		const fd = openSync(memoryFile, constants.O_RDONLY | constants.O_NOFOLLOW);
 		try {
 			const content = readFileSync(fd, "utf-8");
-			const lines = content.split("\n");
-			if (lines.length > MAX_MEMORY_LINES) {
-				return lines.slice(0, MAX_MEMORY_LINES).join("\n") + "\n\n[MEMORY.md truncated at 200 lines]";
-			}
-			return content;
+			return enforceLineCap(content);
 		} finally {
 			closeSync(fd);
 		}
