@@ -174,7 +174,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(controlSchema.properties?.activeNoticeAfterTurns?.minimum, 1);
 		assert.equal(controlSchema.properties?.activeNoticeAfterTokens?.minimum, 1);
 		assert.equal(controlSchema.properties?.failedToolAttemptsBeforeAttention?.minimum, 1);
-		assert.deepEqual(controlSchema.properties?.notifyOn?.items?.enum, ["active_long_running", "needs_attention"]);
+		assert.deepEqual(controlSchema.properties?.notifyOn?.items?.enum, ["active_long_running", "needs_attention", "timed_out_escalating", "timed_out", "timeout_killed"]);
 		assert.deepEqual(controlSchema.properties?.notifyChannels?.items?.enum, ["event", "async", "intercom"]);
 	});
 

@@ -54,6 +54,8 @@ import {
 	resetMutatingFailureState,
 	resolveCurrentPath,
 	shouldEscalateMutatingFailures,
+	nextStepTimeoutTrigger,
+	nextRunTimeoutTrigger,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
 import { parseSessionTokens } from "../../shared/session-tokens.ts";
@@ -870,7 +872,6 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const eventsPath = path.join(asyncDir, "events.jsonl");
 	const logPath = path.join(asyncDir, `subagent-log-${id}.md`);
 	const controlConfig = config.controlConfig ?? DEFAULT_CONTROL_CONFIG;
-	let activeChildInterrupt: (() => void) | undefined;
 	let interrupted = false;
 	let currentActivityState: ActivityState | undefined;
 	let activityTimer: NodeJS.Timeout | undefined;
@@ -889,6 +890,12 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		}
 	}
 	const flatSteps = flattenSteps(steps);
+
+	// Per-step escalation tracking for timed_out_escalating → timed_out transitions.
+	// Declared AFTER flatSteps to avoid TDZ ReferenceError.
+	const stepEscalationStartedAt: Array<number | undefined> = flatSteps.map(() => undefined);
+	// Per-step interrupt callbacks so killStep can target the correct child in parallel mode.
+	const activeChildInterrupts = new Map<number, () => void>();
 	const sessionEnabled = Boolean(config.sessionDir)
 		|| shareEnabled
 		|| flatSteps.some((step) => Boolean(step.sessionFile));
@@ -961,6 +968,47 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				},
 			} : {}),
 		}));
+	};
+
+	const killStep = (flatIndex: number, reason: "step_inactivity_timeout" | "run_wall_clock_timeout"): void => {
+		const step = statusPayload.steps[flatIndex];
+		if (!step || step.status !== "running") return;
+		const now = Date.now();
+		const previous = step.activityState;
+		step.activityState = "timed_out";
+		step.status = "failed";
+		step.endedAt = now;
+		step.durationMs = step.startedAt ? now - step.startedAt : undefined;
+		step.exitCode = 1;
+		const elapsedSeconds = step.lastActivityAt
+			? Math.floor(Math.max(0, now - step.lastActivityAt) / 1000)
+			: undefined;
+		step.error = reason === "step_inactivity_timeout"
+			? `Timed out: no activity for ${elapsedSeconds}s (step inactivity timeout)`
+			: `Timed out: run exceeded ${Math.floor(Math.max(0, now - overallStartTime) / 1000)}s wall-clock limit`;
+
+		appendControlEvent(buildControlEvent({
+			type: "timeout_killed",
+			from: previous,
+			to: "timed_out",
+			runId: id,
+			agent: step.agent,
+			index: flatIndex,
+			ts: now,
+			message: step.error,
+			reason: "timeout_killed",
+			turns: step.turnCount,
+			tokens: step.tokens?.total,
+			toolCount: step.toolCount,
+			currentTool: step.currentTool,
+			currentToolDurationMs: step.currentToolStartedAt ? Math.max(0, now - step.currentToolStartedAt) : undefined,
+			currentPath: step.currentPath,
+			elapsedMs: step.lastActivityAt ? Math.max(0, now - step.lastActivityAt) : undefined,
+		}));
+		statusPayload.lastUpdate = now;
+		writeAtomicJson(statusPath, statusPayload);
+		// Kill the child process
+		activeChildInterrupts.get(flatIndex)?.();
 	};
 	const syncTopLevelCurrentTool = (): void => {
 		const activeStep = statusPayload.steps
@@ -1098,6 +1146,23 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		if (!controlConfig.enabled) return false;
 		let changed = false;
 		let runLastActivityAt = statusPayload.lastActivityAt ?? overallStartTime;
+
+		// Check run wall-clock timeout first (kills ALL running steps)
+		const runTimeoutReason = nextRunTimeoutTrigger(controlConfig, { startedAt: overallStartTime, now });
+		if (runTimeoutReason) {
+			for (let index = 0; index < statusPayload.steps.length; index++) {
+				if (statusPayload.steps[index]?.status === "running") {
+					killStep(index, runTimeoutReason);
+					changed = true;
+				}
+			}
+			statusPayload.state = "failed";
+			statusPayload.endedAt = now;
+			statusPayload.lastUpdate = now;
+			writeAtomicJson(statusPath, statusPayload);
+			return changed;
+		}
+
 		for (let index = 0; index < statusPayload.steps.length; index++) {
 			const step = statusPayload.steps[index]!;
 			if (step.status !== "running") continue;
@@ -1107,37 +1172,95 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				step.lastActivityAt = lastActivityAt;
 				changed = true;
 			}
-			const idleState = deriveActivityState({
-				config: controlConfig,
-				startedAt: step.startedAt ?? overallStartTime,
+
+			// Check step inactivity timeout
+			const stepTimeoutReason = nextStepTimeoutTrigger(controlConfig, {
 				lastActivityAt,
 				now,
 			});
-			if (idleState === "needs_attention") {
-				const previous = step.activityState;
-				step.activityState = "needs_attention";
-				if (previous !== "needs_attention") {
-					appendControlEvent(buildControlEvent({
-						from: previous,
-						to: "needs_attention",
-						runId: id,
-						agent: step.agent,
-						index,
-						ts: now,
-						lastActivityAt,
-					}));
-					changed = true;
+
+			if (stepTimeoutReason && controlConfig.timeoutAction !== "notify") {
+				if (step.activityState !== "timed_out") {
+					if (controlConfig.timeoutAction === "auto_kill") {
+						// Auto-kill: immediate
+						killStep(index, stepTimeoutReason);
+						changed = true;
+						continue;
+					}
+					if (controlConfig.timeoutAction === "escalate_then_kill") {
+						if (step.activityState !== "timed_out_escalating") {
+							// First detection: escalate
+							const previous = step.activityState;
+							step.activityState = "timed_out_escalating";
+							stepEscalationStartedAt[index] = now;
+							appendControlEvent(buildControlEvent({
+								type: "timed_out_escalating",
+								from: previous,
+								to: "timed_out_escalating",
+								runId: id,
+								agent: step.agent,
+								index,
+								ts: now,
+								lastActivityAt,
+								message: `${step.agent} idle for ${Math.floor(Math.max(0, now - lastActivityAt) / 1000)}s — escalation nudge sent`,
+								reason: "step_inactivity_timeout",
+								turns: step.turnCount,
+								tokens: step.tokens?.total,
+								toolCount: step.toolCount,
+								currentTool: step.currentTool,
+								currentToolDurationMs: step.currentToolStartedAt ? Math.max(0, now - step.currentToolStartedAt) : undefined,
+								currentPath: step.currentPath,
+								elapsedMs: Math.max(0, now - lastActivityAt),
+							}));
+							changed = true;
+						} else if (stepEscalationStartedAt[index] !== undefined
+							&& now - stepEscalationStartedAt[index]! >= controlConfig.escalationGraceMs) {
+							// Grace period expired: kill
+							killStep(index, stepTimeoutReason);
+							changed = true;
+							continue;
+						}
+						// Otherwise: still in grace period, waiting
+					}
 				}
-			} else if (maybeEmitActiveLongRunning(index, now)) {
-				changed = true;
+			} else {
+				// No timeout (or notify action): fall through to existing logic
+				const idleState = deriveActivityState({
+					config: controlConfig,
+					startedAt: step.startedAt ?? overallStartTime,
+					lastActivityAt,
+					now,
+				});
+				if (idleState === "needs_attention" && step.activityState !== "timed_out_escalating" && step.activityState !== "timed_out") {
+					const previous = step.activityState;
+					step.activityState = "needs_attention";
+					if (previous !== "needs_attention") {
+						appendControlEvent(buildControlEvent({
+							from: previous,
+							to: "needs_attention",
+							runId: id,
+							agent: step.agent,
+							index,
+							ts: now,
+							lastActivityAt,
+						}));
+						changed = true;
+					}
+				}
+				maybeEmitActiveLongRunning(index, now);
 			}
 		}
+
 		if (statusPayload.lastActivityAt !== runLastActivityAt) {
 			statusPayload.lastActivityAt = runLastActivityAt;
 			changed = true;
 		}
-		const nextRunState = statusPayload.steps.some((step) => step.activityState === "needs_attention")
-			? "needs_attention"
+		const nextRunState = statusPayload.steps.some((step) => step.activityState === "needs_attention" || step.activityState === "timed_out" || step.activityState === "timed_out_escalating")
+			? (statusPayload.steps.some((step) => step.activityState === "timed_out")
+				? "timed_out"
+				: statusPayload.steps.some((step) => step.activityState === "timed_out_escalating")
+					? "timed_out_escalating"
+					: "needs_attention")
 			: statusPayload.steps.some((step) => step.activityState === "active_long_running")
 				? "active_long_running"
 				: undefined;
@@ -1182,7 +1305,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			ts: now,
 			runId: id,
 		}));
-		activeChildInterrupt?.();
+		for (const interrupt of activeChildInterrupts.values()) {
+			try { interrupt(); } catch { /* best-effort */ }
+		}
 	};
 	process.on(ASYNC_INTERRUPT_SIGNAL, interruptRunner);
 	appendJsonl(
@@ -1329,7 +1454,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							childIntercomTarget: config.childIntercomTargets?.[fi],
 							orchestratorIntercomTarget: config.controlIntercomTarget,
 							registerInterrupt: (interrupt) => {
-								activeChildInterrupt = interrupt;
+								activeChildInterrupts.set(fi, interrupt);
 							},
 							onChildEvent: (event) => updateStepFromChildEvent(fi, event),
 						});
@@ -1340,14 +1465,22 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						const taskEndTime = Date.now();
 						const taskDuration = taskEndTime - taskStartTime;
 
-						statusPayload.steps[fi].status = singleResult.exitCode === 0 ? "complete" : "failed";
-						statusPayload.steps[fi].endedAt = taskEndTime;
-						statusPayload.steps[fi].durationMs = taskDuration;
-						statusPayload.steps[fi].exitCode = singleResult.exitCode;
+						// Deregister the per-step interrupt (child has exited).
+						activeChildInterrupts.delete(fi);
+
+						// Preserve killStep's writes when the step was killed by inactivity timeout.
+						// Without this, an `interrupted` child returns exitCode 0 and overwrites status to "complete".
+						const wasTimedOut = statusPayload.steps[fi].activityState === "timed_out";
+						if (!wasTimedOut) {
+							statusPayload.steps[fi].status = singleResult.exitCode === 0 ? "complete" : "failed";
+							statusPayload.steps[fi].endedAt = taskEndTime;
+							statusPayload.steps[fi].durationMs = taskDuration;
+							statusPayload.steps[fi].exitCode = singleResult.exitCode;
+							statusPayload.steps[fi].error = singleResult.error;
+						}
 						statusPayload.steps[fi].model = singleResult.model;
 						statusPayload.steps[fi].attemptedModels = singleResult.attemptedModels;
 						statusPayload.steps[fi].modelAttempts = singleResult.modelAttempts;
-						statusPayload.steps[fi].error = singleResult.error;
 						statusPayload.lastUpdate = taskEndTime;
 						writeAtomicJson(statusPath, statusPayload);
 
@@ -1472,7 +1605,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				childIntercomTarget: config.childIntercomTargets?.[flatIndex],
 				orchestratorIntercomTarget: config.controlIntercomTarget,
 				registerInterrupt: (interrupt) => {
-					activeChildInterrupt = interrupt;
+					activeChildInterrupts.set(flatIndex, interrupt);
 				},
 				onChildEvent: (event) => updateStepFromChildEvent(flatIndex, event),
 			});
@@ -1516,14 +1649,23 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			const stepEndTime = Date.now();
-			statusPayload.steps[flatIndex].status = singleResult.exitCode === 0 ? "complete" : "failed";
-			statusPayload.steps[flatIndex].endedAt = stepEndTime;
-			statusPayload.steps[flatIndex].durationMs = stepEndTime - stepStartTime;
-			statusPayload.steps[flatIndex].exitCode = singleResult.exitCode;
+
+			// Deregister the per-step interrupt (child has exited).
+			activeChildInterrupts.delete(flatIndex);
+
+			// Preserve killStep's writes when the step was killed by inactivity timeout.
+			// Without this, an `interrupted` child returns exitCode 0 and overwrites status to "complete".
+			const wasTimedOut = statusPayload.steps[flatIndex].activityState === "timed_out";
+			if (!wasTimedOut) {
+				statusPayload.steps[flatIndex].status = singleResult.exitCode === 0 ? "complete" : "failed";
+				statusPayload.steps[flatIndex].endedAt = stepEndTime;
+				statusPayload.steps[flatIndex].durationMs = stepEndTime - stepStartTime;
+				statusPayload.steps[flatIndex].exitCode = singleResult.exitCode;
+				statusPayload.steps[flatIndex].error = singleResult.error;
+			}
 			statusPayload.steps[flatIndex].model = singleResult.model;
 			statusPayload.steps[flatIndex].attemptedModels = singleResult.attemptedModels;
 			statusPayload.steps[flatIndex].modelAttempts = singleResult.modelAttempts;
-			statusPayload.steps[flatIndex].error = singleResult.error;
 			if (stepTokens) {
 				statusPayload.steps[flatIndex].tokens = stepTokens;
 				statusPayload.totalTokens = { ...previousCumulativeTokens };

@@ -49,8 +49,8 @@ export interface TokenUsage {
 	total: number;
 }
 
-export type ActivityState = "active_long_running" | "needs_attention";
-export type ControlEventType = ActivityState;
+export type ActivityState = "active_long_running" | "needs_attention" | "timed_out_escalating" | "timed_out";
+export type ControlEventType = ActivityState | "timeout_killed";
 export type ControlNotificationChannel = "event" | "async" | "intercom";
 
 export interface ControlConfig {
@@ -62,6 +62,10 @@ export interface ControlConfig {
 	failedToolAttemptsBeforeAttention?: number;
 	notifyOn?: ControlEventType[];
 	notifyChannels?: ControlNotificationChannel[];
+	stepInactivityTimeoutMs?: number;
+	runWallClockTimeoutMs?: number;
+	timeoutAction?: "notify" | "escalate_then_kill" | "auto_kill";
+	escalationGraceMs?: number;
 }
 
 export interface ResolvedControlConfig {
@@ -73,6 +77,10 @@ export interface ResolvedControlConfig {
 	failedToolAttemptsBeforeAttention: number;
 	notifyOn: ControlEventType[];
 	notifyChannels: ControlNotificationChannel[];
+	stepInactivityTimeoutMs: number;
+	runWallClockTimeoutMs: number;
+	timeoutAction: "notify" | "escalate_then_kill" | "auto_kill";
+	escalationGraceMs: number;
 }
 
 export interface ControlEvent {
@@ -84,7 +92,7 @@ export interface ControlEvent {
 	index?: number;
 	runId: string;
 	message: string;
-	reason?: "idle" | "completion_guard" | "active_long_running" | "tool_failures" | "time_threshold" | "turn_threshold" | "token_threshold";
+	reason?: "idle" | "completion_guard" | "active_long_running" | "tool_failures" | "time_threshold" | "turn_threshold" | "token_threshold" | "step_inactivity_timeout" | "run_wall_clock_timeout" | "timeout_killed";
 	turns?: number;
 	tokens?: number;
 	toolCount?: number;

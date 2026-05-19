@@ -7,7 +7,7 @@ import {
 	type ResolvedControlConfig,
 } from "../../shared/types.ts";
 
-const CONTROL_EVENT_TYPES: ControlEventType[] = ["active_long_running", "needs_attention"];
+const CONTROL_EVENT_TYPES: ControlEventType[] = ["active_long_running", "needs_attention", "timed_out_escalating", "timed_out", "timeout_killed"];
 const CONTROL_NOTIFICATION_CHANNELS: ControlNotificationChannel[] = ["event", "async", "intercom"];
 const DEFAULT_NOTIFY_ON: ControlEventType[] = ["active_long_running", "needs_attention"];
 
@@ -18,6 +18,10 @@ export const DEFAULT_CONTROL_CONFIG: ResolvedControlConfig = {
 	failedToolAttemptsBeforeAttention: 3,
 	notifyOn: DEFAULT_NOTIFY_ON,
 	notifyChannels: CONTROL_NOTIFICATION_CHANNELS,
+	stepInactivityTimeoutMs: 300_000,
+	runWallClockTimeoutMs: 1_800_000,
+	timeoutAction: "escalate_then_kill",
+	escalationGraceMs: 30_000,
 };
 
 function parsePositiveInt(value: unknown): number | undefined {
@@ -58,6 +62,17 @@ export function resolveControlConfig(
 	const notifyChannels = parseControlList(override?.notifyChannels, CONTROL_NOTIFICATION_CHANNELS)
 		?? parseControlList(globalConfig?.notifyChannels, CONTROL_NOTIFICATION_CHANNELS)
 		?? DEFAULT_CONTROL_CONFIG.notifyChannels;
+
+	const stepInactivityTimeoutMs = parsePositiveInt(override?.stepInactivityTimeoutMs)
+		?? parsePositiveInt(globalConfig?.stepInactivityTimeoutMs)
+		?? DEFAULT_CONTROL_CONFIG.stepInactivityTimeoutMs;
+	const runWallClockTimeoutMs = parsePositiveInt(override?.runWallClockTimeoutMs)
+		?? parsePositiveInt(globalConfig?.runWallClockTimeoutMs)
+		?? DEFAULT_CONTROL_CONFIG.runWallClockTimeoutMs;
+	const timeoutAction = override?.timeoutAction ?? globalConfig?.timeoutAction ?? DEFAULT_CONTROL_CONFIG.timeoutAction;
+	const escalationGraceMs = parsePositiveInt(override?.escalationGraceMs)
+		?? parsePositiveInt(globalConfig?.escalationGraceMs)
+		?? DEFAULT_CONTROL_CONFIG.escalationGraceMs;
 	return {
 		enabled,
 		needsAttentionAfterMs,
@@ -67,6 +82,10 @@ export function resolveControlConfig(
 		failedToolAttemptsBeforeAttention,
 		notifyOn: [...notifyOn],
 		notifyChannels: [...notifyChannels],
+		stepInactivityTimeoutMs,
+		runWallClockTimeoutMs,
+		timeoutAction,
+		escalationGraceMs,
 	};
 }
 
@@ -80,7 +99,16 @@ export function deriveActivityState(input: {
 	const now = input.now ?? Date.now();
 	const lastActivity = input.lastActivityAt ?? input.startedAt;
 	const ageMs = Math.max(0, now - lastActivity);
-	return ageMs > input.config.needsAttentionAfterMs ? "needs_attention" : undefined;
+
+	// Check timeout thresholds first (higher priority than needs_attention)
+	if (ageMs > input.config.stepInactivityTimeoutMs) {
+		if (input.config.timeoutAction === "auto_kill") return "timed_out";
+		if (input.config.timeoutAction === "escalate_then_kill") return "timed_out_escalating";
+		// notify action falls through to needs_attention
+	}
+
+	if (ageMs > input.config.needsAttentionAfterMs) return "needs_attention";
+	return undefined;
 }
 
 export function buildControlEvent(input: {
@@ -192,6 +220,31 @@ export function formatControlNoticeMessage(event: ControlEvent, childIntercomTar
 		].filter((line): line is string => Boolean(line)).join("\n");
 	}
 
+	// --- NEW: timeout escalation notice ---
+	if (event.type === "timed_out_escalating" || event.reason === "step_inactivity_timeout") {
+		const elapsedSeconds = event.elapsedMs !== undefined ? Math.floor(Math.max(0, event.elapsedMs) / 1000) : undefined;
+		return [
+			`Subagent idle timeout: ${event.agent}`,
+			`Run: ${runTarget}${event.index !== undefined ? ` step ${event.index + 1}` : ""}`,
+			`Signal: ${event.message}`,
+			elapsedSeconds !== undefined ? `Idle for: ${elapsedSeconds}s` : undefined,
+			"Action: Nudge sent via intercom. Will terminate if no response within grace period.",
+			"Grace: subagent will be killed if no activity within 30s",
+			`Interrupt now: subagent({ action: "interrupt", id: "${runTarget}" })`,
+		].filter((line): line is string => Boolean(line)).join("\n");
+	}
+
+	// --- NEW: timeout killed notice ---
+	if (event.type === "timeout_killed" || event.reason === "timeout_killed") {
+		return [
+			`Subagent killed (inactivity timeout): ${event.agent}`,
+			`Run: ${runTarget}${event.index !== undefined ? ` step ${event.index + 1}` : ""}`,
+			`Signal: ${event.message}`,
+			"Action: Process terminated after inactivity timeout.",
+			"The run will continue with remaining steps (if any).",
+		].filter((line): line is string => Boolean(line)).join("\n");
+	}
+
 	return [
 		`Subagent needs attention: ${event.agent}`,
 		`Run: ${runTarget}${event.index !== undefined ? ` step ${event.index + 1}` : ""}`,
@@ -211,7 +264,12 @@ export function formatControlIntercomMessage(event: ControlEvent, childIntercomT
 		? "subagent failed"
 		: event.type === "active_long_running"
 			? "subagent active but long-running"
-			: "subagent needs attention";
+			: event.type === "timed_out_escalating" || event.reason === "step_inactivity_timeout"
+				? "subagent idle timeout \u2014 escalating"
+				: event.type === "timeout_killed" || event.reason === "timeout_killed"
+					? "subagent killed (inactivity timeout)"
+					: "subagent needs attention";
+
 	return [
 		statusLabel,
 		"",
@@ -219,7 +277,11 @@ export function formatControlIntercomMessage(event: ControlEvent, childIntercomT
 			? `${event.agent} failed in run ${event.runId}.`
 			: event.type === "active_long_running"
 				? `${event.agent} is still active but long-running in run ${event.runId}.`
-				: `${event.agent} needs attention in run ${event.runId}.`,
+				: event.type === "timed_out_escalating" || event.reason === "step_inactivity_timeout"
+					? `${event.agent} idle timeout in run ${event.runId}. Nudge sent; will kill if no response.`
+					: event.type === "timeout_killed" || event.reason === "timeout_killed"
+						? `${event.agent} killed (inactivity timeout) in run ${event.runId}.`
+						: `${event.agent} needs attention in run ${event.runId}.`,
 		"",
 		formatControlNoticeMessage(event, childIntercomTarget),
 	].join("\n");

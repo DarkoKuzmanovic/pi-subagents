@@ -90,12 +90,16 @@ const ControlOverrides = Type.Object({
 	activeNoticeAfterTurns: Type.Optional(Type.Integer({ minimum: 1, description: "Optional active-long-running notice threshold by assistant turns (disabled by default)" })),
 	activeNoticeAfterTokens: Type.Optional(Type.Integer({ minimum: 1, description: "Optional active-long-running notice threshold by total tokens (disabled by default)" })),
 	failedToolAttemptsBeforeAttention: Type.Optional(Type.Integer({ minimum: 1, description: "Consecutive mutating-tool failures before escalating to needs_attention (default: 3)" })),
-	notifyOn: Type.Optional(Type.Array(Type.String({ enum: ["active_long_running", "needs_attention"] }), {
+	notifyOn: Type.Optional(Type.Array(Type.String({ enum: ["active_long_running", "needs_attention", "timed_out_escalating", "timed_out", "timeout_killed"] }), {
 		description: "Control event types that should notify the parent/orchestrator. Defaults to active_long_running and needs_attention.",
 	})),
 	notifyChannels: Type.Optional(Type.Array(Type.String({ enum: ["event", "async", "intercom"] }), {
 		description: "Notification channels to use when available. Defaults to event, async, and intercom.",
 	})),
+	stepInactivityTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Per-step inactivity timeout in ms. Kill step if no child event for this duration (default: 300000 = 5min)" })),
+	runWallClockTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Overall run wall-clock timeout in ms. Kill entire run if total elapsed exceeds this (default: 1800000 = 30min)" })),
+	timeoutAction: Type.Optional(Type.String({ enum: ["notify", "escalate_then_kill", "auto_kill"], description: "Action on timeout: 'notify' (current behavior), 'escalate_then_kill' (nudge then kill), 'auto_kill' (immediate kill). Default: escalate_then_kill" })),
+	escalationGraceMs: Type.Optional(Type.Integer({ minimum: 1, description: "Grace period in ms after escalation nudge before killing (default: 30000 = 30s). Only used with escalate_then_kill." })),
 });
 
 export const SubagentParams = Type.Object({

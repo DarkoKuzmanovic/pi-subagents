@@ -124,6 +124,36 @@ export function nextLongRunningTrigger(
 	return undefined;
 }
 
+export interface StepTimeoutMetrics {
+	lastActivityAt: number;
+	now: number;
+}
+
+export function nextStepTimeoutTrigger(
+	config: ResolvedControlConfig,
+	metrics: StepTimeoutMetrics,
+): "step_inactivity_timeout" | undefined {
+	if (metrics.now - metrics.lastActivityAt > config.stepInactivityTimeoutMs) {
+		return "step_inactivity_timeout";
+	}
+	return undefined;
+}
+
+export interface RunTimeoutMetrics {
+	startedAt: number;
+	now: number;
+}
+
+export function nextRunTimeoutTrigger(
+	config: ResolvedControlConfig,
+	metrics: RunTimeoutMetrics,
+): "run_wall_clock_timeout" | undefined {
+	if (metrics.now - metrics.startedAt > config.runWallClockTimeoutMs) {
+		return "run_wall_clock_timeout";
+	}
+	return undefined;
+}
+
 export function resetMutatingFailureState(state: MutatingFailureState): void {
 	state.consecutiveFailures = 0;
 	state.lastFailureAt = undefined;

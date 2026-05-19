@@ -58,6 +58,7 @@ import {
 	didMutatingToolFail,
 	isMutatingTool,
 	nextLongRunningTrigger,
+	nextStepTimeoutTrigger,
 	recordMutatingFailure,
 	resetMutatingFailureState,
 	resolveCurrentPath,
@@ -176,6 +177,7 @@ async function runSingleAttempt(
 	const startTime = Date.now();
 	const controlConfig = options.controlConfig ?? DEFAULT_CONTROL_CONFIG;
 	let interruptedByControl = false;
+	let timedOutByControl = false;
 	const allControlEvents: ControlEvent[] = [];
 	let pendingControlEvents: ControlEvent[] = [];
 	const emittedControlEventKeys = new Set<string>();
@@ -361,14 +363,86 @@ async function runSingleAttempt(
 			}));
 			return true;
 		};
+		let escalationStartedAt: number | undefined;
+		const killByTimeout = (now: number, reason: "step_inactivity_timeout" | "run_wall_clock_timeout"): void => {
+			if (timedOutByControl) return;
+			timedOutByControl = true;
+			const previous = progress.activityState;
+			progress.activityState = "timed_out";
+			const lastActivityAt = progress.lastActivityAt ?? startTime;
+			const elapsedSeconds = Math.floor(Math.max(0, now - lastActivityAt) / 1000);
+			result.error = reason === "step_inactivity_timeout"
+				? `Timed out: no activity for ${elapsedSeconds}s (step inactivity timeout)`
+				: `Timed out: run exceeded ${Math.floor(Math.max(0, now - startTime) / 1000)}s wall-clock limit`;
+			emitControlEvent(buildControlEvent({
+				type: "timeout_killed",
+				from: previous,
+				to: "timed_out",
+				runId: options.runId,
+				agent: agent.name,
+				index: options.index,
+				ts: now,
+				message: result.error,
+				reason: "timeout_killed",
+				turns: result.usage.turns,
+				tokens: progress.tokens,
+				toolCount: progress.toolCount,
+				currentTool: progress.currentTool,
+				currentToolDurationMs: currentToolDurationMs(now),
+				currentPath: progress.currentPath,
+				elapsedMs: Math.max(0, now - lastActivityAt),
+			}));
+			// Reuse existing SIGINT → SIGTERM escalation; SIGKILL escalation deferred.
+			trySignalChild(proc, "SIGINT");
+			setTimeout(() => { if (!processClosed) trySignalChild(proc, "SIGTERM"); }, 1000).unref();
+		};
 		const updateActivityState = (now: number): boolean => {
-			if (!controlConfig.enabled) return false;
+			if (!controlConfig.enabled || timedOutByControl) return false;
+			const lastActivityAt = progress.lastActivityAt ?? startTime;
 			const idleState = deriveActivityState({
 				config: controlConfig,
 				startedAt: startTime,
-				lastActivityAt: progress.lastActivityAt,
+				lastActivityAt,
 				now,
 			});
+			const stepTimeoutReason = nextStepTimeoutTrigger(controlConfig, { lastActivityAt, now });
+			if (stepTimeoutReason && controlConfig.timeoutAction !== "notify") {
+				if (controlConfig.timeoutAction === "auto_kill") {
+					killByTimeout(now, stepTimeoutReason);
+					return true;
+				}
+				// escalate_then_kill
+				if (progress.activityState !== "timed_out_escalating") {
+					const previous = progress.activityState;
+					progress.activityState = "timed_out_escalating";
+					escalationStartedAt = now;
+					emitControlEvent(buildControlEvent({
+						type: "timed_out_escalating",
+						from: previous,
+						to: "timed_out_escalating",
+						runId: options.runId,
+						agent: agent.name,
+						index: options.index,
+						ts: now,
+						lastActivityAt,
+						message: `${agent.name} idle for ${Math.floor(Math.max(0, now - lastActivityAt) / 1000)}s — escalation nudge sent`,
+						reason: "step_inactivity_timeout",
+						turns: result.usage.turns,
+						tokens: progress.tokens,
+						toolCount: progress.toolCount,
+						currentTool: progress.currentTool,
+						currentToolDurationMs: currentToolDurationMs(now),
+						currentPath: progress.currentPath,
+						elapsedMs: Math.max(0, now - lastActivityAt),
+					}));
+					return true;
+				}
+				if (escalationStartedAt !== undefined && now - escalationStartedAt >= controlConfig.escalationGraceMs) {
+					killByTimeout(now, stepTimeoutReason);
+					return true;
+				}
+				return false;
+			}
 			if (idleState === "needs_attention") {
 				return progress.activityState === "needs_attention" ? false : emitNeedsAttention(now);
 			}
