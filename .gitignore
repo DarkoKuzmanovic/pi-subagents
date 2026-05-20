@@ -4,3 +4,7 @@ AGENTS.md
 package-lock.json
 node_modules/
 .fallow/
+.codegraph
+.pi-lens
+.serena
+context.md
