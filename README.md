@@ -199,9 +199,9 @@ The package includes reusable prompt templates for common workflows. You do not 
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `/parallel-review`            | Launch fresh-context reviewers with distinct angles, then synthesize what to fix.                           |
 | `/parallel-research`          | Combine `researcher` and `scout` for external evidence, local code context, and practical tradeoffs.        |
-| `/parallel-context-build`     | Run `context-builder` agents in parallel to produce planning handoff context and meta-prompts.              |
 | `/parallel-handoff-plan`      | Combine external research and `context-builder` passes into an implementation handoff plan and meta-prompt. |
-| `/gather-context-and-clarify` | Scout/research first, then ask the user the clarification questions that matter.                            |
+| `/brainstorm`                 | Design-first exploration before any implementation, with clarifying questions and approach tradeoffs.       |
+| `/write-plan`                 | Author an implementation plan from a spec/intent with explicit validation commands and a placeholder scan.  |
 | `/parallel-cleanup`           | Run review-only cleanup passes after implementation.                                                        |
 | `/reflect-chain`              | Analyze a chain run's artifacts and suggest improvements to chain templates, agents, and prompts.           |
 
@@ -613,7 +613,7 @@ The package bundles a `pi-subagents` skill that is automatically available to th
 What the bundled skill covers:
 
 - **Delegation patterns**: when to launch which agent, whether to use single, parallel, chain, or async mode, and whether to use fresh or forked context
-- **Prompt workflow recipes**: how to apply the packaged techniques directly with `subagent(...)` when the user describes the workflow in natural language instead of invoking a slash command. This includes parallel review, parallel research, parallel context-build, parallel handoff-plan, gather-context-and-clarify, and parallel cleanup
+- **Prompt workflow recipes**: how to apply the packaged techniques directly with `subagent(...)` when the user describes the workflow in natural language instead of invoking a slash command. This includes parallel review, parallel research, parallel handoff-plan, brainstorm, write-plan, and parallel cleanup
 - **Role-agent prompting guidance**: compact contract prompts instead of long scripts, what to include in role-specific meta prompts, and retrieval budgets for researchers
 - **Safety boundaries**: child agents must not run subagents, must not invent intercom targets, and must escalate unapproved decisions
 - **Intercom conventions**: when to ask vs send, and how parent-side result delivery works with `pi-intercom`

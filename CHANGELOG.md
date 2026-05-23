@@ -12,12 +12,16 @@
 - Added `review` chain template (`chains/review.chain.md`): parallel model-diverse reviewers → synthesis pipeline.
 - Added `test-writer` skill (`skills/test-writer/SKILL.md`) for guided test infrastructure discovery before writing tests.
 - Added `/reflect-chain` prompt template for analyzing chain run artifacts and suggesting improvements.
+- Added `/brainstorm` prompt template for design-first exploration with clarifying questions and approach tradeoffs (uses the `brainstorming` skill).
+- Added `/write-plan` prompt template for authoring implementation plans an executor can pick up, with explicit validation commands and a self-review pass (uses the `writing-plans` skill).
 - Merged `/run-chain` into `/chain` — saved chains are now invoked via `/chain <chainName> -- <task>`, inline chains via `/chain agent "task" -> agent`. Removed `/run-chain` slash command.
 - Added `dead-code-cleanup.test.ts` verifying removed exports, consolidated functions, and non-optional state fields.
 - Refactored `src/slash/slash-commands.ts`: extracted saved-chain and inline-chain handling into dedicated functions, improved session export with child-session snapshot persistence, and expanded inline per-step config parsing for `model` and `skill` keys.
 
 ### Changed
 
+- Tightened `/reflect-chain` prompt: replaced inline `bash` blocks with instructions that use the structured `find`/`ls` tools, falling back to `bash` only when needed.
+- Updated README and `skills/pi-subagents/SKILL.md` to drop the two removed prompts and document the two new ones.
 - Updated `scout` agent with a mandatory Test Infrastructure output section for downstream agents.
 - Extended chain execution with recovery telemetry for parallel mode and recovered output in chain summaries.
 - Consolidated `findLatestSessionFile` into `src/shared/utils.ts`; removed duplicate copies from `session-tokens.ts` and `subagent-runner.ts`.
@@ -32,6 +36,8 @@
 - Removed unused `getOutputTail`, `writePrompt` from `utils.ts`.
 - Removed unused `fuzzyScore`, `fuzzyFilter`, `formatPath` from `render-helpers.ts`.
 - Removed `MAX_PARALLEL_CONCURRENCY` export from `parallel-utils.ts`.
+- Removed `/gather-context-and-clarify` prompt (referenced a nonexistent `interview` tool and was superseded by `/parallel-handoff-plan`).
+- Removed `/parallel-context-build` prompt (heavy overlap with `/parallel-handoff-plan`, which is its strict superset).
 
 ### Fixed
 

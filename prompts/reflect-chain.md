@@ -8,36 +8,25 @@ Reflect on a chain run and produce actionable improvements.
 ## 1. Find the chain run
 
 If a run ID was provided: `$1`
-If no run ID, find the most recent non-test chain run:
+If no run ID, find the most recent non-test chain run by inspecting both stores:
 
-```bash
-# Session artifacts (persisted across sessions)
-ls -t ~/.pi/agent/sessions/*/subagent-artifacts/*_meta.json 2>/dev/null | head -5
-# Chain run directories (ephemeral, cleaned after 24h)
-ls -lt /tmp/pi-subagents-*/chain-runs/ 2>/dev/null | grep -v "^total\|test-" | head -5
-```
+- Persisted session artifacts: use the `find` tool with pattern `*_meta.json` under `~/.pi/agent/sessions/`, sorted by mtime, recent first.
+- Ephemeral chain directories: use the `ls` tool on `/tmp/pi-subagents-*/chain-runs/`, recent first, filtering out `test-*` entries.
+
+Fall back to `bash` only if the structured tools cannot satisfy the lookup.
 
 Pick the most recent real run ID (8-char hex, not `test-*`).
 
 ## 2. Read all artifacts
 
-For the selected run ID, read every artifact:
-
-```bash
-RUN_ID="<selected>"
-# Find all meta files for this run
-find ~/.pi/agent/sessions -name "${RUN_ID}_*_meta.json" 2>/dev/null
-```
+For the selected run ID, list every artifact with the `find` tool: pattern `${RUN_ID}_*_meta.json` under `~/.pi/agent/sessions/`.
 
 For each step, read:
 - `*_meta.json` — timing, turns, cost, model, exit code
 - `*_output.md` — what the agent actually produced (skim for quality, don't dump)
 - `*_input.md` — what task was sent (check for prompt quality)
 
-Also check the chain directory for progress and intermediate artifacts:
-```bash
-find /tmp/pi-subagents-*/chain-runs/${RUN_ID}/ -type f 2>/dev/null
-```
+Also list the chain directory for progress and intermediate artifacts with `find` on `/tmp/pi-subagents-*/chain-runs/${RUN_ID}/`, `type: "file"`.
 
 ## 3. Analyze
 

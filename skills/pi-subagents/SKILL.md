@@ -42,9 +42,9 @@ Packaged prompt shortcuts are also available for repeatable workflows. Treat the
 
 - `/parallel-review` — fresh-context reviewers with distinct review angles, then synthesis
 - `/parallel-research` — combine `researcher` and `scout` for external evidence plus local code context
-- `/parallel-context-build` — parallel `context-builder` passes that produce planning handoff context and meta-prompts
 - `/parallel-handoff-plan` — external-reference research plus local `context-builder` passes, followed by a synthesis handoff plan and implementation-ready meta-prompt
-- `/gather-context-and-clarify` — scout/research first, then ask the user clarifying questions with `interview`
+- `/brainstorm` — design-first exploration before any implementation, with clarifying questions and approach tradeoffs
+- `/write-plan` — author an implementation plan against a spec/intent, with explicit validation commands
 - `/parallel-cleanup` — two fresh-context reviewers (deslop + verbosity passes) for an adversarial cleanup review of the current diff
 - `/reflect-chain` — analyze a chain run's artifacts and suggest improvements to chain templates, agents, and prompts
 
@@ -131,10 +131,13 @@ subagent({
 });
 ```
 
-### Gather-context-and-clarify technique
+### Brainstorm technique
 
-Use this at the start of non-trivial work. Launch `scout` for local context and `researcher` only when external docs, recent sources, ecosystem context, or primary evidence would materially improve understanding. Ask children for concise findings plus remaining clarification questions. Then synthesize what is known and use `interview` to ask the unresolved questions needed for shared understanding before planning or implementing.
+Use this at the start of non-trivial design work when the user wants to explore the option space before committing to an approach. Stay design-first. Launch `scout` if local context matters and `researcher` only when external evidence would materially shape the choice. Ask the user clarifying questions one at a time with `ask_user` instead of dumping a survey. Compare 2–3 approaches with explicit tradeoffs and surface unresolved questions instead of smoothing them over. Do not invoke implementation skills until the user approves a direction.
 
+### Write-plan technique
+
+Use this when the user has a spec, intent, or approved design and wants a concrete implementation plan an executor can pick up. Read the spec/intent (and any referenced files) directly before drafting. Produce step-by-step tasks with file paths, signatures or contracts where they matter, explicit validation commands, and a placeholder scan. Treat "TBD", "appropriate error handling", or other vague filler as a self-review gate — resolve them before handoff. Do not start implementation from this command unless explicitly asked.
 ### Parallel cleanup technique
 
 Use this after implementation when the user wants cleanup review or when a final pass would reduce AI-slop. Launch two fresh-context `reviewer` tasks with `output: false` and `progress: false`: one deslop pass and one verbosity pass. If the `deslop` or `verbosity-cleaner` skills are available, pass the relevant skill to that reviewer; otherwise inline the criteria. Both reviewers are review-only and should flag concrete issues with severity, file/line references, and smallest safe fixes. Review-only/no-edit beats progress-writing or artifact-writing instructions. The parent decides what to apply and asks before making changes unless cleanup was already authorized.
@@ -614,10 +617,10 @@ copying a full builtin file.
 ## Prompt Template Integration
 
 The package includes prompt shortcuts for common workflows: `/parallel-review`,
-`/parallel-research`, `/parallel-context-build`, `/parallel-handoff-plan`,
-`/gather-context-and-clarify`, and `/parallel-cleanup`. Use them when the user
-wants repeatable review, research, context handoff, implementation handoff,
-clarification, or cleanup-review patterns. `/parallel-review autofix` and
+`/parallel-research`, `/parallel-handoff-plan`, `/brainstorm`, `/write-plan`,
+and `/parallel-cleanup`. Use them when the user wants repeatable review,
+research, implementation-handoff context, design exploration, plan authoring,
+or cleanup-review patterns. `/parallel-review autofix` and
 `/parallel-cleanup autofix` synthesize reviewer feedback and then apply only the
 fixes worth doing now. Parent agents can also apply the same recipes directly
 with `subagent(...)` when the user describes the workflow in natural language
@@ -698,10 +701,10 @@ Keep builtin agent defaults unless the user explicitly asks for a different mode
 
 When the user approves launching a subagent to carry out a plan or workflow, treat that as approval to generate a proper role-specific meta prompt for that subagent. Include the approved plan path or summary, clarified requirements, non-goals, relevant context, role boundaries, files or areas to inspect, acceptance criteria, expected output, and validation expectations. Do not pass vague instructions like “implement the plan fully” or “review this” by themselves.
 
-- `/gather-context-and-clarify` maps to: launch `scout` and, when needed, `researcher`; synthesize findings; then use `interview` to ask every clarification question needed for shared understanding.
+- `/brainstorm` maps to: stay design-first with the `brainstorming` skill; launch `scout` if local context matters and `researcher` if external evidence would shape the choice; ask clarifying questions with `ask_user`; compare 2–3 approaches with tradeoffs before any implementation.
+- `/write-plan` maps to: use the `writing-plans` skill; read the spec/intent and any referenced files; draft a step-by-step plan with file paths, signatures where they matter, explicit validation commands, and a placeholder scan.
 - `/parallel-review` maps to: launch fresh-context `reviewer` agents with distinct review angles; synthesize the feedback before applying anything.
 - `/parallel-research` maps to: combine local `scout` context with external `researcher` evidence when current docs, ecosystem behavior, or API details matter.
-- `/parallel-context-build` maps to: run a chain-mode parallel group of `context-builder` agents with distinct temp output paths, then synthesize their context and meta-prompt sections.
 - `/parallel-handoff-plan` maps to: run external `researcher` plus local/strategy `context-builder` passes, then a synthesis `context-builder` that writes an implementation handoff plan and implementation-ready meta-prompt.
 - `/parallel-cleanup` maps to: use review-only cleanup passes after implementation, especially for simplicity, verbosity, and redundant tests.
 
@@ -715,7 +718,7 @@ The first `worker` implements the approved plan. The parallel reviewers inspect 
 
 Keep orchestration authority in the parent session. Child subagents should not launch more subagents, read this skill, or run their own orchestration loops. Spawned subagents do not receive the `pi-subagents` skill, parent-only status/control/slash messages, prior parent `subagent` tool-call/tool-result artifacts, or the `subagent` extension tool. Child context filtering also strips old hidden orchestration-instruction messages when they appear in inherited history. Every child also receives a boundary instruction that says the parent owns orchestration, the child must not propose or run subagents, and implementation children must call real edit/write tools instead of printing pseudo tool calls. Pass children concrete role-specific work instead.
 
-1. Clarify first. This is mandatory. Gather code context with `scout` or `context-builder`, add `researcher` only when external evidence matters, then ask the user clarifying questions with `interview` until scope, acceptance criteria, constraints, and non-goals are clear.
+1. Clarify first. This is mandatory. Gather code context with `scout` or `context-builder`, add `researcher` only when external evidence matters, then ask the user clarifying questions with `ask_user` until scope, acceptance criteria, constraints, and non-goals are clear.
 2. Plan when useful. For complex work, call `planner` or write a plan doc yourself and get approval before implementation. For simple work, confirm shared understanding and explicitly note why planning is skipped.
 3. Implement with one writer. After approval, launch `worker` with a proper meta prompt that includes clarified requirements, relevant context, plan path or summary, acceptance criteria, and validation expectations. Packaged `worker` defaults to forked context; pass `context: "fresh"` only when you intentionally want a fresh child.
 4. Review after implementation. After the worker completes, launch parallel fresh-context `reviewer` agents for correctness/regressions, tests/validation, and simplicity/maintainability. Use `output: false` unless review artifacts are explicitly needed.
