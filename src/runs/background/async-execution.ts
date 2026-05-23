@@ -35,26 +35,67 @@ import {
 
 const require = createRequire(import.meta.url);
 const piPackageRoot = resolvePiPackageRoot();
-const jitiCliPath: string | undefined = (() => {
-	const candidates: Array<() => string> = [
-		() => path.join(path.dirname(require.resolve("jiti/package.json")), "lib/jiti-cli.mjs"),
-		() => path.join(path.dirname(require.resolve("@earendil-works/jiti/package.json")), "lib/jiti-cli.mjs"),
-		() => {
-			const piEntry = fs.realpathSync(process.argv[1]);
-			const piRequire = createRequire(piEntry);
-			return path.join(path.dirname(piRequire.resolve("@earendil-works/jiti/package.json")), "lib/jiti-cli.mjs");
-		},
+/**
+ * Resolve the path to `jiti`'s CLI script. Pi spawns a Node subprocess against
+ * this script to run TypeScript async runners.
+ *
+ * Probe ladder, in order:
+ *  1. Extension-bundled `jiti` (newer, preferred)
+ *  2. Extension-bundled `@earendil-works/jiti` (legacy fork)
+ *  3. Pi-bundled `@earendil-works/jiti`
+ *  4. Pi-bundled `jiti`
+ *
+ * Local candidates win because the extension's own dependency tree is the
+ * source of truth for its async runner. Pi-bundled fallbacks let the
+ * extension run when installed without a hoisted local jiti.
+ *
+ * Exported for testing.
+ */
+/** Minimal subset of `NodeRequire` used by the resolver. */
+export interface RequireLike {
+	resolve: (id: string) => string;
+}
+
+export interface JitiResolverDeps {
+	localRequire: RequireLike;
+	piRequire: RequireLike | undefined;
+	fileExists: (p: string) => boolean;
+}
+
+export function resolveJitiCliPath(deps: JitiResolverDeps): string | undefined {
+	const { localRequire, piRequire, fileExists } = deps;
+	const probes: Array<[RequireLike | undefined, string]> = [
+		[localRequire, "jiti"],
+		[localRequire, "@earendil-works/jiti"],
+		[piRequire, "@earendil-works/jiti"],
+		[piRequire, "jiti"],
 	];
-	for (const candidate of candidates) {
+	for (const [req, pkg] of probes) {
+		if (!req) continue;
 		try {
-			const p = candidate();
-			if (fs.existsSync(p)) return p;
+			const cliPath = path.join(path.dirname(req.resolve(`${pkg}/package.json`)), "lib/jiti-cli.mjs");
+			if (fileExists(cliPath)) return cliPath;
 		} catch {
-			// Candidate not available in this install, continue probing.
+			// Package not resolvable in this require context; continue probing.
 		}
 	}
 	return undefined;
-})();
+}
+
+function createPiRequire(): RequireLike | undefined {
+	try {
+		const piEntry = fs.realpathSync(process.argv[1]);
+		return createRequire(piEntry);
+	} catch {
+		return undefined;
+	}
+}
+
+const jitiCliPath: string | undefined = resolveJitiCliPath({
+	localRequire: require,
+	piRequire: createPiRequire(),
+	fileExists: fs.existsSync,
+});
 
 interface AsyncExecutionContext {
 	pi: ExtensionAPI;
