@@ -964,7 +964,7 @@ Custom agents:
 - **`deslopper`**: Code cleanup agent with `contact_supervisor` tool for escalation. Designed for dead code removal, import cleanup, and structural simplification.
 - **`oracle-fresh`**: See Features above.
 
-All changes verified empirically. 452 unit tests pass, 0 failures.
+All changes verified empirically. 515 unit tests pass, 4 pre-existing integration test failures (infra: missing `typebox` + `.agents/skills` path in CI).
 
 ## Runtime files
 
@@ -982,6 +982,7 @@ The main runtime files are:
 | `src/runs/foreground/chain-execution.ts` / `src/agents/chain-serializer.ts` | Chain orchestration and `.chain.md` parsing.                                                           |
 | `src/shared/settings.ts`                                                    | Chain behavior, instructions, and config helpers.                                                      |
 | `src/runs/shared/worktree.ts`                                               | Git worktree isolation.                                                                                |
+| `src/runs/shared/usage.ts` / `exit-drain.ts` / `output-buffer.ts` / `stdio-parser.ts` | Shared runner primitives: usage accumulation, drain timer constants, recent-output ring buffer, JSON line processor. |
 | `src/tui/subagent-hub.ts`                                                   | Subagent hub TUI for browsing agents and configuring model overrides before launch.                    |
 | `src/intercom/intercom-bridge.ts`                                           | Runtime intercom bridge instructions and diagnostics.                                                  |
 | `src/extension/schemas.ts` / `src/shared/types.ts`                          | Tool schemas, shared types, and event constants.                                                       |

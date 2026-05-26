@@ -5,6 +5,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { keyText } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import {
 	discoverAgents,
@@ -264,7 +265,7 @@ async function requestSlashRun(
 			const count = update.toolCount ?? 0;
 			ctx.ui.setStatus(
 				"subagent-slash",
-				`${count} tools${tool} | Ctrl+O live detail`,
+				`${count} tools${tool} | ${keyText("app.tools.expand")} live detail`,
 			);
 		};
 
@@ -762,7 +763,7 @@ export function registerSlashCommands(
 					),
 				{
 					overlay: true,
-					overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" },
+					overlayOptions: { anchor: "center", width: "60%", minWidth: 60, maxWidth: 100, maxHeight: "80%" },
 				},
 			);
 
@@ -774,7 +775,9 @@ export function registerSlashCommands(
 				});
 			}
 
+		if (result.overrides.size > 0) {
 			ctx.ui.notify("Subagent model overrides saved", "success");
+		}
 		},
 	});
 }

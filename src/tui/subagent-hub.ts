@@ -1,26 +1,19 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { DynamicBorder, rawKeyHint } from "@earendil-works/pi-coding-agent";
+import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
+import { Container, SelectList, Spacer, Text, matchesKey } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../agents/agents.ts";
 import { findModelInfo, getSupportedThinkingLevels, type ModelInfo } from "../shared/model-info.ts";
 import {
 	resolveModelCandidate,
 	splitThinkingSuffix,
 } from "../runs/shared/model-fallback.ts";
-import {
-	pad,
-	row,
-	renderHeader,
-	renderFooter,
-	formatScrollInfo,
-} from "./render-helpers.ts";
 
 export interface SubagentHubResult {
 	overrides: Map<string, string>; // agent name → model override string
 }
 
 export class SubagentHubComponent implements Component {
-	readonly width = 84;
 	private readonly MODEL_SELECTOR_HEIGHT = 10;
 
 	constructor(
@@ -48,136 +41,308 @@ export class SubagentHubComponent implements Component {
 	}
 
 	// State
-	private selectedAgentIndex = 0;
-	private editingAgentIndex: number | null = null; // null = main nav, number = in model picker for that agent
-	private modelSearchQuery = "";
-	private modelSelectedIndex = 0;
-	private filteredModels: ModelInfo[] = [];
-	private agentModelOverrides: Map<string, string> = new Map(); // agent name → preferred fullId
+	selectedAgentIndex = 0;
+	editingAgentIndex: number | null = null; // null = main nav, number = in model picker for that agent
+	modelSearchQuery = "";
+	modelSelectedIndex = 0;
+	filteredModels: ModelInfo[] = [];
+	agentModelOverrides: Map<string, string> = new Map(); // agent name → preferred fullId
 
-	invalidate(): void {}
+	// Persisted SelectList instances (delegated input handling)
+	private agentSelectList: SelectList | null = null;
+	private modelSelectList: SelectList | null = null;
+
+	// Render cache
+	private cachedWidth?: number;
+	private cachedLines?: string[];
+
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+		this.agentSelectList?.invalidate();
+		this.modelSelectList?.invalidate();
+	}
+
 	dispose(): void {}
 
 	render(width: number): string[] {
-		if (this.editingAgentIndex !== null) {
-			return this.renderModelSelector();
+		if (this.cachedLines && this.cachedWidth === width) {
+			return this.cachedLines;
 		}
-		return this.renderMainView();
+
+		const container = this.editingAgentIndex !== null
+			? this.buildModelSelectorView()
+			: this.buildMainView();
+
+		this.cachedLines = container.render(width);
+		this.cachedWidth = width;
+		return this.cachedLines;
 	}
 
 	handleInput(data: string): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+
 		if (this.editingAgentIndex !== null) {
 			this.handleModelSelectorInput(data);
 			return;
 		}
 
-		// Main navigation
-		if (matchesKey(data, "up")) {
-			if (this.agents.length > 0) {
-				this.selectedAgentIndex =
-					this.selectedAgentIndex === 0
-						? this.agents.length - 1
-						: this.selectedAgentIndex - 1;
+		// Agent list: delegate navigation/selection to SelectList
+		if (this.agentSelectList) {
+			// ctrl+c = hard cancel (discard all overrides)
+			if (matchesKey(data, "ctrl+c")) {
+				this.done({ overrides: new Map() });
+				return;
 			}
+			// esc = done (apply all overrides)
+			if (matchesKey(data, "escape")) {
+				this.done({ overrides: this.agentModelOverrides });
+				return;
+			}
+			// Everything else (up/down/enter/search) goes to SelectList
+			this.agentSelectList.handleInput(data);
 			this.tui.requestRender();
 			return;
 		}
 
-		if (matchesKey(data, "down")) {
-			if (this.agents.length > 0) {
-				this.selectedAgentIndex =
-					this.selectedAgentIndex === this.agents.length - 1
-						? 0
-						: this.selectedAgentIndex + 1;
-			}
-			this.tui.requestRender();
-			return;
+		// No SelectList (shouldn't happen, but fallback)
+		if (matchesKey(data, "escape")) {
+			this.done({ overrides: this.agentModelOverrides });
+		} else if (matchesKey(data, "ctrl+c")) {
+			this.done({ overrides: new Map() });
 		}
+	}
 
-		if (matchesKey(data, "m")) {
-			if (this.agents.length > 0) {
-				this.enterModelSelector(this.selectedAgentIndex);
-			}
-			return;
-		}
-
-		if (matchesKey(data, "return")) {
-			const result: SubagentHubResult = {
-				overrides: this.agentModelOverrides,
-			};
-			this.done(result);
-			return;
-		}
-
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+	/** Handle input when in model selector mode (public for testability) */
+	handleModelSelectorInput(data: string): void {
+		// ctrl+c = hard cancel everything (discard all overrides, close hub)
+		if (matchesKey(data, "ctrl+c")) {
 			this.done({ overrides: new Map() });
 			return;
 		}
-	}
 
-	// ── Render methods ──────────────────────────────────────────
-
-	private renderMainView(): string[] {
-		const th = this.theme;
-		const lines: string[] = [];
-
-		const headerText = " Subagent Models ";
-		lines.push(renderHeader(headerText, this.width, th));
-		lines.push(row("", this.width, th));
-
-		if (this.agents.length === 0) {
-			lines.push(row(` ${th.fg("dim", "No subagents found")}`, this.width, th));
-			const footerText = " [Esc] Cancel ";
-			lines.push(renderFooter(footerText, this.width, th));
-			return lines;
+		// esc = cancel model change, return to agent list
+		if (matchesKey(data, "escape")) {
+			this.exitModelSelector();
+			return;
 		}
 
-		for (let i = 0; i < this.agents.length; i++) {
-			const agent = this.agents[i]!;
-			const isSelected = i === this.selectedAgentIndex;
+		// Backspace: remove last char from search query
+		if (matchesKey(data, "backspace")) {
+			if (this.modelSearchQuery.length > 0) {
+				this.modelSearchQuery = this.modelSearchQuery.slice(0, -1);
+				this.filterModels();
+				this.modelSelectedIndex = 0;
+			}
+			this.tui.requestRender();
+			return;
+		}
 
-			const color = isSelected ? "accent" : "dim";
-			const prefix = isSelected ? "▶ " : "  ";
+		// Printable character: append to search query
+		if (data.length === 1 && data >= " " && data <= "~") {
+			this.modelSearchQuery += data;
+			this.filterModels();
+			this.modelSelectedIndex = 0;
+			this.tui.requestRender();
+			return;
+		}
 
+		// Navigation/selection keys: delegate to SelectList if available
+		if (this.modelSelectList) {
+			this.modelSelectList.handleInput(data);
+			this.tui.requestRender();
+			return;
+		}
+	}
+
+	// ── View builders ──────────────────────────────────────────
+
+	private buildMainView(): Container {
+		const th = this.theme;
+		const container = new Container();
+
+		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
+		container.addChild(new Text(th.fg("accent", th.bold(" Subagent Models")), 1, 0));
+		container.addChild(new Spacer(1));
+
+		if (this.agents.length === 0) {
+			container.addChild(new Text(th.fg("dim", " No subagents found"), 1, 0));
+			container.addChild(new Spacer(1));
+			container.addChild(new Text(
+				this.formatFooter("esc", "done"),
+				1, 0,
+			));
+			container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
+			return container;
+		}
+
+		const items: SelectItem[] = this.agents.map((agent) => {
 			const override = this.agentModelOverrides.get(agent.name);
 			const effectiveModel = override ?? this.resolveAgentEffectiveModel(agent);
 			const isOverridden = override !== undefined || agent.model !== undefined;
+			const desc = isOverridden
+				? `${effectiveModel} ✎`
+				: (effectiveModel || "(none)");
+			return {
+				value: agent.name,
+				label: agent.name,
+				description: desc,
+			};
+		});
 
-			// Build model display
-			let modelDisplay: string;
-			if (isOverridden) {
-				modelDisplay = th.fg("warning", effectiveModel) + th.fg("dim", " ✎");
-			} else {
-				modelDisplay = th.fg("dim", effectiveModel || "(none)");
+		const selectTheme = this.getSelectListTheme();
+		this.agentSelectList = new SelectList(items, Math.min(items.length, 15), selectTheme);
+		this.agentSelectList.setSelectedIndex(this.selectedAgentIndex);
+
+		// Sync selectedAgentIndex when user navigates up/down
+		this.agentSelectList.onSelectionChange = (item: SelectItem) => {
+			const agentIndex = this.agents.findIndex((a) => a.name === item.value);
+			if (agentIndex >= 0) this.selectedAgentIndex = agentIndex;
+		};
+
+		// Wire onSelect: enter opens model picker for selected agent
+		this.agentSelectList.onSelect = (item: SelectItem) => {
+			const agentIndex = this.agents.findIndex((a) => a.name === item.value);
+			if (agentIndex >= 0) {
+				// Sync selected index from SelectList state
+				this.selectedAgentIndex = agentIndex;
+				this.enterModelSelector(agentIndex);
 			}
+		};
 
-			// Build line: prefix + agent name padded + model
-			const nameMaxLen = 26;
-			const agentName = agent.name.length > nameMaxLen
-				? truncateToWidth(agent.name, nameMaxLen - 1) + "…"
-				: agent.name;
+		// Wire onCancel: SelectList cancel (esc) = done, apply overrides
+		this.agentSelectList.onCancel = () => {
+			this.done({ overrides: this.agentModelOverrides });
+		};
 
-			const lineLeft = th.fg(color, `${prefix}${agentName}`);
-			const paddedLeft = pad(lineLeft, nameMaxLen + 3); // +3 for prefix
-			const innerW = this.width - 2;
-			const modelMaxLen = innerW - (nameMaxLen + 3) - 2; // -2 for spacing
-			const clippedModel = truncateToWidth(modelDisplay, modelMaxLen);
+		container.addChild(this.agentSelectList);
 
-			lines.push(row(` ${paddedLeft}  ${clippedModel}`, this.width, th));
-		}
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(
+			this.formatFooter("enter", "model", "esc", "done", "ctrl+c", "cancel"),
+			1, 0,
+		));
+		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
 
-		const contentLines = lines.length;
-		// Pad to at least 18 lines
-		const targetHeight = 18;
-		for (let i = contentLines; i < targetHeight; i++) {
-			lines.push(row("", this.width, th));
-		}
-
-		const footerText = " [Enter] Confirm • [Esc] Cancel • m Model • ↑↓ Navigate ";
-		lines.push(renderFooter(footerText, this.width, th));
-
-		return lines;
+		return container;
 	}
+
+	private buildModelSelectorView(): Container {
+		const th = this.theme;
+		const container = new Container();
+
+		const agentName =
+			this.editingAgentIndex !== null
+				? (this.agents[this.editingAgentIndex]?.name ?? "unknown")
+				: "unknown";
+
+		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
+		container.addChild(new Text(th.fg("accent", th.bold(` Select Model (${agentName})`)), 1, 0));
+
+		// Search line
+		const cursor = "\x1b[7m \x1b[27m"; // Reverse video space for cursor
+		container.addChild(new Text(th.fg("dim", " Search: ") + this.modelSearchQuery + cursor, 1, 0));
+
+		// Current model
+		const agent =
+			this.editingAgentIndex !== null
+				? this.agents[this.editingAgentIndex]!
+				: null;
+		const currentModel = agent
+			? (this.agentModelOverrides.get(agent.name) ??
+					this.resolveAgentEffectiveModel(agent))
+			: "";
+		container.addChild(new Text(th.fg("dim", " Current: ") + th.fg("warning", currentModel), 1, 0));
+		container.addChild(new Spacer(1));
+
+		if (this.filteredModels.length === 0) {
+			this.modelSelectList = null;
+			container.addChild(new Text(th.fg("muted", " No matching models"), 1, 0));
+		} else {
+			const { baseModel } = splitThinkingSuffix(currentModel);
+			const items: SelectItem[] = this.filteredModels.map((model) => {
+				const isCurrent =
+					model.fullId === baseModel ||
+					model.id === baseModel;
+				const desc = `[${model.provider}]${isCurrent ? " current" : ""}`;
+				return {
+					value: model.fullId,
+					label: model.id,
+					description: desc,
+				};
+			});
+
+			const selectTheme = this.getSelectListTheme();
+			this.modelSelectList = new SelectList(items, Math.min(items.length, this.MODEL_SELECTOR_HEIGHT), selectTheme);
+		this.modelSelectList.setSelectedIndex(this.modelSelectedIndex);
+
+			// Sync modelSelectedIndex when user navigates up/down
+			this.modelSelectList.onSelectionChange = (item: SelectItem) => {
+				const idx = this.filteredModels.findIndex((m) => m.fullId === item.value);
+				if (idx >= 0) this.modelSelectedIndex = idx;
+			};
+
+			// Wire onSelect: enter selects model and returns to agent list
+			this.modelSelectList.onSelect = (item: SelectItem) => {
+				if (this.editingAgentIndex !== null) {
+					const agent = this.agents[this.editingAgentIndex]!;
+					const currentModel = this.agentModelOverrides.get(agent.name) ?? this.resolveAgentEffectiveModel(agent);
+					const { thinkingSuffix } = splitThinkingSuffix(currentModel);
+					const requestedLevel = thinkingSuffix.slice(1);
+					const selectedModelInfo = findModelInfo(item.value, this.availableModels, this.preferredProvider);
+					const suffix = getSupportedThinkingLevels(selectedModelInfo).some((level) => level === requestedLevel) ? thinkingSuffix : "";
+					this.agentModelOverrides.set(agent.name, `${item.value}${suffix}`);
+				}
+				this.exitModelSelector();
+			};
+
+			// Wire onCancel: SelectList cancel (esc) = back to agent list
+			this.modelSelectList.onCancel = () => {
+				this.exitModelSelector();
+			};
+
+			container.addChild(this.modelSelectList);
+		}
+
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(
+			this.formatFooter("enter", "select", "esc", "back", "type", "search"),
+			1, 0,
+		));
+		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
+
+		return container;
+	}
+
+	// ── Footer hint formatting (uses rawKeyHint for platform-aware key display) ──
+
+	/** Format footer hints using rawKeyHint, pairs of (key, description). */
+	private formatFooter(...pairs: string[]): string {
+		const th = this.theme;
+		const separator = th.fg("dim", " • ");
+		const hints: string[] = [];
+		for (let i = 0; i < pairs.length; i += 2) {
+			const key = pairs[i]!;
+			const desc = pairs[i + 1]!;
+			hints.push(rawKeyHint(key, desc));
+		}
+		return hints.join(separator);
+	}
+
+	/** Get a SelectList theme matching Pi's getSelectListTheme(), using the local theme. */
+	private getSelectListTheme() {
+		const th = this.theme;
+		return {
+			selectedPrefix: (s: string) => th.fg("accent", s),
+			selectedText: (s: string) => th.fg("accent", s),
+			description: (s: string) => th.fg("muted", s),
+			scrollInfo: (s: string) => th.fg("dim", s),
+			noMatch: (s: string) => th.fg("warning", s),
+		};
+	}
+
+	// ── Model selection helpers ────────────────────────────────
 
 	private resolveAgentEffectiveModel(agent: AgentConfig): string {
 		if (agent.model) {
@@ -198,11 +363,12 @@ export class SubagentHubComponent implements Component {
 	}
 
 	/** Enter model selector mode */
-	private enterModelSelector(agentIndex: number): void {
+	enterModelSelector(agentIndex: number): void {
 		this.editingAgentIndex = agentIndex;
 		this.modelSearchQuery = "";
 		this.modelSelectedIndex = 0;
 		this.filteredModels = [...this.availableModels];
+		this.modelSelectList = null;
 
 		// Find current model of that agent in list
 		const agent = this.agents[agentIndex]!;
@@ -216,17 +382,20 @@ export class SubagentHubComponent implements Component {
 			this.modelSelectedIndex = currentIndex;
 		}
 
+		this.invalidate();
 		this.tui.requestRender();
 	}
 
 	/** Exit model selector and return to main view */
-	private exitModelSelector(): void {
+	exitModelSelector(): void {
 		this.editingAgentIndex = null;
+		this.modelSelectList = null;
+		this.invalidate();
 		this.tui.requestRender();
 	}
 
 	/** Filter models based on search query */
-	private filterModels(): void {
+	filterModels(): void {
 		const query = this.modelSearchQuery.toLowerCase();
 		if (!query) {
 			this.filteredModels = [...this.availableModels];
@@ -242,174 +411,6 @@ export class SubagentHubComponent implements Component {
 			this.modelSelectedIndex,
 			Math.max(0, this.filteredModels.length - 1),
 		);
-	}
-
-	private handleModelSelectorInput(data: string): void {
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
-			this.exitModelSelector();
-			return;
-		}
-
-		if (matchesKey(data, "return")) {
-			const selected = this.filteredModels[this.modelSelectedIndex];
-			if (selected && this.editingAgentIndex !== null) {
-				const agent = this.agents[this.editingAgentIndex]!;
-				const currentModel = this.agentModelOverrides.get(agent.name) ?? this.resolveAgentEffectiveModel(agent);
-				const { thinkingSuffix } = splitThinkingSuffix(currentModel);
-				const requestedLevel = thinkingSuffix.slice(1);
-				const selectedModelInfo = findModelInfo(selected.fullId, this.availableModels, this.preferredProvider);
-				const suffix = getSupportedThinkingLevels(selectedModelInfo).some((level) => level === requestedLevel) ? thinkingSuffix : "";
-				this.agentModelOverrides.set(agent.name, `${selected.fullId}${suffix}`);
-			}
-			this.exitModelSelector();
-			return;
-		}
-
-		if (matchesKey(data, "up")) {
-			if (this.filteredModels.length > 0) {
-				this.modelSelectedIndex =
-					this.modelSelectedIndex === 0
-						? this.filteredModels.length - 1
-						: this.modelSelectedIndex - 1;
-			}
-			this.tui.requestRender();
-			return;
-		}
-
-		if (matchesKey(data, "down")) {
-			if (this.filteredModels.length > 0) {
-				this.modelSelectedIndex =
-					this.modelSelectedIndex === this.filteredModels.length - 1
-						? 0
-						: this.modelSelectedIndex + 1;
-			}
-			this.tui.requestRender();
-			return;
-		}
-
-		if (matchesKey(data, "backspace")) {
-			if (this.modelSearchQuery.length > 0) {
-				this.modelSearchQuery = this.modelSearchQuery.slice(0, -1);
-				this.filterModels();
-			}
-			this.tui.requestRender();
-			return;
-		}
-
-		if (data.length === 1 && data.charCodeAt(0) >= 32) {
-			this.modelSearchQuery += data;
-			this.filterModels();
-			this.tui.requestRender();
-			return;
-		}
-	}
-
-	/** Render the model selector view */
-	private renderModelSelector(): string[] {
-		const th = this.theme;
-		const lines: string[] = [];
-
-		const agentName =
-			this.editingAgentIndex !== null
-				? (this.agents[this.editingAgentIndex]?.name ?? "unknown")
-				: "unknown";
-		const headerText = ` Select Model (${agentName}) `;
-		lines.push(renderHeader(headerText, this.width, th));
-		lines.push(row("", this.width, th));
-
-		const searchPrefix = th.fg("dim", "Search: ");
-		const cursor = "\x1b[7m \x1b[27m"; // Reverse video space for cursor
-		const searchDisplay = this.modelSearchQuery + cursor;
-		lines.push(row(` ${searchPrefix}${searchDisplay}`, this.width, th));
-		lines.push(row("", this.width, th));
-
-		const agent =
-			this.editingAgentIndex !== null
-				? this.agents[this.editingAgentIndex]!
-				: null;
-		const currentModel = agent
-			? (this.agentModelOverrides.get(agent.name) ??
-					this.resolveAgentEffectiveModel(agent))
-			: "";
-		const currentLabel = th.fg("dim", "Current: ");
-		lines.push(
-			row(` ${currentLabel}${th.fg("warning", currentModel)}`, this.width, th),
-		);
-		lines.push(row("", this.width, th));
-
-		if (this.filteredModels.length === 0) {
-			lines.push(
-				row(` ${th.fg("dim", "No matching models")}`, this.width, th),
-			);
-		} else {
-			const maxVisible = this.MODEL_SELECTOR_HEIGHT;
-			let startIdx = 0;
-
-			if (this.filteredModels.length > maxVisible) {
-				startIdx = Math.max(
-					0,
-					this.modelSelectedIndex - Math.floor(maxVisible / 2),
-				);
-				startIdx = Math.min(
-					startIdx,
-					this.filteredModels.length - maxVisible,
-				);
-			}
-
-			const endIdx = Math.min(
-				startIdx + maxVisible,
-				this.filteredModels.length,
-			);
-
-			if (startIdx > 0) {
-				lines.push(
-					row(` ${th.fg("dim", `  ${formatScrollInfo(startIdx, 0)}`)}`, this.width, th),
-				);
-			}
-
-			for (let i = startIdx; i < endIdx; i++) {
-				const model = this.filteredModels[i]!;
-				const isSelected = i === this.modelSelectedIndex;
-				const currentModelBase = splitThinkingSuffix(currentModel).baseModel;
-				const isCurrent =
-					model.fullId === currentModelBase ||
-					model.id === currentModelBase;
-				const prefix = isSelected ? th.fg("accent", "→ ") : "  ";
-				const modelText = isSelected
-					? th.fg("accent", model.id)
-					: model.id;
-				const providerBadge = th.fg("dim", ` [${model.provider}]`);
-				const currentBadge = isCurrent
-					? th.fg("success", " current")
-					: "";
-
-				lines.push(
-					row(
-						` ${prefix}${modelText}${providerBadge}${currentBadge}`,
-						this.width,
-						th,
-					),
-				);
-			}
-
-			const remaining = this.filteredModels.length - endIdx;
-			if (remaining > 0) {
-				lines.push(
-					row(` ${th.fg("dim", `  ${formatScrollInfo(0, remaining)}`)}`, this.width, th),
-				);
-			}
-		}
-
-		const contentLines = lines.length;
-		const targetHeight = 18;
-		for (let i = contentLines; i < targetHeight; i++) {
-			lines.push(row("", this.width, th));
-		}
-
-		const footerText =
-			" [Enter] Select • [Esc] Cancel • Type to search ";
-		lines.push(renderFooter(footerText, this.width, th));
-
-		return lines;
+		this.invalidate();
 	}
 }

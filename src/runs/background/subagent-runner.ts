@@ -70,6 +70,10 @@ import {
 	type WorktreeSetup,
 } from "../shared/worktree.ts";
 import { writeInitialProgressFile } from "../../shared/settings.ts";
+import { emptyUsage } from "../shared/usage.ts";
+import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
+import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
+import { createLineProcessor } from "../shared/stdio-parser.ts";
 
 interface SubagentRunConfig {
 	id: string;
@@ -114,30 +118,12 @@ interface StepResult {
 const require = createRequire(import.meta.url);
 const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
 
-function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-}
-
-function tokenUsageFromAttempts(attempts: ModelAttempt[] | undefined): TokenUsage | null {
-	if (!attempts || attempts.length === 0) return null;
-	let input = 0;
-	let output = 0;
-	for (const attempt of attempts) {
-		input += attempt.usage?.input ?? 0;
-		output += attempt.usage?.output ?? 0;
-	}
-	const total = input + output;
-	return total > 0 ? { input, output, total } : null;
-}
-
 function appendRecentStepOutput(step: RunnerStatusStep, lines: string[]): void {
-	const nonEmpty = lines.filter((line) => line.trim());
-	if (nonEmpty.length === 0) return;
 	step.recentOutput ??= [];
-	step.recentOutput.push(...nonEmpty);
-	if (step.recentOutput.length > 50) {
-		step.recentOutput.splice(0, step.recentOutput.length - 50);
-	}
+	const buf = createRecentOutputBuffer(50);
+	buf.append(step.recentOutput);
+	buf.append(lines);
+	step.recentOutput = buf.snapshot();
 }
 
 function resetStepLiveDetail(step: RunnerStatusStep): void {
@@ -254,53 +240,54 @@ function runPiStreaming(
 			appendChildEvent({ type, line });
 		};
 
-		const processStdoutLine = (line: string) => {
-			if (!line.trim()) return;
-			let event: ChildEvent;
-			try {
-				event = JSON.parse(line) as ChildEvent;
-			} catch {
+		const lineProcessor = createLineProcessor({
+			onJson: (parsed) => {
+				const event = parsed as ChildEvent;
+				appendChildEvent(event);
+				onChildEvent?.(event);
+
+				if (event.type === "tool_execution_start" && event.toolName) {
+					observedMutationAttempt = observedMutationAttempt || isMutatingTool(event.toolName, event.args);
+					const toolArgs = extractToolArgsPreview(event.args ?? {});
+					writeOutputLine(toolArgs ? `${event.toolName}: ${toolArgs}` : event.toolName);
+					return;
+				}
+
+				if ((event.type === "message_end" || event.type === "tool_result_end") && event.message) {
+					messages.push(event.message);
+					const text = extractTextFromContent(event.message.content);
+					if (text) writeOutputText(text);
+
+					if (event.type !== "message_end" || event.message.role !== "assistant") return;
+					if (event.message.model) model = event.message.model;
+					if (event.message.errorMessage) error = event.message.errorMessage;
+					const eventUsage = event.message.usage;
+					if (eventUsage) {
+						usage.turns++;
+						usage.input += eventUsage.input ?? eventUsage.inputTokens ?? 0;
+						usage.output += eventUsage.output ?? eventUsage.outputTokens ?? 0;
+						usage.cacheRead += eventUsage.cacheRead ?? 0;
+						usage.cacheWrite += eventUsage.cacheWrite ?? 0;
+						usage.cost += eventUsage.cost?.total ?? 0;
+					}
+					const stopReason = (event.message as { stopReason?: string }).stopReason;
+					const hasToolCall = Array.isArray(event.message.content)
+						&& event.message.content.some((part) => (part as { type?: string }).type === "toolCall");
+					if (stopReason === "stop" && !hasToolCall) {
+						cleanTerminalAssistantStopReceived ||= !event.message.errorMessage;
+						startFinalDrain();
+					}
+				}
+			},
+			onRaw: (line) => {
 				rawStdoutLines.push(line);
 				writeOutputLine(line);
 				appendChildLine("subagent.child.stdout", line);
-				return;
-			}
-
-			appendChildEvent(event);
-			onChildEvent?.(event);
-
-			if (event.type === "tool_execution_start" && event.toolName) {
-				observedMutationAttempt = observedMutationAttempt || isMutatingTool(event.toolName, event.args);
-				const toolArgs = extractToolArgsPreview(event.args ?? {});
-				writeOutputLine(toolArgs ? `${event.toolName}: ${toolArgs}` : event.toolName);
-				return;
-			}
-
-			if ((event.type === "message_end" || event.type === "tool_result_end") && event.message) {
-				messages.push(event.message);
-				const text = extractTextFromContent(event.message.content);
-				if (text) writeOutputText(text);
-
-				if (event.type !== "message_end" || event.message.role !== "assistant") return;
-				if (event.message.model) model = event.message.model;
-				if (event.message.errorMessage) error = event.message.errorMessage;
-				const eventUsage = event.message.usage;
-				if (eventUsage) {
-					usage.turns++;
-					usage.input += eventUsage.input ?? eventUsage.inputTokens ?? 0;
-					usage.output += eventUsage.output ?? eventUsage.outputTokens ?? 0;
-					usage.cacheRead += eventUsage.cacheRead ?? 0;
-					usage.cacheWrite += eventUsage.cacheWrite ?? 0;
-					usage.cost += eventUsage.cost?.total ?? 0;
-				}
-				const stopReason = (event.message as { stopReason?: string }).stopReason;
-				const hasToolCall = Array.isArray(event.message.content)
-					&& event.message.content.some((part) => (part as { type?: string }).type === "toolCall");
-				if (stopReason === "stop" && !hasToolCall) {
-					cleanTerminalAssistantStopReceived ||= !event.message.errorMessage;
-					startFinalDrain();
-				}
-			}
+			},
+		});
+		const processStdoutLine = (line: string) => {
+			if (!line.trim()) return;
+			lineProcessor.processLine(line);
 		};
 
 		const processStderrText = (text: string) => {
@@ -318,8 +305,6 @@ function runPiStreaming(
 
 		// Guard both cases that can leave the parent waiting on `close` forever:
 		// a lingering stdio holder after `exit`, or a child that never exits.
-		const FINAL_STOP_GRACE_MS = 1000;
-		const HARD_KILL_MS = 3000;
 		let childExited = false;
 		let forcedTerminationSignal = false;
 		let cleanTerminalAssistantStopReceived = false;

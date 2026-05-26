@@ -17,6 +17,7 @@
 - Merged `/run-chain` into `/chain` — saved chains are now invoked via `/chain <chainName> -- <task>`, inline chains via `/chain agent "task" -> agent`. Removed `/run-chain` slash command.
 - Added `dead-code-cleanup.test.ts` verifying removed exports, consolidated functions, and non-optional state fields.
 - Refactored `src/slash/slash-commands.ts`: extracted saved-chain and inline-chain handling into dedicated functions, improved session export with child-session snapshot persistence, and expanded inline per-step config parsing for `model` and `skill` keys.
+- Added shared runner primitive modules (`src/runs/shared/`): `usage.ts` (`emptyUsage`, `sumUsage`), `exit-drain.ts` (drain timer constants and `DrainTimers` type), `output-buffer.ts` (`createRecentOutputBuffer` with trimming and shallow-copy snapshot), and `stdio-parser.ts` (`createLineProcessor` with `onJson`/`onRaw` dispatch). Includes 32 new unit tests.
 
 ### Changed
 
@@ -30,6 +31,8 @@
 - Made `SubagentState.foregroundRuns` and `SubagentState.pendingForegroundControlNotices` non-optional; removed dead null-guards and `??=` fallbacks in `control-notices.ts` and `subagent-executor.ts`.
 - Renamed `POLL_INTERVAL_MS` to `WATCHER_POLL_INTERVAL_MS` in `result-watcher.ts` for clarity.
 - Updated `review` chain template model defaults to current providers (`kimi-k2.6`, `Qwen3.5-397B-A17B`).
+- Refactored `src/runs/foreground/execution.ts` and `src/runs/background/subagent-runner.ts` to consume shared primitive modules (`usage.ts`, `exit-drain.ts`, `output-buffer.ts`, `stdio-parser.ts`); removed duplicate local definitions of `emptyUsage`, `sumUsage`, drain timer constants, `appendRecentOutput`/`appendRecentStepOutput`, and inline JSON line parsing.
+- Converted `executeAsyncSingle` from a ~125-line duplicate of `executeAsyncChain` into a ~35-line thin wrapper; `AsyncChainParams.resultMode` widened to `SubagentRunMode`. Zero caller changes.
 
 ### Removed
 
@@ -38,6 +41,10 @@
 - Removed `MAX_PARALLEL_CONCURRENCY` export from `parallel-utils.ts`.
 - Removed `/gather-context-and-clarify` prompt (referenced a nonexistent `interview` tool and was superseded by `/parallel-handoff-plan`).
 - Removed `/parallel-context-build` prompt (heavy overlap with `/parallel-handoff-plan`, which is its strict superset).
+- Removed dead `loadRunsForAgent` function from `run-history.ts`.
+- Removed unreachable `aggregateParallelOutputs` fallback branch in `subagent-executor.ts`.
+- Removed two unused re-exports from `settings.ts`.
+- Unexported `splitKnownThinkingSuffix` in `model-info.ts` (internal utility, no external callers).
 
 ### Fixed
 

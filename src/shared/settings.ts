@@ -626,9 +626,6 @@ export function createParallelDirs(
 	}
 }
 
-export type { ParallelTaskResult } from "../runs/shared/parallel-utils.ts";
-export { aggregateParallelOutputs } from "../runs/shared/parallel-utils.ts";
-
 // =============================================================================
 // Chain Prompt Hygiene
 // =============================================================================

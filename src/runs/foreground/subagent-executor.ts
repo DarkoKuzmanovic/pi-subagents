@@ -721,20 +721,23 @@ function buildRequestedModeError(params: SubagentParamsLike, message: string): A
 	);
 }
 
-function expandTopLevelTaskCounts(tasks: TaskParam[]): { tasks?: TaskParam[]; error?: string } {
-	const expanded: TaskParam[] = [];
-	for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
-		const task = tasks[taskIndex]!;
-		const rawCount = (task as TaskParam & { count?: unknown }).count;
+function expandItemCounts<T>(
+	items: T[],
+	pathPrefix: (index: number) => string,
+): { expanded?: T[]; error?: string } {
+	const expanded: T[] = [];
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i]!;
+		const rawCount = (item as T & { count?: unknown }).count;
 		if (rawCount !== undefined && (typeof rawCount !== "number" || !Number.isInteger(rawCount) || rawCount < 1)) {
-			return { error: `tasks[${taskIndex}].count must be an integer >= 1` };
+			return { error: `${pathPrefix(i)}.count must be an integer >= 1` };
 		}
-		const { count, ...concreteTask } = task;
-		for (let repeat = 0; repeat < (rawCount ?? 1); repeat++) {
-			expanded.push({ ...concreteTask });
+		const { count, ...concrete } = item as Record<string, unknown>;
+		for (let r = 0; r < ((rawCount as number) ?? 1); r++) {
+			expanded.push({ ...concrete } as T);
 		}
 	}
-	return { tasks: expanded };
+	return { expanded };
 }
 
 function expandChainParallelCounts(chain: ChainStep[]): { chain?: ChainStep[]; error?: string } {
@@ -745,30 +748,20 @@ function expandChainParallelCounts(chain: ChainStep[]): { chain?: ChainStep[]; e
 			expandedChain.push(step);
 			continue;
 		}
-		const expandedParallel = [];
-		for (let taskIndex = 0; taskIndex < step.parallel.length; taskIndex++) {
-			const task = step.parallel[taskIndex]!;
-			const rawCount = (task as typeof task & { count?: unknown }).count;
-			if (rawCount !== undefined && (typeof rawCount !== "number" || !Number.isInteger(rawCount) || rawCount < 1)) {
-				return { error: `chain[${stepIndex}].parallel[${taskIndex}].count must be an integer >= 1` };
-			}
-			const { count, ...concreteTask } = task;
-			for (let repeat = 0; repeat < (rawCount ?? 1); repeat++) {
-				expandedParallel.push({ ...concreteTask });
-			}
-		}
-		expandedChain.push({ ...step, parallel: expandedParallel });
+		const inner = expandItemCounts(step.parallel, j => `chain[${stepIndex}].parallel[${j}]`);
+		if (inner.error) return { error: inner.error };
+		expandedChain.push({ ...step, parallel: inner.expanded! });
 	}
 	return { chain: expandedChain };
 }
 
 function normalizeRepeatedParallelCounts(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: AgentToolResult<Details> } {
 	if (params.tasks) {
-		const expandedTasks = expandTopLevelTaskCounts(params.tasks);
-		if (expandedTasks.error) {
-			return { error: buildRequestedModeError(params, expandedTasks.error) };
+		const result = expandItemCounts(params.tasks, i => `tasks[${i}]`);
+		if (result.error) {
+			return { error: buildRequestedModeError(params, result.error) };
 		}
-		return { params: { ...params, tasks: expandedTasks.tasks } };
+		return { params: { ...params, tasks: result.expanded } };
 	}
 	if (params.chain) {
 		const expandedChain = expandChainParallelCounts(params.chain);
@@ -2336,11 +2329,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 		}
 
-		return withForkContext({
-			content: [{ type: "text", text: "Invalid params" }],
-			isError: true,
-			details: { mode: "single" as const, results: [] },
-		}, effectiveParams.context);
 	};
 
 	return { execute };

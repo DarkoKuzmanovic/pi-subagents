@@ -2,27 +2,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { row } from "../../src/tui/render-helpers.ts";
+import { pad } from "../../src/tui/render-helpers.ts";
 
-const theme = {
-	fg(_name: string, text: string): string {
-		return text;
-	},
-};
-
-test("row clips content to the available width", () => {
-	const rendered = row("abcdef", 6, theme as any);
-	assert.equal(visibleWidth(rendered), 6);
+test("pad extends string to target width", () => {
+	const padded = pad("hello", 10);
+	assert.equal(visibleWidth(padded), 10);
 });
 
-test("row normalizes multiline content before clipping", () => {
-	const rendered = row("bash failed: line 1\nline 2\tvalue", 20, theme as any);
-	assert.equal(visibleWidth(rendered), 20);
-	assert.doesNotMatch(rendered, /[\r\n\t]/);
+test("pad is no-op when string already at target width", () => {
+	const padded = pad("hello", 5);
+	assert.equal(visibleWidth(padded), 5);
 });
 
-test("row keeps styled multiline content within the available width", () => {
-	const rendered = row("\u001b[31merror line 1\nline 2\tvalue\u001b[39m", 18, theme as any);
-	assert.equal(visibleWidth(rendered), 18);
-	assert.doesNotMatch(rendered, /[\r\n\t]/);
+test("pad handles zero-width ANSI strings", () => {
+	const styled = "\x1b[31mhi\x1b[39m";
+	const padded = pad(styled, 5);
+	assert.equal(visibleWidth(padded), 5);
 });

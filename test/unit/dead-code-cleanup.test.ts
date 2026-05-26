@@ -29,10 +29,12 @@ describe("render-helpers dead code removal (F3, F4)", () => {
 		assert.equal("formatPath" in mod, false, "formatPath should have been removed");
 	});
 
-	it("still exports pad, row, renderHeader, formatScrollInfo, renderFooter", async () => {
+	it("still exports pad (others replaced by Pi components)", async () => {
 		const mod = await import("../../src/tui/render-helpers.ts");
-		for (const name of ["pad", "row", "renderHeader", "formatScrollInfo", "renderFooter"]) {
-			assert.equal(typeof (mod as Record<string, unknown>)[name], "function", `${name} should still be exported`);
+		assert.equal(typeof (mod as Record<string, unknown>).pad, "function", "pad should still be exported");
+		// row, renderHeader, formatScrollInfo, renderFooter removed — replaced by DynamicBorder, Container, SelectList
+		for (const name of ["row", "renderHeader", "formatScrollInfo", "renderFooter"]) {
+			assert.equal((name in mod), false, `${name} should have been removed`);
 		}
 	});
 });

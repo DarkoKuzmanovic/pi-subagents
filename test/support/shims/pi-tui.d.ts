@@ -22,7 +22,7 @@ export class Container {
 }
 
 export class Text {
-	constructor(text: string);
+	constructor(text: string, paddingX?: number, paddingY?: number, bgFn?: (s: string) => string);
 	render(width: number): string[];
 }
 
@@ -41,4 +41,31 @@ export function truncateToWidth(text: string, width: number, ellipsis?: string):
 export function wrapTextWithAnsi(text: string, width: number): string[];
 
 export const Key: Record<string, any>;
+export interface SelectItem {
+	value: string;
+	label: string;
+	description?: string;
+}
+
+export interface SelectListTheme {
+	selectedPrefix: (text: string) => string;
+	selectedText: (text: string) => string;
+	description: (text: string) => string;
+	scrollInfo: (text: string) => string;
+	noMatch: (text: string) => string;
+}
+
+export class SelectList {
+	constructor(items: SelectItem[], maxVisible: number, theme: SelectListTheme, layout?: any);
+	onSelect?: (item: SelectItem) => void;
+	onCancel?: () => void;
+	onSelectionChange?: (item: SelectItem) => void;
+	setSelectedIndex(index: number): void;
+	setFilter(filter: string): void;
+	getSelectedItem(): SelectItem | null;
+	invalidate(): void;
+	render(width: number): string[];
+	handleInput(keyData: string): void;
+}
+
 export function matchesKey(event: any, ...keys: any[]): boolean;

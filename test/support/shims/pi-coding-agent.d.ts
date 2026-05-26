@@ -39,3 +39,14 @@ export interface Theme {
 }
 
 export declare function getMarkdownTheme(...args: any[]): Theme;
+
+export class DynamicBorder {
+	constructor(color?: (str: string) => string);
+	invalidate(): void;
+	render(width: number): string[];
+}
+
+export declare function rawKeyHint(key: string, description: string): string;
+
+export declare function getSelectListTheme(): any;
+export declare function keyText(keybindingId: string): string;

@@ -66,7 +66,7 @@ function makeMockTui() {
 }
 
 function makeMockTheme() {
-	return { fg(_key: string, text: string) { return text; } };
+	return { fg(_key: string, text: string) { return text; }, bold(text: string) { return text; } };
 }
 
 // ── Agent navigation ────────────────────────────────────────────────
@@ -136,7 +136,7 @@ test("subagent-hub: no crash on empty agents list", {
 
 	const rendered = component.render(84).join("\n");
 	assert.match(stripAnsi(rendered), /No subagents found/);
-	assert.match(stripAnsi(rendered), /Cancel/);
+	assert.match(stripAnsi(rendered), /done/);
 });
 
 // ── Model selector entry/exit ─────────────────────────────────────────
@@ -677,7 +677,7 @@ test("subagent-hub: empty models list shows no matching models", {
 
 // ── Done callback ─────────────────────────────────────────────────────
 
-test("subagent-hub: done callback receives overrides on return key", {
+test("subagent-hub: done callback receives overrides on esc (done)", {
 	skip: !available,
 }, (t, done) => {
 	const agents = makeAgents(["a", "b"]);
@@ -704,13 +704,13 @@ test("subagent-hub: done callback receives overrides on return key", {
 	component.agentModelOverrides.set("a", "openai/model-0");
 	component.agentModelOverrides.set("b", "anthropic/model-1");
 
-	// Trigger done directly (handleInput is blocked by matchesKey shim in tests)
+	// Trigger done (esc=done applies overrides; handleInput is blocked by matchesKey shim in tests)
 	(component as any).done({ overrides: component.agentModelOverrides });
 
 	// done() is called by wrapper in component callback
 }, { timeout: 2000 });
 
-test("subagent-hub: done callback receives empty map on escape", {
+test("subagent-hub: ctrl+c cancels with empty overrides map", {
 	skip: !available,
 }, (t, done) => {
 	const agents = makeAgents(["a"]);
@@ -734,7 +734,7 @@ test("subagent-hub: done callback receives empty map on escape", {
 		"/tmp",
 	);
 
-	// Set an override then cancel (handleInput blocked by matchesKey shim)
+	// Cancel: ctrl+c discards all overrides (handleInput blocked by matchesKey shim)
 	component.agentModelOverrides.set("a", "openai/model-0");
 	(component as any).done({ overrides: new Map() });
 
@@ -785,9 +785,9 @@ test("subagent-hub: main view shows footer with key hints", {
 	const rendered = component.render(84).join("\n");
 	const stripped = stripAnsi(rendered);
 
-	assert.match(stripped, /Enter/);
-	assert.match(stripped, /Cancel/);
-	assert.match(stripped, /Navigate/);
+	assert.match(stripped, /enter/);
+	assert.match(stripped, /cancel/);
+	assert.match(stripped, /navigate/);
 });
 
 test("subagent-hub: selected agent shows indicator", {

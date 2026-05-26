@@ -27,7 +27,7 @@ export function toModelInfo(model: RegistryModelLike): ModelInfo {
 	};
 }
 
-export function splitKnownThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
+function splitKnownThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
 	const colonIdx = model.lastIndexOf(":");
 	if (colonIdx === -1) return { baseModel: model, thinkingSuffix: "" };
 	const suffix = THINKING_LEVELS.find((level) => level === model.substring(colonIdx + 1));

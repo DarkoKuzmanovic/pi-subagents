@@ -65,29 +65,13 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
+import { emptyUsage, sumUsage } from "../shared/usage.ts";
+import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
+import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
+import { createLineProcessor } from "../shared/stdio-parser.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 
-function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-}
-
-function sumUsage(target: Usage, source: Usage): void {
-	target.input += source.input;
-	target.output += source.output;
-	target.cacheRead += source.cacheRead;
-	target.cacheWrite += source.cacheWrite;
-	target.cost += source.cost;
-	target.turns += source.turns;
-}
-
-function appendRecentOutput(progress: AgentProgress, lines: string[]): void {
-	if (lines.length === 0) return;
-	progress.recentOutput.push(...lines.filter((line) => line.trim()));
-	if (progress.recentOutput.length > 50) {
-		progress.recentOutput.splice(0, progress.recentOutput.length - 50);
-	}
-}
 
 function snapshotProgress(progress: AgentProgress): AgentProgress {
 	return {
@@ -204,6 +188,15 @@ async function runSingleAttempt(
 		lastActivityAt: startTime,
 	};
 	result.progress = progress;
+	// Ring buffer for recent output — kept in sync with progress.recentOutput after each append.
+	const recentOutputBuffer = createRecentOutputBuffer();
+	if (progress.recentOutput.length > 0) {
+		recentOutputBuffer.append(progress.recentOutput);
+	}
+	const appendRecentOutput = (lines: string[]): void => {
+		recentOutputBuffer.append(lines);
+		progress.recentOutput = recentOutputBuffer.snapshot();
+	};
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
 	let observedMutationAttempt = false;
 
@@ -242,8 +235,6 @@ async function runSingleAttempt(
 
 		// If the child emits a terminal assistant stop but never exits,
 		// give it a short grace period to flush naturally, then clean it up.
-		const FINAL_STOP_GRACE_MS = 1000;
-		const HARD_KILL_MS = 3000;
 		let childExited = false;
 		let forcedTerminationSignal = false;
 		let cleanTerminalAssistantStopReceived = false;
@@ -480,113 +471,112 @@ async function runSingleAttempt(
 			emitUpdateSnapshot(getFinalOutput(result.messages) || "(running...)");
 		};
 
-		const processLine = (line: string) => {
-			if (!line.trim()) return;
-			jsonlWriter.writeLine(line);
-			let evt: { type?: string; message?: Message; toolName?: string; args?: unknown };
-			try {
-				evt = JSON.parse(line) as { type?: string; message?: Message; toolName?: string; args?: unknown };
-			} catch {
-				// Non-JSON stdout lines are expected; only structured events are parsed.
-				return;
-			}
-
-			const now = Date.now();
-			progress.durationMs = now - startTime;
-			progress.lastActivityAt = now;
-			updateActivityState(now);
-
-			if (evt.type === "tool_execution_start") {
-				const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
-					? evt.args as Record<string, unknown>
-					: {};
-				if (options.allowIntercomDetach && (evt.toolName === "intercom" || evt.toolName === "contact_supervisor")) {
-					intercomStarted = true;
-				}
-				progress.toolCount++;
-				progress.currentTool = evt.toolName;
-				progress.currentToolArgs = extractToolArgsPreview(toolArgs);
-				progress.currentToolStartedAt = now;
-				progress.currentPath = resolveCurrentPath(evt.toolName, toolArgs);
-				const mutates = isMutatingTool(evt.toolName, toolArgs);
-				observedMutationAttempt = observedMutationAttempt || mutates;
-				pendingToolResult = { tool: evt.toolName ?? "tool", path: progress.currentPath, mutates, startedAt: now };
-				fireUpdate();
-			}
-
-			if (evt.type === "tool_execution_end") {
-				if (progress.currentTool) {
-					progress.recentTools.push({
-						tool: progress.currentTool,
-						args: progress.currentToolArgs || "",
-						endMs: now,
-					});
-				}
-				progress.currentTool = undefined;
-				progress.currentToolArgs = undefined;
-				progress.currentToolStartedAt = undefined;
-				progress.currentPath = undefined;
-				fireUpdate();
-			}
-
-			if (evt.type === "message_end" && evt.message) {
-				result.messages.push(evt.message);
-				if (evt.message.role === "assistant") {
-					result.usage.turns++;
-					progress.turnCount = result.usage.turns;
-					const u = evt.message.usage;
-					if (u) {
-						result.usage.input += u.input || 0;
-						result.usage.output += u.output || 0;
-						result.usage.cacheRead += u.cacheRead || 0;
-						result.usage.cacheWrite += u.cacheWrite || 0;
-						result.usage.cost += u.cost?.total || 0;
-						progress.tokens = result.usage.input + result.usage.output;
-					}
-					if (!result.model && evt.message.model) result.model = evt.message.model;
-					if (evt.message.errorMessage) result.error = evt.message.errorMessage;
-					appendRecentOutput(progress, extractTextFromContent(evt.message.content).split("\n").slice(-10));
-					// Final assistant message: start the exit drain window.
-					const stopReason = (evt.message as { stopReason?: string }).stopReason;
-					const hasToolCall = Array.isArray(evt.message.content)
-						&& evt.message.content.some((part) => (part as { type?: string }).type === "toolCall");
-					if (stopReason === "stop" && !hasToolCall) {
-						cleanTerminalAssistantStopReceived ||= !evt.message.errorMessage;
-						startFinalDrain();
-					}
-				}
+		const lineProcessor = createLineProcessor({
+			onJson: (parsed) => {
+				const evt = parsed as { type?: string; message?: Message; toolName?: string; args?: unknown };
+				const now = Date.now();
+				progress.durationMs = now - startTime;
+				progress.lastActivityAt = now;
 				updateActivityState(now);
-				fireUpdate();
-			}
 
-			if (evt.type === "tool_result_end" && evt.message) {
-				result.messages.push(evt.message);
-				const resultText = extractTextFromContent(evt.message.content);
-				appendRecentOutput(progress, resultText.split("\n").slice(-10));
-				const toolSnapshot = pendingToolResult;
-				pendingToolResult = undefined;
-				if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
-					recordMutatingFailure(mutatingFailures, {
-						tool: toolSnapshot.tool,
-						path: toolSnapshot.path,
-						error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
-						ts: now,
-					}, mutatingFailureWindowMs);
-					if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
-						emitNeedsAttention(now, {
-							message: `${agent.name} needs attention after repeated mutating tool failures`,
-							reason: "tool_failures",
-							currentTool: toolSnapshot.tool,
-							currentPath: toolSnapshot.path,
-							currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
-							recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
+				if (evt.type === "tool_execution_start") {
+					const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
+						? evt.args as Record<string, unknown>
+						: {};
+					if (options.allowIntercomDetach && (evt.toolName === "intercom" || evt.toolName === "contact_supervisor")) {
+						intercomStarted = true;
+					}
+					progress.toolCount++;
+					progress.currentTool = evt.toolName;
+					progress.currentToolArgs = extractToolArgsPreview(toolArgs);
+					progress.currentToolStartedAt = now;
+					progress.currentPath = resolveCurrentPath(evt.toolName, toolArgs);
+					const mutates = isMutatingTool(evt.toolName, toolArgs);
+					observedMutationAttempt = observedMutationAttempt || mutates;
+					pendingToolResult = { tool: evt.toolName ?? "tool", path: progress.currentPath, mutates, startedAt: now };
+					fireUpdate();
+				}
+
+				if (evt.type === "tool_execution_end") {
+					if (progress.currentTool) {
+						progress.recentTools.push({
+							tool: progress.currentTool,
+							args: progress.currentToolArgs || "",
+							endMs: now,
 						});
 					}
-				} else if (toolSnapshot?.mutates) {
-					resetMutatingFailureState(mutatingFailures);
+					progress.currentTool = undefined;
+					progress.currentToolArgs = undefined;
+					progress.currentToolStartedAt = undefined;
+					progress.currentPath = undefined;
+					fireUpdate();
 				}
-				fireUpdate();
-			}
+
+				if (evt.type === "message_end" && evt.message) {
+					result.messages.push(evt.message);
+					if (evt.message.role === "assistant") {
+						result.usage.turns++;
+						progress.turnCount = result.usage.turns;
+						const u = evt.message.usage;
+						if (u) {
+							result.usage.input += u.input || 0;
+							result.usage.output += u.output || 0;
+							result.usage.cacheRead += u.cacheRead || 0;
+							result.usage.cacheWrite += u.cacheWrite || 0;
+							result.usage.cost += u.cost?.total || 0;
+							progress.tokens = result.usage.input + result.usage.output;
+						}
+						if (!result.model && evt.message.model) result.model = evt.message.model;
+						if (evt.message.errorMessage) result.error = evt.message.errorMessage;
+						appendRecentOutput(extractTextFromContent(evt.message.content).split("\n").slice(-10));
+						// Final assistant message: start the exit drain window.
+						const stopReason = (evt.message as { stopReason?: string }).stopReason;
+						const hasToolCall = Array.isArray(evt.message.content)
+							&& evt.message.content.some((part) => (part as { type?: string }).type === "toolCall");
+						if (stopReason === "stop" && !hasToolCall) {
+							cleanTerminalAssistantStopReceived ||= !evt.message.errorMessage;
+							startFinalDrain();
+						}
+					}
+					updateActivityState(now);
+					fireUpdate();
+				}
+
+				if (evt.type === "tool_result_end" && evt.message) {
+					result.messages.push(evt.message);
+					const resultText = extractTextFromContent(evt.message.content);
+					appendRecentOutput(resultText.split("\n").slice(-10));
+					const toolSnapshot = pendingToolResult;
+					pendingToolResult = undefined;
+					if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
+						recordMutatingFailure(mutatingFailures, {
+							tool: toolSnapshot.tool,
+							path: toolSnapshot.path,
+							error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
+							ts: now,
+						}, mutatingFailureWindowMs);
+						if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
+							emitNeedsAttention(now, {
+								message: `${agent.name} needs attention after repeated mutating tool failures`,
+								reason: "tool_failures",
+								currentTool: toolSnapshot.tool,
+								currentPath: toolSnapshot.path,
+								currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
+								recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
+							});
+						}
+					} else if (toolSnapshot?.mutates) {
+						resetMutatingFailureState(mutatingFailures);
+					}
+					fireUpdate();
+				}
+			},
+			// onRaw: undefined — foreground silently ignores non-JSON stdout lines
+		});
+		const processLine = (line: string) => {
+			if (!line.trim()) return;
+			jsonlWriter.writeLine(line); // MUST write before parsing — raw JSONL capture
+			lineProcessor.processLine(line);
 		};
 
 		if (controlConfig.enabled) {
