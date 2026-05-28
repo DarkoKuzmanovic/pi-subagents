@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-05-28
+
+### Added
+
+- Added the scout bakeoff benchmark kit: `/scout-bakeoff` prompt template plus `docs/scout-bakeoff/` model list, five read-only reconnaissance task briefs, scoring rubric, scorecard, and bound-task template for comparing scout models on precision, speed, and cost.
+
+### Changed
+
+- Included scout bakeoff docs in the packaged npm files so the prompt template can reference its rubric and task briefs after install.
+
 ## [0.32.0] - 2026-05-28
 
 ### Added

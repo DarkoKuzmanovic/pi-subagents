@@ -1,0 +1,37 @@
+{
+  "candidates": [
+    {
+      "label": "minimax-highspeed",
+      "model": "minimax/MiniMax-M2.7-highspeed",
+      "agent": "scout"
+    },
+    {
+      "label": "qwen035-9b",
+      "model": "crofai/qwen03.5-9b",
+      "agent": "scout"
+    },
+    {
+      "label": "greg-mini",
+      "model": "crofai/greg-1-mini",
+      "agent": "scout"
+    },
+    {
+      "label": "kimi-lightning",
+      "model": "crofai/kimi-k2.5-lightning",
+      "agent": "scout"
+    },
+    {
+      "label": "codex-spark",
+      "model": "openai-codex/gpt-5.3-codex-spark",
+      "agent": "scout"
+    }
+  ],
+  "defaults": {
+    "context": "fresh",
+    "concurrency": 5,
+    "worktree": false,
+    "outputDir": "scout-bakeoff",
+    "timeoutMinutesPerTask": 20,
+    "pricingMode": "manual-scorecard-columns"
+  }
+}

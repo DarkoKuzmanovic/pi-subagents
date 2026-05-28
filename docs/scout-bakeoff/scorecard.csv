@@ -1,0 +1,1 @@
+task_id,model,label,wall_time_sec,turns_or_requests,tool_calls,files_or_symbols_cited,output_lines,manual_cost_estimate,quota_pool_note,precision,coverage,traceability,brevity,speed,cost_efficiency,hard_penalty,total_score,accepted_handoff,notes
