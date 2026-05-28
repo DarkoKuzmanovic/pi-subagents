@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-05-28
+
+### Fixed
+
+- Chain steps containing a parallel group crashed with `aggregateParallelOutputs is not a function`. `chain-execution.ts` imported `aggregateParallelOutputs` (and the `ParallelTaskResult` type) from `shared/settings.ts`, which does not export them — they live in `runs/shared/parallel-utils.ts`. Corrected the import source. The top-level `tasks:` parallel path was unaffected; only the parallel-within-chain path (e.g. the `/recon` workflow) was broken.
+
 ## [0.31.0] - 2026-05-28
 
 ### Added

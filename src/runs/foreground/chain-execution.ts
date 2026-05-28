@@ -19,16 +19,15 @@ import {
 	writeInitialProgressFile,
 	createParallelDirs,
 	suppressProgressForReadOnlyTask,
-	aggregateParallelOutputs,
 	stripStaleAgentBlocks,
 	isParallelStep,
 	type StepOverrides,
 	type ChainStep,
 	type SequentialStep,
-	type ParallelTaskResult,
 	type ResolvedStepBehavior,
 	type ResolvedTemplates,
 } from "../../shared/settings.ts";
+import { aggregateParallelOutputs, type ParallelTaskResult } from "../shared/parallel-utils.ts";
 import { discoverAvailableSkills, normalizeSkillInput } from "../../agents/skills.ts";
 import { INTERCOM_BRIDGE_MARKER } from "../../intercom/intercom-bridge.ts";
 import { runSync } from "./execution.ts";
