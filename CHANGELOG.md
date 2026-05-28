@@ -24,6 +24,16 @@
 - Added `runId?: string` field to child entries in `AsyncResultFile` result schema (`src/runs/background/async-resume.ts`).
 - Added `resumeByChildRunId(params: { asyncId: string; childRunId: string })` function to `src/runs/background/async-resume.ts` for targeting a specific child by its runId.
 
+### Added
+
+- Added fanout child extension: `src/extension/fanout-child.ts` — fanout-authorized subagent child entrypoint.
+- Added nested events system: `src/runs/shared/nested-events.ts` — parent-child event relay for nested runs.
+- Added nested path utilities: `src/runs/shared/nested-path.ts` — nested run path encoding/parsing.
+- Added nested render helpers: `src/runs/shared/nested-render.ts` — TUI rendering for nested run status lines.
+- Added run ID resolver: `src/runs/background/run-id-resolver.ts` — resolves subagent run IDs by pattern.
+- Added `attachNestedChildrenToResultChildren` to `src/intercom/result-intercom.ts`.
+- Added nested* test suite: `test/unit/nested-events.test.ts`, `test/unit/widget-nested-render.test.ts`, `test/unit/run-id-resolver.test.ts`.
+
 ### Changed
 
 - `resumeByChildRunId` resolves child index from `result.results[].runId` in the parent job's result file (Phase 4 will extend to also search `nestedChildren`).
