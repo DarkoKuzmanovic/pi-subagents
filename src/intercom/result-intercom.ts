@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import {
 	type Details,
 	type IntercomEventBus,
-	SingleResult,
-	NestedRunSummary,
-	PublicNestedRunSummary,
+	type SingleResult,
+	type NestedRunSummary,
+	type PublicNestedRunSummary,
 	type SubagentResultIntercomChild,
 	type SubagentResultIntercomPayload,
 	type SubagentResultStatus,
@@ -234,6 +234,7 @@ function formatSubagentResultIntercomMessage(input: {
 		if (child.intercomTarget) lines.push(`${input.source === "async" ? "Previous intercom target" : "Run intercom target"}: ${child.intercomTarget}`);
 		if (child.artifactPath) lines.push(`Output artifact: ${child.artifactPath}`);
 		if (child.sessionPath) lines.push(`Session: ${child.sessionPath}`);
+		lines.push(...formatNestedResultLines(child.children));
 		lines.push("Summary:");
 		lines.push(child.summary);
 	}

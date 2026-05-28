@@ -1,20 +1,21 @@
 # Changelog
 
-## [0.33.2] - 2026-05-28
+## [0.33.6] - 2026-05-29
+
+### Fixed
+
+- Fixed `src/intercom/result-intercom.ts`: `NestedRunSummary` and `PublicNestedRunSummary` are now type-only imports (they are erased by `--experimental-strip-types`, so value-importing them broke module loading), and restored the missing `formatNestedResultLines(child.children)` call so nested subagents render under their parent in the intercom result message.
+- Fixed `src/runs/background/run-id-resolver.ts`: ported the missing `findAsyncRunPrefixMatches` helper into `src/runs/background/async-resume.ts` (the consumer had been ported without its producer).
+- Fixed `widgetRenderKey`: exported the full-state render key from `src/tui/render.ts` and consumed it in `src/runs/background/async-job-tracker.ts` (it had been reduced to a partial local stub), restoring upstream alignment and correct async-widget re-render detection.
+
+## [0.33.5] - 2026-05-28
 
 ### Added
 
-- Added `/review-loop` slash command: parent-controlled worker→reviewer→worker loop with stop-on-clean or iteration cap.
-- Added `/gather-context-and-clarify` slash command: subagent context gathering then clarifying questions before planning.
-- Added `/parallel-context-build` slash command: parallel fresh-context `context-builder` agents for planning handoff.
-
-## [0.33.3] - 2026-05-28
-
-### Added
-
-- Added Nested* types: `NestedRunSummary`, `NestedRouteInfo`, `NestedRunMatch`, `NestedRunResolutionScope`, `NestedRunState`, `NestedOwnerState`, `NestedRunAddress`, `NestedStepSummary` to `src/shared/types.ts`.
-- Added nested route env var constants to `src/runs/shared/pi-args.ts` (`PI_SUBAGENT_PARENT_*` series).
-- Added parent route fields to `BuildPiArgsInput` for fanout support.
+- Added `nestedChildren?: NestedRunSummary[]` population in async job tracker: every poll cycle calls `updateAsyncJobNestedProjection` to refresh from nested events, and `handleComplete` does a final refresh before cleanup decision.
+- Added `nestedRoute` propagation from `AsyncStartedEvent.nestedRoute` into `AsyncJobState` on job start.
+- Added `reconcileNestedAsyncDescendants` to stale-run reconciler: reconciles running/queued nested async runs and writes completion/updated events back to the nested event log.
+- Added `hasLiveNestedDescendants` guard on async job cleanup: jobs with live nested children are not cleaned up until all descendants reach terminal state.
 
 ## [0.33.4] - 2026-05-28
 
@@ -23,9 +24,6 @@
 - Added `nestedRoute?: NestedRouteInfo` and `nestedChildren?: NestedRunSummary[]` to `AsyncJobState` in `src/shared/types.ts`.
 - Added `runId?: string` field to child entries in `AsyncResultFile` result schema (`src/runs/background/async-resume.ts`).
 - Added `resumeByChildRunId(params: { asyncId: string; childRunId: string })` function to `src/runs/background/async-resume.ts` for targeting a specific child by its runId.
-
-### Added
-
 - Added fanout child extension: `src/extension/fanout-child.ts` — fanout-authorized subagent child entrypoint.
 - Added nested events system: `src/runs/shared/nested-events.ts` — parent-child event relay for nested runs.
 - Added nested path utilities: `src/runs/shared/nested-path.ts` — nested run path encoding/parsing.
@@ -37,15 +35,22 @@
 ### Changed
 
 - `resumeByChildRunId` resolves child index from `result.results[].runId` in the parent job's result file (Phase 4 will extend to also search `nestedChildren`).
-## [0.33.5] - 2026-05-28
+
+## [0.33.3] - 2026-05-28
 
 ### Added
 
-- Added `nestedChildren?: NestedRunSummary[]` population in async job tracker: every poll cycle calls `updateAsyncJobNestedProjection` to refresh from nested events, and `handleComplete` does a final refresh before cleanup decision.
-- Added `nestedRoute` propagation from `AsyncStartedEvent.nestedRoute` into `AsyncJobState` on job start.
-- Added `reconcileNestedAsyncDescendants` to stale-run reconciler: reconciles running/queued nested async runs and writes completion/updated events back to the nested event log.
-- Added `hasLiveNestedDescendants` guard on async job cleanup: jobs with live nested children are not cleaned up until all descendants reach terminal state.
+- Added Nested* types: `NestedRunSummary`, `NestedRouteInfo`, `NestedRunMatch`, `NestedRunResolutionScope`, `NestedRunState`, `NestedOwnerState`, `NestedRunAddress`, `NestedStepSummary` to `src/shared/types.ts`.
+- Added nested route env var constants to `src/runs/shared/pi-args.ts` (`PI_SUBAGENT_PARENT_*` series).
+- Added parent route fields to `BuildPiArgsInput` for fanout support.
 
+## [0.33.2] - 2026-05-28
+
+### Added
+
+- Added `/review-loop` slash command: parent-controlled worker→reviewer→worker loop with stop-on-clean or iteration cap.
+- Added `/gather-context-and-clarify` slash command: subagent context gathering then clarifying questions before planning.
+- Added `/parallel-context-build` slash command: parallel fresh-context `context-builder` agents for planning handoff.
 ## [0.33.1] - 2026-05-28
 
 ### Fixed

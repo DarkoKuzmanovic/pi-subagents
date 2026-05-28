@@ -24,7 +24,7 @@ re-implement those.
    codebase uses activity timers that keep the event loop alive):
    ```
    cd /home/quzma/.pi/agent/extensions/pi-subagents
-   timeout 180 node --experimental-strip-types --test --test-force-exit test/unit/*.test.ts
+   timeout 180 node --experimental-strip-types --import ./test/support/register-loader.mjs --test --test-force-exit test/unit/*.test.ts
    ```
    Baseline as of v0.31.1: ~560 tests, ~4 pre-existing environmental failures (subagent child
    mode ×2 needing host deps, `~/.agents/skills` path resolution, worktree git timeouts).

@@ -696,6 +696,33 @@ function buildWidgetComponent(jobs: AsyncJobState[], expanded: boolean): (_tui: 
 	};
 }
 
+export function widgetRenderKey(job: AsyncJobState): string {
+	return JSON.stringify({
+		asyncDir: job.asyncDir,
+		status: job.status,
+		activityState: job.activityState,
+		lastActivityAt: job.lastActivityAt,
+		currentTool: job.currentTool,
+		currentToolStartedAt: job.currentToolStartedAt,
+		currentPath: job.currentPath,
+		turnCount: job.turnCount,
+		toolCount: job.toolCount,
+		mode: job.mode,
+		agents: job.agents,
+		currentStep: job.currentStep,
+		chainStepCount: job.chainStepCount,
+		parallelGroups: job.parallelGroups,
+		steps: job.steps,
+		nestedChildren: job.nestedChildren,
+		stepsTotal: job.stepsTotal,
+		runningSteps: job.runningSteps,
+		completedSteps: job.completedSteps,
+		activeParallelGroup: job.activeParallelGroup,
+		startedAt: job.startedAt,
+		updatedAt: job.updatedAt,
+		totalTokens: job.totalTokens,
+	});
+}
 export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = getTermWidth(), expanded = false): string[] {
 	if (jobs.length === 0) return [];
 	if (jobs.length === 1) return buildSingleWidgetLines(jobs[0]!, theme, width, expanded);

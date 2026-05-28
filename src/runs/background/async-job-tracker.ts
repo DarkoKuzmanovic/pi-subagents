@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { renderWidget } from "../../tui/render.ts";
+import { renderWidget, widgetRenderKey } from "../../tui/render.ts";
 import { formatControlNoticeMessage } from "../shared/subagent-control.ts";
 import {
 	type AsyncJobState,
@@ -118,6 +118,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				}
 				return;
 			}
+			let widgetChanged = false;
 
 			for (const job of state.asyncJobs.values()) {
 				const widgetStateBefore = widgetRenderKey(job);
@@ -126,9 +127,9 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 					try {
 						if (job.nestedRoute) reconcileNestedAsyncDescendants(job.nestedRoute, { resultsDir, kill: options.kill, now: options.now });
 					} catch (error) {
-					nestedRefreshFailed = true;
-					console.error(`Failed to reconcile nested async descendants for '${job.asyncDir}':`, error);
-				}
+						nestedRefreshFailed = true;
+						console.error(`Failed to reconcile nested async descendants for '${job.asyncDir}':`, error);
+					}
 					try {
 						updateAsyncJobNestedProjection(job);
 					} catch (error) {
@@ -138,8 +139,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				};
 				try {
 					reconcileNestedDescendants();
-					emitNewControlEvents(job);
-				try {
 					emitNewControlEvents(job);
 					const reconciliation = reconcileAsyncRun(job.asyncDir, {
 						resultsDir,
@@ -157,64 +156,61 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 							sessionFile: job.sessionFile,
 						},
 					});
-					const status = reconciliation.status ?? readStatus(job.asyncDir);
-					if (status) {
-						const previousStatus = job.status;
-						job.status = status.state;
-						job.sessionId = status.sessionId ?? job.sessionId;
-						job.activityState = status.activityState;
-						job.lastActivityAt = status.lastActivityAt ?? job.lastActivityAt;
-						job.currentTool = status.currentTool;
-						job.currentToolStartedAt = status.currentToolStartedAt;
-						job.currentPath = status.currentPath;
-						job.turnCount = status.turnCount ?? job.turnCount;
-						job.toolCount = status.toolCount ?? job.toolCount;
-						job.mode = status.mode;
-						job.currentStep = status.currentStep ?? job.currentStep;
-						job.chainStepCount = status.chainStepCount ?? job.chainStepCount;
-						job.startedAt = status.startedAt ?? job.startedAt;
-						job.updatedAt = status.lastUpdate ?? Date.now();
-						if (status.steps?.length) {
-							const groups = normalizeParallelGroups(status.parallelGroups, status.steps.length, status.chainStepCount ?? status.steps.length);
-							job.parallelGroups = groups.length ? groups : job.parallelGroups;
-							job.hasParallelGroups = groups.length > 0 || job.hasParallelGroups;
-							const activeGroup = status.currentStep !== undefined
-								? groups.find((group) => status.currentStep! >= group.start && status.currentStep! < group.start + group.count)
-								: undefined;
-							const visibleSteps = activeGroup
-								? status.steps.slice(activeGroup.start, activeGroup.start + activeGroup.count).map((step, index) => ({ ...step, index: activeGroup.start + index }))
-								: status.steps.map((step, index) => ({ ...step, index }));
-							job.activeParallelGroup = Boolean(activeGroup);
-							job.agents = visibleSteps.map((step) => step.agent);
-							job.steps = visibleSteps;
-							job.stepsTotal = visibleSteps.length;
-							job.runningSteps = visibleSteps.filter((step) => step.status === "running").length;
-							job.completedSteps = visibleSteps.filter((step) => step.status === "complete" || step.status === "completed").length;
-							if (status.state === "complete") job.completedSteps = visibleSteps.length;
-						}
-						job.sessionDir = status.sessionDir ?? job.sessionDir;
-						job.outputFile = status.outputFile ?? job.outputFile;
-						job.totalTokens = status.totalTokens ?? job.totalTokens;
-						job.sessionFile = status.sessionFile ?? job.sessionFile;
-				if ((job.status === "complete" || job.status === "failed" || job.status === "paused") && !nestedRefreshFailed && (previousStatus !== job.status || !state.cleanupTimers.has(job.asyncId))) {
-						if (!hasLiveNestedDescendants(job.nestedChildren)) scheduleCleanup(job.asyncId);
+				const status = reconciliation.status ?? readStatus(job.asyncDir);
+				if (status) {
+					const previousStatus = job.status;
+					job.status = status.state;
+					job.sessionId = status.sessionId ?? job.sessionId;
+					job.activityState = status.activityState;
+					job.lastActivityAt = status.lastActivityAt ?? job.lastActivityAt;
+					job.currentTool = status.currentTool;
+					job.currentToolStartedAt = status.currentToolStartedAt;
+					job.currentPath = status.currentPath;
+					job.turnCount = status.turnCount ?? job.turnCount;
+					job.toolCount = status.toolCount ?? job.toolCount;
+					job.mode = status.mode;
+					job.currentStep = status.currentStep ?? job.currentStep;
+					job.chainStepCount = status.chainStepCount ?? job.chainStepCount;
+					job.startedAt = status.startedAt ?? job.startedAt;
+					job.updatedAt = status.lastUpdate ?? Date.now();
+					if (status.steps?.length) {
+						const groups = normalizeParallelGroups(status.parallelGroups, status.steps.length, status.chainStepCount ?? status.steps.length);
+						job.parallelGroups = groups.length ? groups : job.parallelGroups;
+						job.hasParallelGroups = groups.length > 0 || job.hasParallelGroups;
+						const activeGroup = status.currentStep !== undefined
+							? groups.find((group) => status.currentStep! >= group.start && status.currentStep! < group.start + group.count)
+							: undefined;
+						const visibleSteps = activeGroup
+							? status.steps.slice(activeGroup.start, activeGroup.start + activeGroup.count).map((step, index) => ({ ...step, index: activeGroup.start + index }))
+							: status.steps.map((step, index) => ({ ...step, index }));
+						job.activeParallelGroup = Boolean(activeGroup);
+						job.agents = visibleSteps.map((step) => step.agent);
+						job.steps = visibleSteps;
+						job.stepsTotal = visibleSteps.length;
+						job.runningSteps = visibleSteps.filter((step) => step.status === "running").length;
+						job.completedSteps = visibleSteps.filter((step) => step.status === "complete" || step.status === "completed").length;
+						if (status.state === "complete") job.completedSteps = visibleSteps.length;
 					}
-					if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
-					continue;
-							scheduleCleanup(job.asyncId);
-						}
+					job.sessionDir = status.sessionDir ?? job.sessionDir;
+					job.outputFile = status.outputFile ?? job.outputFile;
+					job.totalTokens = status.totalTokens ?? job.totalTokens;
+					job.sessionFile = status.sessionFile ?? job.sessionFile;
+					if ((job.status === "complete" || job.status === "failed" || job.status === "paused") && !nestedRefreshFailed && (previousStatus !== job.status || !state.cleanupTimers.has(job.asyncId))) {
+						if (!hasLiveNestedDescendants(job.nestedChildren)) scheduleCleanup(job.asyncId);
 						continue;
 					}
+					if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 					job.status = job.status === "queued" ? "running" : job.status;
 					job.updatedAt = Date.now();
-				} catch (error) {
-					console.error(`Failed to read async status for '${job.asyncDir}':`, error);
-					job.status = "failed";
-					job.updatedAt = Date.now();
-					if (!state.cleanupTimers.has(job.asyncId)) {
-						scheduleCleanup(job.asyncId);
-					}
 				}
+			} catch (error) {
+				console.error(`Failed to read async status for '${job.asyncDir}':`, error);
+				job.status = "failed";
+				job.updatedAt = Date.now();
+				if (!state.cleanupTimers.has(job.asyncId)) {
+					scheduleCleanup(job.asyncId);
+				}
+			}
 			}
 
 			if (state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
@@ -276,17 +272,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			rerenderWidget(state.lastUiContext);
 		}
 		if (!hasLiveNestedDescendants(job?.nestedChildren)) scheduleCleanup(asyncId);
-	};
-		const job = state.asyncJobs.get(asyncId);
-		if (job) {
-			job.status = result.success ? "complete" : "failed";
-			job.updatedAt = Date.now();
-			if (result.asyncDir) job.asyncDir = result.asyncDir;
-		}
-		if (state.lastUiContext) {
-			rerenderWidget(state.lastUiContext);
-		}
-		scheduleCleanup(asyncId);
 	};
 
 	const resetJobs = (ctx?: ExtensionContext) => {
