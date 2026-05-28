@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-05-28
+
+### Added
+
+- Added the worker bakeoff benchmark kit: `/worker-bakeoff` prompt template plus `docs/worker-bakeoff/` model list, six implementation task briefs, scoring rubric, scorecard, and bound-task template for comparing worker models in isolated worktrees.
+
+### Changed
+
+- Included worker bakeoff docs in the packaged npm files so the prompt template can reference its rubric and task briefs after install.
+
 ## [0.31.1] - 2026-05-28
 
 ### Fixed

@@ -1,0 +1,1 @@
+task_id,model,label,wall_time_minutes,requests_or_turns,files_touched,lines_added,lines_removed,verification_command,verification_passed,manual_intervention,accepted_patch,correctness,instruction_fidelity,minimality,code_quality,test_behavior,verification_honesty,operational_safety,hard_penalty,total_score,notes
