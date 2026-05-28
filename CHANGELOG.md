@@ -1,7 +1,32 @@
 # Changelog
 
-## [Unreleased]
+## [0.33.2] - 2026-05-28
 
+### Added
+
+- Added `/review-loop` slash command: parent-controlled worker→reviewer→worker loop with stop-on-clean or iteration cap.
+- Added `/gather-context-and-clarify` slash command: subagent context gathering then clarifying questions before planning.
+- Added `/parallel-context-build` slash command: parallel fresh-context `context-builder` agents for planning handoff.
+
+## [0.33.3] - 2026-05-28
+
+### Added
+
+- Added Nested* types: `NestedRunSummary`, `NestedRouteInfo`, `NestedRunMatch`, `NestedRunResolutionScope`, `NestedRunState`, `NestedOwnerState`, `NestedRunAddress`, `NestedStepSummary` to `src/shared/types.ts`.
+- Added nested route env var constants to `src/runs/shared/pi-args.ts` (`PI_SUBAGENT_PARENT_*` series).
+- Added parent route fields to `BuildPiArgsInput` for fanout support.
+
+## [0.33.4] - 2026-05-28
+
+### Added
+
+- Added `nestedRoute?: NestedRouteInfo` and `nestedChildren?: NestedRunSummary[]` to `AsyncJobState` in `src/shared/types.ts`.
+- Added `runId?: string` field to child entries in `AsyncResultFile` result schema (`src/runs/background/async-resume.ts`).
+- Added `resumeByChildRunId(params: { asyncId: string; childRunId: string })` function to `src/runs/background/async-resume.ts` for targeting a specific child by its runId.
+
+### Changed
+
+- `resumeByChildRunId` resolves child index from `result.results[].runId` in the parent job's result file (Phase 4 will extend to also search `nestedChildren`).
 ## [0.33.1] - 2026-05-28
 
 ### Fixed

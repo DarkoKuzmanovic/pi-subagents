@@ -178,7 +178,7 @@ export function isAsyncAvailable(): boolean {
 /**
  * Spawn the async runner process
  */
-function spawnRunner(cfg: object, suffix: string, cwd: string): { pid?: number; error?: string } {
+function spawnRunner(cfg: object, suffix: string, cwd: string, asyncDir?: string): { pid?: number; error?: string } {
 	if (!jitiCliPath) {
 		return { error: "jiti for TypeScript execution could not be found" };
 	}
@@ -197,12 +197,35 @@ function spawnRunner(cfg: object, suffix: string, cwd: string): { pid?: number; 
 	fs.writeFileSync(cfgPath, JSON.stringify(cfg));
 	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
 
+	// Capture the detached runner's own stdout/stderr to a log file instead of discarding
+	// them. The runner's crash handlers (uncaughtException/unhandledRejection/runSubagent
+	// .catch) write a stack trace via console.error; with stdio:"ignore" those vanished,
+	// making a runner crash look like "process disappeared" with no diagnosis. Routing to
+	// <asyncDir>/runner-stderr.log preserves the trace next to the run's other artifacts.
+	let logFd: number | undefined;
+	if (asyncDir) {
+		try {
+			logFd = fs.openSync(path.join(asyncDir, "runner-stderr.log"), "a");
+		} catch {
+			// Best effort: fall back to ignoring stdio if the log cannot be opened.
+			logFd = undefined;
+		}
+	}
+
 	const proc = spawn(process.execPath, [jitiCliPath, runner, cfgPath], {
 		cwd,
 		detached: true,
-		stdio: "ignore",
+		stdio: logFd !== undefined ? ["ignore", logFd, logFd] : "ignore",
 		windowsHide: true,
 	});
+	// The child inherited its own dup of the fd; release the parent's copy.
+	if (logFd !== undefined) {
+		try {
+			fs.closeSync(logFd);
+		} catch {
+			// Best effort.
+		}
+	}
 	proc.on("error", (error) => {
 		console.error(`[pi-subagents] async spawn failed: ${error.message}`);
 	});
@@ -425,6 +448,7 @@ export function executeAsyncChain(
 			},
 			id,
 			runnerCwd,
+			asyncDir,
 		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

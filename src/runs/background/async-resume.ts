@@ -39,7 +39,7 @@ interface AsyncResultFile {
 	success?: boolean;
 	cwd?: string;
 	sessionFile?: string;
-	results?: Array<{ agent?: string; success?: boolean; sessionFile?: string; intercomTarget?: string }>;
+	results?: Array<{ agent?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; runId?: string }>;
 }
 
 export interface AsyncRunLocation {
@@ -314,6 +314,59 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 		cwd: status?.cwd ?? result?.cwd,
 		sessionFile: resolvedSessionFile,
 	};
+}
+
+/**
+ * Resume a specific child of an async run by the child's runId.
+ * Looks up the child index from the result file's `results[].runId` field.
+ * Phase 4 will extend this to also search `nestedChildren` on AsyncJobState.
+ */
+export function resumeByChildRunId(
+	params: { asyncId: string; childRunId: string },
+	deps?: AsyncResumeDeps,
+): AsyncResumeTarget {
+	const asyncDirRoot = deps?.asyncDirRoot ?? ASYNC_DIR;
+	const resultsDir = deps?.resultsDir ?? RESULTS_DIR;
+
+	// Resolve the parent async job location
+	const location = resolveAsyncRunLocation({ id: params.asyncId }, asyncDirRoot, resultsDir);
+	if (!location.asyncDir && !location.resultPath) {
+		throw new Error(`Async run '${params.asyncId}' not found. Provide a valid async run id.`);
+	}
+
+	const asyncDir = location.asyncDir ?? asyncDirRoot;
+	const resultPath = location.resultPath ?? path.join(asyncDir, "result.json");
+
+	// Read result file
+	let result: AsyncResultFile | undefined;
+	try {
+		result = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultFile;
+	} catch {
+		throw new Error(`Could not read result file for async run '${params.asyncId}'.`);
+	}
+
+	// Find child by runId in results array
+	const childEntry = result.results?.find((r) => r.runId === params.childRunId);
+	if (!childEntry) {
+		const runIds = result.results?.map((r) => r.runId).filter((id): id is string => id !== undefined);
+		throw new Error(
+			`Child with runId '${params.childRunId}' not found in async run '${params.asyncId}'.` +
+			(runIds ? ` Available runIds: ${runIds.join(", ")}` : " No runId fields found in result.results."),
+		);
+	}
+
+	// Resolve index from results array
+	const childIndex = result.results?.indexOf(childEntry) ?? -1;
+	if (childIndex === -1) {
+		throw new Error(`Inconsistent result file for async run '${params.asyncId}'.`);
+	}
+
+	// Delegate to index-based resolution with the found index
+	const target = resolveAsyncResumeTarget({ runId: params.asyncId, index: childIndex }, deps);
+	if (target.kind !== "revive") {
+		throw new Error(`Could not resolve async run '${params.asyncId}' child at index ${childIndex}.`);
+	}
+	return target;
 }
 
 export function buildRevivedAsyncTask(target: AsyncResumeTarget, message: string): string {

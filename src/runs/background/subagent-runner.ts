@@ -1618,32 +1618,18 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				artifactPaths: singleResult.artifactPaths,
 			});
 
-			const cumulativeTokens = config.sessionDir ? parseSessionTokens(config.sessionDir) : null;
-			let stepTokens: TokenUsage | null = cumulativeTokens
-				? {
-						input: cumulativeTokens.input - previousCumulativeTokens.input,
-						output: cumulativeTokens.output - previousCumulativeTokens.output,
-						total: cumulativeTokens.total - previousCumulativeTokens.total,
-					}
-				: null;
-			if (cumulativeTokens) {
-				previousCumulativeTokens = cumulativeTokens;
-			} else {
-				stepTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
-				if (stepTokens) {
-					previousCumulativeTokens = {
-						input: previousCumulativeTokens.input + stepTokens.input,
-						output: previousCumulativeTokens.output + stepTokens.output,
-						total: previousCumulativeTokens.total + stepTokens.total,
-					};
-				}
-			}
-
 			const stepEndTime = Date.now();
 
 			// Deregister the per-step interrupt (child has exited).
 			activeChildInterrupts.delete(flatIndex);
 
+			// Commit the step's terminal status BEFORE any token-accounting or session
+			// post-processing. parseSessionTokens reads/parses the whole session file, which
+			// can be large and slow for big runs; if anything in that bookkeeping throws, the
+			// runner would exit (uncaughtException -> exit(1)) before recording that the agent
+			// actually succeeded, and the stale-run reconciler would then mark a completed run
+			// as "failed". Recording success first lets the reconciler salvage it as complete.
+			//
 			// Preserve killStep's writes when the step was killed by inactivity timeout.
 			// Without this, an `interrupted` child returns exitCode 0 and overwrites status to "complete".
 			const wasTimedOut = statusPayload.steps[flatIndex].activityState === "timed_out";
@@ -1657,12 +1643,43 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			statusPayload.steps[flatIndex].model = singleResult.model;
 			statusPayload.steps[flatIndex].attemptedModels = singleResult.attemptedModels;
 			statusPayload.steps[flatIndex].modelAttempts = singleResult.modelAttempts;
-			if (stepTokens) {
-				statusPayload.steps[flatIndex].tokens = stepTokens;
-				statusPayload.totalTokens = { ...previousCumulativeTokens };
-			}
 			statusPayload.lastUpdate = stepEndTime;
 			writeAtomicJson(statusPath, statusPayload);
+
+			// Token accounting is best-effort bookkeeping; never let it fail an otherwise
+			// successful run. Declared outside the try so the step-completed event below can
+			// still reference it if accounting throws.
+			let stepTokens: TokenUsage | null = null;
+			try {
+				const cumulativeTokens = config.sessionDir ? parseSessionTokens(config.sessionDir) : null;
+				stepTokens = cumulativeTokens
+					? {
+							input: cumulativeTokens.input - previousCumulativeTokens.input,
+							output: cumulativeTokens.output - previousCumulativeTokens.output,
+							total: cumulativeTokens.total - previousCumulativeTokens.total,
+						}
+					: null;
+				if (cumulativeTokens) {
+					previousCumulativeTokens = cumulativeTokens;
+				} else {
+					stepTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
+					if (stepTokens) {
+						previousCumulativeTokens = {
+							input: previousCumulativeTokens.input + stepTokens.input,
+							output: previousCumulativeTokens.output + stepTokens.output,
+							total: previousCumulativeTokens.total + stepTokens.total,
+						};
+					}
+				}
+				if (stepTokens) {
+					statusPayload.steps[flatIndex].tokens = stepTokens;
+					statusPayload.totalTokens = { ...previousCumulativeTokens };
+					statusPayload.lastUpdate = Date.now();
+					writeAtomicJson(statusPath, statusPayload);
+				}
+			} catch (tokenErr) {
+				console.error("Token accounting failed (non-fatal):", tokenErr);
+			}
 
 			appendJsonl(eventsPath, JSON.stringify({
 				type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
