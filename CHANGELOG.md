@@ -37,6 +37,15 @@
 ### Changed
 
 - `resumeByChildRunId` resolves child index from `result.results[].runId` in the parent job's result file (Phase 4 will extend to also search `nestedChildren`).
+## [0.33.5] - 2026-05-28
+
+### Added
+
+- Added `nestedChildren?: NestedRunSummary[]` population in async job tracker: every poll cycle calls `updateAsyncJobNestedProjection` to refresh from nested events, and `handleComplete` does a final refresh before cleanup decision.
+- Added `nestedRoute` propagation from `AsyncStartedEvent.nestedRoute` into `AsyncJobState` on job start.
+- Added `reconcileNestedAsyncDescendants` to stale-run reconciler: reconciles running/queued nested async runs and writes completion/updated events back to the nested event log.
+- Added `hasLiveNestedDescendants` guard on async job cleanup: jobs with live nested children are not cleaned up until all descendants reach terminal state.
+
 ## [0.33.1] - 2026-05-28
 
 ### Fixed
