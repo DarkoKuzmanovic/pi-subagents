@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-05-28
+
+### Fixed
+
+- Corrected the scout bakeoff Qwen candidate model id from `crofai/qwen03.5-9b` to `crofai/qwen3.5-9b`; the former failed provider lookup with `404 Model Not Known` during the SB-03 pilot.
+
 ## [0.33.0] - 2026-05-28
 
 ### Added

@@ -12,7 +12,7 @@ const tasksDir = path.join(bakeoffDir, "tasks");
 
 const expectedModels = [
 	"minimax/MiniMax-M2.7-highspeed",
-	"crofai/qwen03.5-9b",
+	"crofai/qwen3.5-9b",
 	"crofai/greg-1-mini",
 	"crofai/kimi-k2.5-lightning",
 	"openai-codex/gpt-5.3-codex-spark",

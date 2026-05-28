@@ -6,8 +6,8 @@
       "agent": "scout"
     },
     {
-      "label": "qwen035-9b",
-      "model": "crofai/qwen03.5-9b",
+      "label": "qwen35-9b",
+      "model": "crofai/qwen3.5-9b",
       "agent": "scout"
     },
     {

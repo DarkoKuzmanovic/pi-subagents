@@ -7,7 +7,7 @@ Run a scout-subagent bakeoff for the task below. Compare the same read-only reco
 Candidate models:
 
 - `minimax/MiniMax-M2.7-highspeed`
-- `crofai/qwen03.5-9b`
+- `crofai/qwen3.5-9b`
 - `crofai/greg-1-mini`
 - `crofai/kimi-k2.5-lightning`
 - `openai-codex/gpt-5.3-codex-spark`
@@ -38,9 +38,9 @@ subagent({
     },
     {
       agent: "scout",
-      model: "crofai/qwen03.5-9b",
+      model: "crofai/qwen3.5-9b",
       task: `<BOUND-SCOUT-BRIEF>`,
-      output: "scout-bakeoff/<TASK-ID>/qwen035-9b.md",
+      output: "scout-bakeoff/<TASK-ID>/qwen35-9b.md",
       progress: false,
     },
     {

@@ -7,7 +7,7 @@ This kit compares candidate models for the `scout` subagent role: fast, cheap, p
 See `models.json` for the canonical model list:
 
 1. `minimax/MiniMax-M2.7-highspeed`
-2. `crofai/qwen03.5-9b`
+2. `crofai/qwen3.5-9b`
 3. `crofai/greg-1-mini`
 4. `crofai/kimi-k2.5-lightning`
 5. `openai-codex/gpt-5.3-codex-spark`
