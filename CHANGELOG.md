@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-05-28
+
+### Added
+
+- `synthesizer` agent (`agents/synthesizer.md`): a strong fan-in agent that fuses multiple parallel scout/researcher briefs into one decision-ready synthesis — preserves citations, surfaces conflicts instead of smoothing them over, and flags per-finding confidence. Designed as the reduce step after a parallel recon fan-out.
+- `/recon` prompt (`prompts/recon.md`): partitioned multi-model parallel recon playbook. Fans out diverse-model `scout`/`researcher` lanes across distinct angles (model diversity over replication), each writing a tight evidence-dense brief to a file, then offloads the synthesis to the `synthesizer` agent so the orchestrator only ingests the digest. Complements `/parallel-research` (which keeps synthesis in the parent).
+
 ## [0.30.0] - 2026-05-28
 
 ### Added
