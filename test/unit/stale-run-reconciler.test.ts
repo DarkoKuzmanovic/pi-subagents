@@ -185,3 +185,79 @@ describe("async stale-run reconciliation", () => {
 		}
 	});
 });
+
+it("repairs a stale run as COMPLETE when result file is missing but all steps succeeded", () => {
+	const root = tempRoot("pi-stale-complete-salvage-");
+	try {
+		const asyncDir = path.join(root, "run-salvage");
+		const resultsDir = path.join(root, "results");
+		fs.mkdirSync(resultsDir, { recursive: true });
+		writeStatus(asyncDir, {
+			runId: "run-salvage",
+			mode: "parallel",
+			state: "running",
+			pid: 12345,
+			startedAt: 1000,
+			lastUpdate: 1000,
+			steps: [
+				{ agent: "scout", status: "complete", exitCode: 0, startedAt: 1000, endedAt: 1500, sessionFile: "/sessions/scout.jsonl" },
+				{ agent: "researcher", status: "complete", exitCode: 0, startedAt: 1000, endedAt: 1500, sessionFile: "/sessions/researcher.jsonl" },
+			],
+		});
+
+		const result = reconcileAsyncRun(asyncDir, {
+			resultsDir,
+			kill: () => { throw errno("ESRCH"); },
+			now: () => 2000,
+		});
+
+		assert.equal(result.repaired, true);
+		assert.equal(result.status?.state, "complete");
+		assert.equal(result.status?.steps?.[0]?.status, "complete");
+		assert.equal(result.status?.steps?.[1]?.status, "complete");
+		// result file should have been written with success:true
+		const resultContent = JSON.parse(fs.readFileSync(result.resultPath!, "utf-8"));
+		assert.equal(resultContent.success, true);
+		assert.equal(resultContent.state, "complete");
+		assert.equal(resultContent.exitCode, 0);
+		assert.equal(resultContent.results.length, 2);
+		assert.equal(resultContent.results[0].agent, "scout");
+		assert.equal(resultContent.results[1].agent, "researcher");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+it("marks a stale run as FAILED when result file missing and some steps failed", () => {
+	const root = tempRoot("pi-stale-mixed-fail-");
+	try {
+		const asyncDir = path.join(root, "run-mixed");
+		const resultsDir = path.join(root, "results");
+		fs.mkdirSync(resultsDir, { recursive: true });
+		writeStatus(asyncDir, {
+			runId: "run-mixed",
+			mode: "parallel",
+			state: "running",
+			pid: 12345,
+			startedAt: 1000,
+			lastUpdate: 1000,
+			steps: [
+				{ agent: "scout", status: "complete", exitCode: 0, startedAt: 1000, endedAt: 1500 },
+				{ agent: "researcher", status: "failed", exitCode: 1, startedAt: 1000, endedAt: 1500 },
+			],
+		});
+
+		const result = reconcileAsyncRun(asyncDir, {
+			resultsDir,
+			kill: () => { throw errno("ESRCH"); },
+			now: () => 2000,
+		});
+
+		assert.equal(result.repaired, true);
+		assert.equal(result.status?.state, "failed");
+		assert.equal(result.status?.steps?.[0]?.status, "complete");
+		assert.equal(result.status?.steps?.[1]?.status, "failed");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

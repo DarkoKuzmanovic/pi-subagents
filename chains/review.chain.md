@@ -45,7 +45,7 @@ task: |
 
   Read changed files directly. Return concise, evidence-backed findings with
   exact file:line references. Do not edit files.
-model: wafer/Qwen3.5-397B-A17B
+model: mimo/mimo-v2.5-pro
 output: review/findings-simplicity.md
 
 ## synthesis
@@ -71,4 +71,4 @@ task: |
   (e.g. "3 blockers — must fix before landing" or "No blockers, 2 high-priority
   improvements").
 output: review/synthesis.md
-model: wafer/GLM-5.1
+model: crofai/glm-5.1-precision

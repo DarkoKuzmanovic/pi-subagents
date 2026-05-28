@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-05-28
+
 ### Added
 
 - Added subagent hub TUI (`src/tui/subagent-hub.ts`) for browsing and configuring agent model overrides before launch.
@@ -30,7 +32,7 @@
 - Aliased `ControlEventType` to `ActivityState` in `types.ts`.
 - Made `SubagentState.foregroundRuns` and `SubagentState.pendingForegroundControlNotices` non-optional; removed dead null-guards and `??=` fallbacks in `control-notices.ts` and `subagent-executor.ts`.
 - Renamed `POLL_INTERVAL_MS` to `WATCHER_POLL_INTERVAL_MS` in `result-watcher.ts` for clarity.
-- Updated `review` chain template model defaults to current providers (`kimi-k2.6`, `Qwen3.5-397B-A17B`).
+- Updated `review` chain template model defaults to current providers (`gpt-5.5`, `kimi-k2.6`, `mimo-v2.5-pro`, `glm-5.1-precision`).
 - Refactored `src/runs/foreground/execution.ts` and `src/runs/background/subagent-runner.ts` to consume shared primitive modules (`usage.ts`, `exit-drain.ts`, `output-buffer.ts`, `stdio-parser.ts`); removed duplicate local definitions of `emptyUsage`, `sumUsage`, drain timer constants, `appendRecentOutput`/`appendRecentStepOutput`, and inline JSON line parsing.
 - Converted `executeAsyncSingle` from a ~125-line duplicate of `executeAsyncChain` into a ~35-line thin wrapper; `AsyncChainParams.resultMode` widened to `SubagentRunMode`. Zero caller changes.
 
@@ -47,6 +49,10 @@
 - Unexported `splitKnownThinkingSuffix` in `model-info.ts` (internal utility, no external callers).
 
 ### Fixed
+
+- Salvage completed async/parallel runs whose runner process dies before writing the aggregated result. The stale-run reconciler now reconstructs a successful result from `status.json` (when every step is terminal with exit code 0) instead of marking the whole run failed; runs with any failed/incomplete step still fail as before (`src/runs/background/stale-run-reconciler.ts`).
+- Persist the run result file *before* session-sharing network I/O and post-processing in `subagent-runner.ts`, so a crash or external kill during those steps can no longer lose a completed run's output (the final write still enriches it with share links and the resolved session file).
+- Install `uncaughtException`/`unhandledRejection` handlers in `subagent-runner.ts` so a runner crash is logged rather than vanishing silently.
 
 - Fixed stray tab indentation on `getLastActivity` in `utils.ts`.
 - Fixed broken imports in `subagent-runner.ts` (duplicate `aggregateParallelOutputs`, dangling `findLatestSessionFile` line).

@@ -233,6 +233,79 @@ function writeFailedRepair(asyncDir: string, status: AsyncStatus, resultPath: st
 	return { status: repair.status, repaired: true, resultPath, message: repair.message };
 }
 
+/** True when every non-empty step is terminal with exitCode 0 (or missing exitCode means success). */
+function allStepsSucceeded(steps: AsyncStatus["steps"]): boolean {
+	if (!steps || steps.length === 0) return false;
+	return steps.every((s) => {
+		const terminal = s.status === "complete" || s.status === "completed";
+		const codeOk = s.exitCode === 0 || (s.exitCode == null && terminal);
+		return terminal && codeOk;
+	});
+}
+
+function buildSuccessRepair(status: AsyncStatus, asyncDir: string, now: number): { status: AsyncStatus; result: object; message: string } {
+	const runId = status.runId || path.basename(asyncDir);
+	const pid = typeof status.pid === "number" ? status.pid : "unknown";
+	const message = `Run reconstructed from completed steps after runner process ${pid} exited before writing result; full output in session files.`;
+	const steps = status.steps ?? [{ agent: "subagent", status: "complete" as const, exitCode: 0 }];
+	const repairedStatus: AsyncStatus = {
+		...status,
+		state: "complete",
+		activityState: undefined,
+		lastUpdate: now,
+		endedAt: now,
+		steps: steps.map((s) => ({
+			...s,
+			endedAt: s.endedAt ?? now,
+			durationMs: s.startedAt !== undefined && s.durationMs === undefined ? Math.max(0, now - s.startedAt) : s.durationMs,
+		})),
+	};
+	const resultAgent = steps[status.currentStep ?? 0]?.agent ?? steps[0]?.agent ?? "subagent";
+	return {
+		status: repairedStatus,
+		message,
+		result: {
+			id: runId,
+			agent: resultAgent,
+			mode: status.mode,
+			success: true,
+			state: "complete",
+			summary: message,
+			results: steps.map((step) => ({
+				agent: step.agent,
+				output: "",
+				error: undefined,
+				success: true,
+				model: step.model,
+				attemptedModels: step.attemptedModels,
+				modelAttempts: step.modelAttempts,
+				sessionFile: step.sessionFile,
+			})),
+			exitCode: 0,
+			timestamp: now,
+			durationMs: Math.max(0, now - status.startedAt),
+			asyncDir,
+			sessionId: status.sessionId,
+			sessionFile: status.sessionFile,
+		},
+	};
+}
+
+function writeSuccessRepair(asyncDir: string, status: AsyncStatus, resultPath: string, now: number): ReconcileAsyncRunResult {
+	const repair = buildSuccessRepair(status, asyncDir, now);
+	writeAtomicJson(resultPath, repair.result);
+	writeAtomicJson(path.join(asyncDir, "status.json"), repair.status);
+	appendJsonl(path.join(asyncDir, "events.jsonl"), {
+		type: "subagent.run.repaired_stale",
+		ts: now,
+		runId: repair.status.runId,
+		pid: status.pid,
+		resultPath,
+		message: repair.message,
+	});
+	return { status: repair.status, repaired: true, resultPath, message: repair.message };
+}
+
 export function checkPidLiveness(pid: number, kill: KillFn = process.kill): PidLiveness {
 	try {
 		kill(pid, 0);
@@ -287,5 +360,8 @@ export function reconcileAsyncRun(asyncDir: string, options: ReconcileAsyncRunOp
 		return writeFailedRepair(asyncDir, effectiveStatus, resultPath, now, message);
 	}
 
+	if (allStepsSucceeded(effectiveStatus.steps)) {
+		return writeSuccessRepair(asyncDir, effectiveStatus, resultPath, now);
+	}
 	return writeFailedRepair(asyncDir, effectiveStatus, resultPath, now);
 }

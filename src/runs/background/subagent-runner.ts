@@ -1719,6 +1719,63 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	let gistUrl: string | undefined;
 	let shareError: string | undefined;
 
+	// Build the result payload once; share/session fields are injected per-write.
+	const buildResultPayload = (extra: {
+		endedAt: number;
+		sessionFile?: string;
+		shareUrl?: string;
+		gistUrl?: string;
+		shareError?: string;
+	}) => ({
+		id,
+		agent: agentName,
+		mode: resultMode,
+		success: !interrupted && results.every((r) => r.success),
+		state: interrupted ? "paused" : results.every((r) => r.success) ? "complete" : "failed",
+		summary: interrupted ? "Paused after interrupt. Waiting for explicit next action." : summary,
+		results: results.map((r) => ({
+			agent: r.agent,
+			output: r.output,
+			error: r.error,
+			success: r.success,
+			skipped: r.skipped || undefined,
+			sessionFile: r.sessionFile,
+			intercomTarget: r.intercomTarget,
+			model: r.model,
+			attemptedModels: r.attemptedModels,
+			modelAttempts: r.modelAttempts,
+			artifactPaths: r.artifactPaths,
+			truncated: r.truncated,
+		})),
+		exitCode: interrupted || results.every((r) => r.success) ? 0 : 1,
+		timestamp: extra.endedAt,
+		durationMs: extra.endedAt - overallStartTime,
+		truncated,
+		artifactsDir,
+		cwd,
+		asyncDir,
+		sessionId: config.sessionId,
+		sessionFile: extra.sessionFile,
+		intercomTarget: config.controlIntercomTarget,
+		shareUrl: extra.shareUrl,
+		gistUrl: extra.gistUrl,
+		shareError: extra.shareError,
+		...(taskIndex !== undefined && { taskIndex }),
+		...(totalTasks !== undefined && { totalTasks }),
+	});
+	const writeResultSafe = (payload: object) => {
+		try {
+			writeAtomicJson(resultPath, payload);
+		} catch (err) {
+			console.error(`Failed to write result file ${resultPath}:`, err);
+		}
+	};
+
+	// Persist a result BEFORE session-sharing network I/O and post-processing, so a
+	// crash or external kill during those steps cannot lose a completed run. The
+	// final write below enriches it with share links and the resolved session file.
+	writeResultSafe(buildResultPayload({ endedAt: Date.now(), sessionFile: latestSessionFile }));
+
 	if (shareEnabled) {
 		sessionFile = config.sessionDir
 			? (findLatestSessionFile(config.sessionDir) ?? undefined)
@@ -1794,49 +1851,28 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		shareError,
 	});
 
-	try {
-		writeAtomicJson(resultPath, {
-			id,
-			agent: agentName,
-			mode: resultMode,
-			success: !interrupted && results.every((r) => r.success),
-			state: interrupted ? "paused" : results.every((r) => r.success) ? "complete" : "failed",
-			summary: interrupted ? "Paused after interrupt. Waiting for explicit next action." : summary,
-			results: results.map((r) => ({
-				agent: r.agent,
-				output: r.output,
-				error: r.error,
-				success: r.success,
-				skipped: r.skipped || undefined,
-				sessionFile: r.sessionFile,
-				intercomTarget: r.intercomTarget,
-				model: r.model,
-				attemptedModels: r.attemptedModels,
-				modelAttempts: r.modelAttempts,
-				artifactPaths: r.artifactPaths,
-				truncated: r.truncated,
-			})),
-			exitCode: interrupted || results.every((r) => r.success) ? 0 : 1,
-			timestamp: runEndedAt,
-			durationMs: runEndedAt - overallStartTime,
-			truncated,
-			artifactsDir,
-			cwd,
-			asyncDir,
-			sessionId: config.sessionId,
+	writeResultSafe(
+		buildResultPayload({
+			endedAt: runEndedAt,
 			sessionFile: effectiveSessionFile,
-			intercomTarget: config.controlIntercomTarget,
 			shareUrl,
 			gistUrl,
 			shareError,
-			...(taskIndex !== undefined && { taskIndex }),
-			...(totalTasks !== undefined && { totalTasks }),
-		});
-	} catch (err) {
-		console.error(`Failed to write result file ${resultPath}:`, err);
-	}
+		}),
+	);
 }
 
+// Last-resort crash handlers: a runner crash must be logged rather than vanish
+// silently. Completed work is still salvaged from status.json by the stale-run
+// reconciler (a dead runner whose steps all succeeded is repaired as complete).
+process.on("uncaughtException", (err) => {
+	console.error("Subagent runner uncaughtException:", err);
+	process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+	console.error("Subagent runner unhandledRejection:", reason);
+	process.exit(1);
+});
 const configArg = process.argv[2];
 if (configArg) {
 	try {
