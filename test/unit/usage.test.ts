@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { emptyUsage, sumUsage } from "../../src/runs/shared/usage.js";
+import { emptyUsage, sumUsage, tokenUsageFromAttempts } from "../../src/runs/shared/usage.js";
 
 describe("emptyUsage", () => {
 	it("returns zero-filled Usage object", () => {
@@ -41,5 +41,41 @@ describe("sumUsage", () => {
 		const original = target;
 		sumUsage(target, { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 });
 		assert.strictEqual(target, original);
+	});
+});
+
+describe("tokenUsageFromAttempts", () => {
+	const usage = (input: number, output: number) => ({ input, output, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 });
+
+	// Regression guard: this helper was referenced by the parallel async runner but never
+	// defined, throwing `ReferenceError: tokenUsageFromAttempts is not defined` and crashing
+	// the detached runner before it wrote a result (runs 8d0ce5b7 / deb83f54 / 2a652574).
+	it("is defined and callable", () => {
+		assert.equal(typeof tokenUsageFromAttempts, "function");
+	});
+
+	it("returns null for undefined or empty attempts", () => {
+		assert.equal(tokenUsageFromAttempts(undefined), null);
+		assert.equal(tokenUsageFromAttempts([]), null);
+	});
+
+	it("returns null when no attempt carries usage data", () => {
+		assert.equal(tokenUsageFromAttempts([{ model: "m", success: true }]), null);
+	});
+
+	it("sums input/output across attempts with total = input + output", () => {
+		const result = tokenUsageFromAttempts([
+			{ model: "a", success: false, usage: usage(10, 5) },
+			{ model: "b", success: true, usage: usage(20, 7) },
+		]);
+		assert.deepEqual(result, { input: 30, output: 12, total: 42 });
+	});
+
+	it("ignores attempts missing usage while summing the rest", () => {
+		const result = tokenUsageFromAttempts([
+			{ model: "a", success: false },
+			{ model: "b", success: true, usage: usage(3, 4) },
+		]);
+		assert.deepEqual(result, { input: 3, output: 4, total: 7 });
 	});
 });

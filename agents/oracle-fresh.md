@@ -1,7 +1,7 @@
 ---
 name: oracle-fresh
 description: Drift-check oracle that reads chain artifacts instead of forking the parent — cheaper alternative to oracle for chain-based workflows
-tools: read, grep, find, ls, bash, intercom
+tools: read, grep, find, ls, bash, contact_supervisor, intercom
 thinking: high
 systemPromptMode: replace
 inheritProjectContext: true

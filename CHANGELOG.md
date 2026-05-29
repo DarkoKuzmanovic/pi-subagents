@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.34.2] - 2026-05-29
+
+### Fixed
+
+- Fix async runner crash that silently failed parallel background runs. `tokenUsageFromAttempts` was called in the parallel token-accounting block (`subagent-runner.ts`) but never defined or imported, throwing `ReferenceError: tokenUsageFromAttempts is not defined` and killing the detached runner **before it wrote a result file** — leaving the run to be marked failed (or reconstructed with empty output) by stale-run reconciliation, even though every child agent had completed. The sequential path masked the same broken reference inside a try/catch; the parallel path was unguarded, so it was fatal. Confirmed as the root cause of three runner-death incidents this cycle (runs `8d0ce5b7`, `deb83f54`, `2a652574`), exposed widely by `c567660` routing more chains through the async/parallel path.
+  - Defined `tokenUsageFromAttempts(attempts)` in `src/runs/shared/usage.ts` (sums per-attempt `Usage` into a `TokenUsage`, returns null when no usage is present) and imported it into the runner.
+  - Wrapped the parallel token-accounting block in try/catch so token bookkeeping can never fail an otherwise-successful run before the result is written, mirroring the sequential path.
+
+### Changed
+
+- Renamed the parallel recon/review workflow prompts: `/recon` → `/mesh-recon` (`prompts/mesh-recon.md`) and `/parallel-review` → `/mesh-review` (`prompts/mesh-review.md`); removed the superseded `prompts/recon.md`, `prompts/parallel-review.md`, and the `chains/review.chain.md` chain. Updated `README.md` and the packaged `pi-subagents` SKILL to reference the new command names.
+- Refreshed the bundled agent definitions (`agents/*.md`): granted the cross-agent `intercom` tool fleet-wide (context-builder, oracle, oracle-fresh, planner, researcher, reviewer, scout, synthesizer, deslopper), tightened review/edit-gating guidance, and adjusted per-agent `thinking`/context defaults. Restored `deslopper`'s `tools` allowlist and de-duplicated its `inheritProjectContext` key (a prior edit had dropped the allowlist and left a conflicting duplicate, which failed the “bundled agents all have explicit tool allowlists” guard).
+
+### Tests
+
+- Added 5 `tokenUsageFromAttempts` unit tests (defined-and-callable regression guard, null on empty/usage-less attempts, summation, and partial-usage handling).
+
 ## [0.34.1] - 2026-05-29
 
 ### Fixed

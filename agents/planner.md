@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Creates implementation plans from context and requirements
-tools: read, grep, find, ls, write, intercom
+tools: read, grep, find, ls, write, contact_supervisor, intercom
 thinking: high
 systemPromptMode: replace
 inheritProjectContext: true
@@ -48,6 +48,9 @@ Which tasks depend on others.
 
 ## Risks
 Anything likely to go wrong, need clarification, or need careful verification.
+
+## Rollback
+How to undo the changes if something goes wrong. Which commands, files, or steps to reverse.
 
 Keep the plan concrete. Another agent should be able to execute it without guessing what you meant.
 

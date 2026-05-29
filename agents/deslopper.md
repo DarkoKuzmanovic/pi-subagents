@@ -1,10 +1,10 @@
 ---
 name: deslopper
 description: Codebase cleanup and dead-code removal agent. Identifies unused exports, dead code, naming inconsistencies, and structural issues. Use with --review for read-only audit or default for cleanup with verification.
-tools: read, grep, find, ls, bash, edit, contact_supervisor
-thinking: medium
+tools: read, grep, find, ls, bash, edit, contact_supervisor, intercom
+thinking: high
 systemPromptMode: replace
-inheritProjectContext: false
+inheritProjectContext: true
 inheritSkills: false
 defaultContext: fresh
 defaultReads: package.json

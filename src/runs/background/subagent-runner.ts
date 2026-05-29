@@ -70,7 +70,7 @@ import {
 	type WorktreeSetup,
 } from "../shared/worktree.ts";
 import { writeInitialProgressFile } from "../../shared/settings.ts";
-import { emptyUsage } from "../shared/usage.ts";
+import { emptyUsage, tokenUsageFromAttempts } from "../shared/usage.ts";
 import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
@@ -1508,23 +1508,29 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 				flatIndex += group.parallel.length;
 
-				for (let t = 0; t < group.parallel.length; t++) {
-					const fi = groupStartFlatIndex + t;
-					const sessionTokens = config.sessionDir
-						? parseSessionTokens(path.join(config.sessionDir, `parallel-${t}`))
-						: null;
-					const taskTokens = sessionTokens ?? tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
-					if (!taskTokens) continue;
-					statusPayload.steps[fi].tokens = taskTokens;
-					previousCumulativeTokens = {
-						input: previousCumulativeTokens.input + taskTokens.input,
-						output: previousCumulativeTokens.output + taskTokens.output,
-						total: previousCumulativeTokens.total + taskTokens.total,
-					};
+				try {
+					for (let t = 0; t < group.parallel.length; t++) {
+						const fi = groupStartFlatIndex + t;
+						const sessionTokens = config.sessionDir
+							? parseSessionTokens(path.join(config.sessionDir, `parallel-${t}`))
+							: null;
+						const taskTokens = sessionTokens ?? tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
+						if (!taskTokens) continue;
+						statusPayload.steps[fi].tokens = taskTokens;
+						previousCumulativeTokens = {
+							input: previousCumulativeTokens.input + taskTokens.input,
+							output: previousCumulativeTokens.output + taskTokens.output,
+							total: previousCumulativeTokens.total + taskTokens.total,
+						};
+					}
+					statusPayload.totalTokens = { ...previousCumulativeTokens };
+					statusPayload.lastUpdate = Date.now();
+					writeAtomicJson(statusPath, statusPayload);
+				} catch (tokenErr) {
+					// Token accounting is best-effort bookkeeping; never let it fail an otherwise
+					// successful parallel run before the result is written (mirrors the sequential path).
+					console.error("Parallel token accounting failed (non-fatal):", tokenErr);
 				}
-				statusPayload.totalTokens = { ...previousCumulativeTokens };
-				statusPayload.lastUpdate = Date.now();
-				writeAtomicJson(statusPath, statusPayload);
 
 				for (const pr of parallelResults) {
 					results.push({

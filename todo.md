@@ -8,6 +8,7 @@ This file is the long-lived product backlog for the local `pi-subagents` fork. I
 - [ ] **Revisit async-by-default routing for recon chains (`c567660`)** — `c567660` changed chain `effectiveAsync` from `requestedAsync && (hasChain ? clarify === false : clarify !== true)` to `requestedAsync && clarify !== true`. With user config `asyncByDefault: true`, chains that omit `clarify` now route to the background runner, exposing the runner-death + (now-fixed) completion-guard paths far more often. This is the real reason guard/dispatch failures "started yesterday." Decide whether short read-only recon chains (e.g. scout-led) should prefer foreground, or whether the async path just needs the reconciliation fix above. Not a bug in `c567660` itself — it surfaced latent async-path fragility.
 - [ ] **Persistent / warm subagent workers** — keep a small pool of child `pi` worker processes/session shells alive so dispatch can reuse an already-loaded agent instead of paying full Pi startup/extension-load cost every task. Targets the user pain point: latency waiting for fresh child Pi sessions. Different from true in-process sessions: still separate processes for crash isolation, but warmed and reusable. Needs design for worker identity, idle timeout, context reset between tasks, session attachment/resume semantics, cancellation, and safe tool/extension reconfiguration.
 - [ ] **Mid-run steering** — inject a message into a running subagent without killing it. This is the primitive that unlocks better long-running-worker UX: course-correct, ask for wrap-up, or answer a child’s question. Requires: child-process IPC channel or intercom delivery, parent-side `subagent` action `steer`, and a way for a child `pi` session to receive an injected user message mid-turn.
+- [ ] **Oracle "failed" signal on proposal-only runs** — Oracle run with an analysis/proposal-only task (e.g. ending "Do NOT make any edits — only report findings") trips the completion mutation guard, so Pi reports the subagent as "failed" despite valid output. Same class as the delegate/embedded-payload false-positive fixed in 0.34.1, but Oracle is **not** name-exempt and its framing ("only report findings" / "do not make any edits") doesn't match the current no-edit/analysis patterns in `completion-guard.ts`. Fix options: (1) frame Oracle tasks as implementation (workaround), (2) add an `analysis`/`no-op` result mode that suppresses the guard, (3) add a `resultMode: "analysis"` field to subagent config, or (4) extend the guard's analysis-only patterns to cover Oracle's framing. Observed during the mesh-recon/mesh-review review session, 2026-05-29.
 
 ## Keep — high-leverage backlog
 
@@ -41,6 +42,16 @@ This file is the long-lived product backlog for the local `pi-subagents` fork. I
 - [ ] **In-process sessions instead of child `pi` processes** — faster startup, but loses crash isolation and would require a major rewrite. Prefer warm separate workers first.
 - [ ] **Claude Code-style API aliases** — `Agent` / `get_subagent_result` aliases would add surface area and two mental models. Keep the native `subagent` API.
 - [ ] **Type-only import for `MemoryScope`** — intentionally skipped because `MemoryScope` is still a pure type. Changing to a runtime import would break.
+
+## Deferred agent-tuning decisions
+
+Per-agent config tradeoffs surfaced during the mesh-recon/mesh-review review session (2026-05-29); deferred pending a decision.
+
+- [ ] **worker context: fork vs fresh** — `defaultContext: fork` keeps conversation history but is expensive; `fresh` is cheap but loses nuance.
+- [ ] **worker model override** — `MiniMax-M2.7-highspeed` → a quality model (gpt-5.5 or deepseek); affects cost and implementation quality.
+- [ ] **researcher model override** — `MiniMax-M2.7-highspeed` → `kimi-k2.6-precision`; affects research quality.
+- [ ] **scout thinking level** — `thinking: low` → `medium`; speed vs depth tradeoff.
+- [ ] **delegate redesign** — `systemPromptMode: append` → `replace` with a narrow base prompt; bigger rewrite, unclear scope.
 
 ## Done archive
 

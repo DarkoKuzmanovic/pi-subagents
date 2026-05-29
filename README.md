@@ -13,7 +13,7 @@
 - **Forked context** — real branched sessions from the parent leaf, not injected summaries
 - **Clarify UI** — TUI preview/edit flow for chains with model, thinking, skills, and output pickers
 - **Intercom bridge** — optional `pi-intercom` companion lets children contact the parent for decisions
-- **Prompt templates** — 7 reusable workflow shortcuts (`/parallel-review`, `/parallel-research`, etc.)
+- **Prompt templates** — 7 reusable workflow shortcuts (`/mesh-review`, `/parallel-research`, etc.)
 - **Skills injection** — per-agent or per-step skill overrides with project-first discovery
 - **Inline reads** — fresh-context children get pre-loaded files, saving a full context fork
 - **Session sharing** — export runs to HTML and upload to GitHub Gist
@@ -197,7 +197,7 @@ The package includes reusable prompt templates for common workflows. You do not 
 
 | Prompt                        | Use it for                                                                                                  |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `/parallel-review`            | Launch fresh-context reviewers with distinct angles, then synthesize what to fix.                           |
+| `/mesh-review`            | Launch fresh-context reviewers with distinct angles, then synthesize what to fix.                           |
 | `/parallel-research`          | Combine `researcher` and `scout` for external evidence, local code context, and practical tradeoffs.        |
 | `/parallel-handoff-plan`      | Combine external research and `context-builder` passes into an implementation handoff plan and meta-prompt. |
 | `/brainstorm`                 | Design-first exploration before any implementation, with clarifying questions and approach tradeoffs.       |
@@ -205,7 +205,7 @@ The package includes reusable prompt templates for common workflows. You do not 
 | `/parallel-cleanup`           | Run review-only cleanup passes after implementation.                                                        |
 | `/reflect-chain`              | Analyze a chain run's artifacts and suggest improvements to chain templates, agents, and prompts.           |
 
-Add `autofix` to `/parallel-review` or `/parallel-cleanup` to apply only the synthesized fixes worth doing now after reviewers return.
+Add `autofix` to `/mesh-review` or `/parallel-cleanup` to apply only the synthesized fixes worth doing now after reviewers return.
 
 ## Optional pi-intercom companion
 

@@ -40,7 +40,7 @@ you are guiding a human through an interactive flow.
 
 Packaged prompt shortcuts are also available for repeatable workflows. Treat them as reusable orchestration recipes, not just human slash commands. When the user asks for one of these shapes, or when the workflow clearly fits, apply the same pattern directly with `subagent(...)` and other tools:
 
-- `/parallel-review` — fresh-context reviewers with distinct review angles, then synthesis
+- `/mesh-review` — fresh-context reviewers with distinct review angles, then synthesis
 - `/parallel-research` — combine `researcher` and `scout` for external evidence plus local code context
 - `/parallel-handoff-plan` — external-reference research plus local `context-builder` passes, followed by a synthesis handoff plan and implementation-ready meta-prompt
 - `/brainstorm` — design-first exploration before any implementation, with clarifying questions and approach tradeoffs
@@ -616,11 +616,11 @@ copying a full builtin file.
 
 ## Prompt Template Integration
 
-The package includes prompt shortcuts for common workflows: `/parallel-review`,
+The package includes prompt shortcuts for common workflows: `/mesh-review`,
 `/parallel-research`, `/parallel-handoff-plan`, `/brainstorm`, `/write-plan`,
 and `/parallel-cleanup`. Use them when the user wants repeatable review,
 research, implementation-handoff context, design exploration, plan authoring,
-or cleanup-review patterns. `/parallel-review autofix` and
+or cleanup-review patterns. `/mesh-review autofix` and
 `/parallel-cleanup autofix` synthesize reviewer feedback and then apply only the
 fixes worth doing now. Parent agents can also apply the same recipes directly
 with `subagent(...)` when the user describes the workflow in natural language
@@ -703,7 +703,7 @@ When the user approves launching a subagent to carry out a plan or workflow, tre
 
 - `/brainstorm` maps to: stay design-first with the `brainstorming` skill; launch `scout` if local context matters and `researcher` if external evidence would shape the choice; ask clarifying questions with `ask_user`; compare 2–3 approaches with tradeoffs before any implementation.
 - `/write-plan` maps to: use the `writing-plans` skill; read the spec/intent and any referenced files; draft a step-by-step plan with file paths, signatures where they matter, explicit validation commands, and a placeholder scan.
-- `/parallel-review` maps to: launch fresh-context `reviewer` agents with distinct review angles; synthesize the feedback before applying anything.
+- `/mesh-review` maps to: launch fresh-context `reviewer` agents with distinct review angles; synthesize the feedback before applying anything.
 - `/parallel-research` maps to: combine local `scout` context with external `researcher` evidence when current docs, ecosystem behavior, or API details matter.
 - `/parallel-handoff-plan` maps to: run external `researcher` plus local/strategy `context-builder` passes, then a synthesis `context-builder` that writes an implementation handoff plan and implementation-ready meta-prompt.
 - `/parallel-cleanup` maps to: use review-only cleanup passes after implementation, especially for simplicity, verbosity, and redundant tests.
