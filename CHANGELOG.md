@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.34.3] - 2026-05-29
+
+### Fixed
+
+- Stale-run reconciliation no longer salvages a dead-runner async run with **empty** per-step output. When the background runner exits before writing the consolidated result, `reconcileAsyncRun` now recovers each step's output from its persisted stream log (`<asyncDir>/output-<index>.log`, flat-indexed to match `status.steps`) instead of emitting `output: ""`. Applies to both the success-salvage (`buildSuccessRepair`) and failure-salvage (`buildFailedRepair`) paths, so a recovered run hands back the actual agent output rather than forcing a manual log read. Oversized logs are tail-capped to 8000 chars with a pointer to the full log file. Defense-in-depth complement to the 0.34.2 runner-crash fix — covers any future runner death (OOM, SIGKILL, unguarded throw), not just the `tokenUsageFromAttempts` crash.
+
+### Tests
+
+- Added a stale-run-reconciler test asserting recovered per-step output on a dead-PID, all-steps-complete run (verbatim under the cap; tail-capped with a recovery marker + full-log pointer when oversized).
+
 ## [0.34.2] - 2026-05-29
 
 ### Fixed

@@ -164,6 +164,30 @@ function buildStartedStatus(asyncDir: string, startedRun: StartedRunMetadata, no
 	};
 }
 
+const RECOVERED_OUTPUT_CAP = 8000;
+
+/**
+ * Best-effort recovery of a step's output from its persisted per-step stream log
+ * (`<asyncDir>/output-<index>.log`) when the runner died before writing the consolidated
+ * result. `status.steps` is flat-indexed to match the `output-<i>.log` naming. Returns the
+ * (tail-capped) log content, or undefined when no usable log exists. The log is the raw run
+ * stream, so it may include intermediate output; oversized logs are truncated to the tail
+ * with a pointer to the full file so a salvaged run is never silently empty.
+ */
+function recoverStepOutput(asyncDir: string, index: number): string | undefined {
+	const sourcePath = path.join(asyncDir, `output-${index}.log`);
+	let raw: string;
+	try {
+		raw = fs.readFileSync(sourcePath, "utf-8");
+	} catch {
+		return undefined;
+	}
+	const trimmed = raw.trim();
+	if (!trimmed) return undefined;
+	if (trimmed.length <= RECOVERED_OUTPUT_CAP) return trimmed;
+	return `[recovered from runner stream log — showing the last ${RECOVERED_OUTPUT_CAP} chars; full log: ${sourcePath}]\n…\n${trimmed.slice(-RECOVERED_OUTPUT_CAP)}`;
+}
+
 function buildFailedRepair(status: AsyncStatus, asyncDir: string, now: number, reason?: string): { status: AsyncStatus; result: object; message: string } {
 	const runId = status.runId || path.basename(asyncDir);
 	const pid = typeof status.pid === "number" ? status.pid : "unknown";
@@ -199,9 +223,9 @@ function buildFailedRepair(status: AsyncStatus, asyncDir: string, now: number, r
 			success: false,
 			state: "failed",
 			summary: message,
-			results: repairedSteps.map((step) => ({
+			results: repairedSteps.map((step, index) => ({
 				agent: step.agent,
-				output: step.status === "complete" || step.status === "completed" ? "" : message,
+				output: recoverStepOutput(asyncDir, index) ?? (step.status === "complete" || step.status === "completed" ? "" : message),
 				error: step.status === "complete" || step.status === "completed" ? undefined : step.error ?? message,
 				success: step.status === "complete" || step.status === "completed",
 				model: step.model,
@@ -247,7 +271,7 @@ function allStepsSucceeded(steps: AsyncStatus["steps"]): boolean {
 function buildSuccessRepair(status: AsyncStatus, asyncDir: string, now: number): { status: AsyncStatus; result: object; message: string } {
 	const runId = status.runId || path.basename(asyncDir);
 	const pid = typeof status.pid === "number" ? status.pid : "unknown";
-	const message = `Run reconstructed from completed steps after runner process ${pid} exited before writing result; full output in session files.`;
+	const message = `Run reconstructed from completed steps after runner process ${pid} exited before writing result; per-step output recovered from run logs where available.`;
 	const steps = status.steps ?? [{ agent: "subagent", status: "complete" as const, exitCode: 0 }];
 	const repairedStatus: AsyncStatus = {
 		...status,
@@ -272,9 +296,9 @@ function buildSuccessRepair(status: AsyncStatus, asyncDir: string, now: number):
 			success: true,
 			state: "complete",
 			summary: message,
-			results: steps.map((step) => ({
+			results: steps.map((step, index) => ({
 				agent: step.agent,
-				output: "",
+				output: recoverStepOutput(asyncDir, index) ?? "",
 				error: undefined,
 				success: true,
 				model: step.model,

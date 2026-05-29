@@ -228,6 +228,50 @@ it("repairs a stale run as COMPLETE when result file is missing but all steps su
 	}
 });
 
+it("recovers per-step output from output-<i>.log when salvaging a dead runner", () => {
+	const root = tempRoot("pi-stale-recover-output-");
+	try {
+		const asyncDir = path.join(root, "run-recover");
+		const resultsDir = path.join(root, "results");
+		fs.mkdirSync(resultsDir, { recursive: true });
+		fs.mkdirSync(asyncDir, { recursive: true });
+		fs.writeFileSync(path.join(asyncDir, "output-0.log"), "scout final brief: all clear\n", "utf-8");
+		const bigTail = `${"X".repeat(9000)}TAIL-MARKER`;
+		fs.writeFileSync(path.join(asyncDir, "output-1.log"), bigTail, "utf-8");
+		writeStatus(asyncDir, {
+			runId: "run-recover",
+			mode: "parallel",
+			state: "running",
+			pid: 12345,
+			startedAt: 1000,
+			lastUpdate: 1000,
+			steps: [
+				{ agent: "scout", status: "complete", exitCode: 0, startedAt: 1000, endedAt: 1500 },
+				{ agent: "researcher", status: "complete", exitCode: 0, startedAt: 1000, endedAt: 1500 },
+			],
+		});
+
+		const result = reconcileAsyncRun(asyncDir, {
+			resultsDir,
+			kill: () => { throw errno("ESRCH"); },
+			now: () => 2000,
+		});
+
+		assert.equal(result.repaired, true);
+		assert.equal(result.status?.state, "complete");
+		const resultContent = JSON.parse(fs.readFileSync(result.resultPath!, "utf-8"));
+		assert.equal(resultContent.success, true);
+		// Step 0 log is under the cap -> recovered verbatim (trimmed), not empty.
+		assert.equal(resultContent.results[0].output, "scout final brief: all clear");
+		// Step 1 log exceeds the cap -> tail-capped with a recovery marker + full-log pointer.
+		assert.match(resultContent.results[1].output, /recovered from runner stream log/);
+		assert.match(resultContent.results[1].output, /TAIL-MARKER$/);
+		assert.ok(resultContent.results[1].output.length < 9000);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 it("marks a stale run as FAILED when result file missing and some steps failed", () => {
 	const root = tempRoot("pi-stale-mixed-fail-");
 	try {
