@@ -1,6 +1,7 @@
 .pi/todos/
 .DS_Store
 AGENTS.md
+pre-plan.md
 package-lock.json
 node_modules/
 .fallow/

@@ -8,6 +8,13 @@ import { fileURLToPath } from "node:url";
 
 const piCodingAgentShim = `
 export function getMarkdownTheme() { return {}; }
+export function keyText(id) { return id; }
+export function rawKeyHint(key, desc) { return key + " " + desc; }
+export class DynamicBorder {
+  constructor(color) { this.color = color; }
+  invalidate() {}
+  render(width) { return ["-".repeat(width)]; }
+}
 `;
 
 const piTuiShim = `
@@ -90,6 +97,17 @@ export class Container {
   render(width) {
     return this.children.flatMap((child) => child.render(width));
   }
+}
+
+export class SelectList {
+  constructor(items, height, theme) {
+    this.items = items || [];
+    this.height = height || 10;
+    this.selectedIndex = 0;
+  }
+  getSelected() { return this.items[this.selectedIndex]; }
+  render(width) { return this.items.slice(0, this.height).map((i) => String(i.label || i)); }
+  handleKey() { return false; }
 }
 `;
 

@@ -26,6 +26,7 @@ test("direct @earendil-works runtime imports are declared for CI installs", () =
 	const declared = new Set([
 		...Object.keys(packageJson.dependencies ?? {}),
 		...Object.keys(packageJson.devDependencies ?? {}),
+		...Object.keys(packageJson.peerDependencies ?? {}),
 	]);
 	const imported = new Set<string>();
 

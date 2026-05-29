@@ -56,7 +56,6 @@ interface BuildPiArgsInput {
 	parentPath?: Array<{ runId: string; stepIndex?: number; agent?: string }>;
 	parentCapabilityToken?: string;
 	skipContextFiles?: boolean;
-	skipContextFiles?: boolean;
 }
 
 interface BuildPiArgsResult {
@@ -185,6 +184,16 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	} else {
 		env.MCP_DIRECT_TOOLS = "__none__";
 	}
+
+	// Nested route env propagation (upstream v0.25.0)
+	if (input.parentEventSink) env[SUBAGENT_PARENT_EVENT_SINK_ENV] = input.parentEventSink;
+	if (input.parentControlInbox) env[SUBAGENT_PARENT_CONTROL_INBOX_ENV] = input.parentControlInbox;
+	if (input.parentRootRunId) env[SUBAGENT_PARENT_ROOT_RUN_ID_ENV] = input.parentRootRunId;
+	if (input.parentRunId) env[SUBAGENT_PARENT_RUN_ID_ENV] = input.parentRunId;
+	if (input.parentChildIndex !== undefined) env[SUBAGENT_PARENT_CHILD_INDEX_ENV] = String(input.parentChildIndex);
+	if (input.parentDepth !== undefined) env[SUBAGENT_PARENT_DEPTH_ENV] = String(input.parentDepth);
+	if (input.parentPath) env[SUBAGENT_PARENT_PATH_ENV] = JSON.stringify(input.parentPath);
+	if (input.parentCapabilityToken) env[SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV] = input.parentCapabilityToken;
 
 	return { args, env, tempDir };
 }

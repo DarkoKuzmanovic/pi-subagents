@@ -201,7 +201,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						continue;
 					}
 					job.status = job.status === "queued" ? "running" : job.status;
-					job.updatedAt = Date.now();
 				}
 			} catch (error) {
 				console.error(`Failed to read async status for '${job.asyncDir}':`, error);

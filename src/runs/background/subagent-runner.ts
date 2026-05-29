@@ -98,6 +98,7 @@ interface SubagentRunConfig {
 	controlIntercomTarget?: string;
 	childIntercomTargets?: Array<string | undefined>;
 	resultMode?: SubagentRunMode;
+	nestedRoute?: import("../../shared/types.ts").NestedRouteInfo;
 }
 
 interface StepResult {
@@ -537,6 +538,7 @@ interface SingleStepContext {
 	childIntercomTarget?: string;
 	orchestratorIntercomTarget?: string;
 	onChildEvent?: (event: ChildEvent) => void;
+	nestedRoute?: import("../../shared/types.ts").NestedRouteInfo;
 }
 
 /** Run a single pi agent step, returning output and metadata */
@@ -609,6 +611,10 @@ async function runSingleStep(
 			runId: ctx.id,
 			childAgentName: step.agent,
 			childIndex: ctx.flatIndex,
+			parentEventSink: ctx.nestedRoute?.eventSink,
+			parentControlInbox: ctx.nestedRoute?.controlInbox,
+			parentRootRunId: ctx.nestedRoute?.rootRunId,
+			parentCapabilityToken: ctx.nestedRoute?.capabilityToken,
 		});
 		const run = await runPiStreaming(
 			args,
@@ -1448,6 +1454,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 								activeChildInterrupts.set(fi, interrupt);
 							},
 							onChildEvent: (event) => updateStepFromChildEvent(fi, event),
+							nestedRoute: config.nestedRoute,
 						});
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
@@ -1599,6 +1606,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					activeChildInterrupts.set(flatIndex, interrupt);
 				},
 				onChildEvent: (event) => updateStepFromChildEvent(flatIndex, event),
+				nestedRoute: config.nestedRoute,
 			});
 			if (seqStep.sessionFile) {
 				latestSessionFile = seqStep.sessionFile;

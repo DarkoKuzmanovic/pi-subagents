@@ -124,6 +124,7 @@ interface AsyncChainParams {
 	worktreeSetupHookTimeoutMs?: number;
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
+	nestedRoute?: import("../../shared/types.ts").NestedRouteInfo;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 }
 
@@ -445,6 +446,7 @@ export function executeAsyncChain(
 				controlIntercomTarget,
 				childIntercomTargets,
 				resultMode,
+				nestedRoute: params.nestedRoute,
 			},
 			id,
 			runnerCwd,

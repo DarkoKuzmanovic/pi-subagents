@@ -146,6 +146,10 @@ async function runSingleAttempt(
 		childAgentName: agent.name,
 		childIndex: options.index ?? 0,
 		skipContextFiles: options.skipContextFiles,
+		parentEventSink: options.nestedRoute?.eventSink,
+		parentControlInbox: options.nestedRoute?.controlInbox,
+		parentRootRunId: options.nestedRoute?.rootRunId,
+		parentCapabilityToken: options.nestedRoute?.capabilityToken,
 	});
 
 	const result: SingleResult = {
