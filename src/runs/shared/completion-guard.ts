@@ -24,6 +24,19 @@ const EXPLICIT_NO_EDIT_PATTERNS = [
 	/\bdo not change files\b/i,
 ];
 
+// Tasks that are unambiguously analysis/read-only regardless of any embedded payload.
+// An agent forbidden from tools cannot mutate; an "output only ..." constraint is non-mutating.
+const ANALYSIS_ONLY_PATTERNS = [
+	/\bdo not use tools\b/i,
+	/\bdo not read files\b/i,
+	/\boutput only the (?:summary|findings|analysis|answer|report)\b/i,
+];
+
+// Lines that introduce an embedded data payload (transcript/diff/log/etc.) to be
+// processed rather than instructions to the agent. Everything after such a label line
+// is data, not instruction, and must not be scanned for implementation intent.
+const PAYLOAD_LABEL_LINE = /^\s*(?:transcript|input|context|diff|log|data|content|paste|payload|excerpt|snippet)\s*:?\s*$/i;
+
 const SCOPED_NO_EDIT_CONSTRAINT_PATTERNS = [
 	/\bdo not edit files?\s+outside\b/i,
 	/\bdo not edit\s+outside\b/i,
@@ -83,11 +96,22 @@ function stripScopedNoEditConstraints(task: string): string {
 	return stripped;
 }
 
+// Strip embedded data payloads so only the instruction is scanned for implementation intent.
+// Removes fenced code blocks, blockquoted lines, and everything after a payload label line.
+function stripEmbeddedPayload(task: string): string {
+	const withoutFences = task.replace(/```[\s\S]*?```/g, " ");
+	const lines = withoutFences.split("\n");
+	const cutoff = lines.findIndex((line) => PAYLOAD_LABEL_LINE.test(line));
+	const instructionLines = cutoff === -1 ? lines : lines.slice(0, cutoff);
+	return instructionLines.filter((line) => !/^\s*>/.test(line)).join("\n");
+}
+
 export function expectsImplementationMutation(agent: string, task: string): boolean {
-	const taskText = stripFrameworkInstructions(task);
+	const taskText = stripEmbeddedPayload(stripFrameworkInstructions(task));
 	const taskTextWithoutScopedConstraints = stripScopedNoEditConstraints(taskText);
 	if (REVIEW_ONLY_PATTERNS.some((pattern) => pattern.test(taskTextWithoutScopedConstraints))) return false;
 	if (EXPLICIT_NO_EDIT_PATTERNS.some((pattern) => pattern.test(taskTextWithoutScopedConstraints))) return false;
+	if (ANALYSIS_ONLY_PATTERNS.some((pattern) => pattern.test(taskTextWithoutScopedConstraints))) return false;
 
 	if (RESEARCH_AGENT_PATTERNS.some((pattern) => pattern.test(agent))) return false;
 	if (/\breviewer\b/i.test(agent)) return REVIEWER_REQUIRED_EDIT_PATTERNS.some((pattern) => pattern.test(taskText));

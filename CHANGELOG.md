@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.34.1] - 2026-05-29
+
+### Fixed
+
+- Fix completion-guard false-positive that marked read-only/analysis subagent runs as failed (`reason: "completion_guard"`, "completed without making edits for an implementation task") and discarded valid output. `expectsImplementationMutation()` now strips embedded data payloads (fenced code blocks, blockquoted lines, and everything after a payload label line like `TRANSCRIPT:`/`DIFF:`/`CONTEXT:`) before scanning for implementation intent, so implementation keywords inside the *data being processed* (e.g. a transcript to summarize) no longer trip the guard. Also added explicit analysis-only signals (`do not use tools`, `do not read files`, `output only the summary`) as non-mutating. The legit case — an implementation agent told to edit that returns text without editing — still triggers, because its keyword lives in the instruction, not a payload.
+
+### Changed
+
+- Renamed internal `findLineageUnsupportedCwdReason` → `findLineageUnsupportedReason` since it also rejects `worktree` overrides, not just `cwd`.
+
+### Tests
+
+- Added 4 lineage guardrail integration tests covering rejection of `tasks[].cwd`, sequential `chain[].cwd`, `chain[].parallel[].cwd`, and `chain[].parallel[].worktree` (previously only `worktree` at the top level was covered).
+- Added 3 completion-guard unit tests: embedded-payload false-positive reproduction (incl. fenced/blockquoted/labeled payloads), analysis-only intent, and a regression guard confirming real implementation instructions still trigger.
+
 ## [0.34.0] - 2026-05-29
 
 ### Added

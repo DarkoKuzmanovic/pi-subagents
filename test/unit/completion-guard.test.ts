@@ -77,6 +77,50 @@ test("worker edit intent covers common docs, config, and source tasks", () => {
 	assert.equal(expectsImplementationMutation("worker", "Implement the fix. Do not edit unrelated files."), true);
 });
 
+test("embedded payload content does not trigger the guard for non-implementation tasks", () => {
+	// Faithful reproduction of the compaction-benchmark task that spuriously failed run 8d0ce5b7:
+	// a read-only summary whose embedded TRANSCRIPT contained the words "fix" and "implement".
+	const benchmarkTask = [
+		"Compaction benchmark. Do not use tools. Summarize the transcript below. Output only the summary.",
+		"",
+		"TRANSCRIPT:",
+		"[User]: We need to fix the sudoku-blocks drag bug and implement normalize_drop_target. Patch the resize logic too.",
+	].join("\n");
+	assert.equal(expectsImplementationMutation("delegate", benchmarkTask), false);
+
+	const guard = evaluateCompletionMutationGuard({
+		agent: "delegate",
+		task: benchmarkTask,
+		messages: [assistantText("## Goal\nFix the drag bug...")],
+	});
+	assert.equal(guard.triggered, false);
+
+	// Implementation keywords inside a fenced code block are data, not instruction.
+	assert.equal(expectsImplementationMutation("delegate", "Review this snippet:\n```\nfix the bug; implement feature; patch module\n```"), false);
+
+	// Blockquoted embedded text is data, not instruction.
+	assert.equal(expectsImplementationMutation("delegate", "Analyze the quote below.\n> please fix and refactor the parser"), false);
+
+	// Payload after a generic label line is data.
+	assert.equal(expectsImplementationMutation("delegate", "Compare the two diffs and report differences.\nDIFF:\n- old\n+ implement new fix"), false);
+});
+
+test("explicit analysis-only intent is non-mutating regardless of agent or payload", () => {
+	assert.equal(expectsImplementationMutation("delegate", "Do not use tools. Tell me how to fix and refactor this."), false);
+	assert.equal(expectsImplementationMutation("worker", "Do not read files. Explain how to implement the patch."), false);
+	assert.equal(expectsImplementationMutation("delegate", "Implement-sounding analysis: output only the summary of the fix."), false);
+});
+
+test("real implementation instructions still trigger after payload stripping", () => {
+	// Regression guard: the legit worker case (keyword in the instruction, not a payload) must still fire.
+	assert.equal(expectsImplementationMutation("worker", "Implement the approved file changes"), true);
+	assert.equal(expectsImplementationMutation("worker", "Fix the failing test in parser.ts"), true);
+	// Instruction keyword survives even when an unrelated payload is appended.
+	assert.equal(
+		expectsImplementationMutation("worker", "Implement the fix described below.\nCONTEXT:\n[User]: it is broken"),
+		true,
+	);
+});
 test("edit and write tool calls count as mutation attempts", () => {
 	assert.equal(hasMutationToolCall([assistantToolCall("edit", { path: "a.ts" })]), true);
 	assert.equal(hasMutationToolCall([assistantToolCall("write", { path: "a.ts" })]), true);

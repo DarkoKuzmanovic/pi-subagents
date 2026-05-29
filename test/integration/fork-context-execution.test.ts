@@ -430,6 +430,89 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.match(result.content[0]?.text ?? "", /context: "lineage" does not support worktree/);
 	});
 
+	it("rejects lineage with a top-level task cwd override", async () => {
+		const parentSessionFile = path.join(tempDir, "parent-lineage-task-cwd.jsonl");
+		const { manager } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{
+				tasks: [{ agent: "echo", task: "a" }, { agent: "echo", task: "b", cwd: `${tempDir}/other` }],
+				context: "lineage",
+			},
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /context: "lineage" does not support task cwd overrides/);
+	});
+
+	it("rejects lineage with a sequential chain step cwd override", async () => {
+		const parentSessionFile = path.join(tempDir, "parent-lineage-chain-cwd.jsonl");
+		const { manager } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{
+				chain: [{ agent: "echo", task: "step 1" }, { agent: "echo", task: "step 2", cwd: `${tempDir}/other` }],
+				context: "lineage",
+				clarify: false,
+			},
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /context: "lineage" does not support chain step cwd overrides/);
+	});
+
+	it("rejects lineage with a chain parallel task cwd override", async () => {
+		const parentSessionFile = path.join(tempDir, "parent-lineage-chain-parallel-cwd.jsonl");
+		const { manager } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{
+				chain: [{ parallel: [{ agent: "echo", task: "p1" }, { agent: "second", task: "p2", cwd: `${tempDir}/other` }] }],
+				context: "lineage",
+				clarify: false,
+			},
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /context: "lineage" does not support chain parallel task cwd overrides/);
+	});
+
+	it("rejects lineage with chain parallel worktree", async () => {
+		const parentSessionFile = path.join(tempDir, "parent-lineage-chain-parallel-worktree.jsonl");
+		const { manager } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{
+				chain: [{ parallel: [{ agent: "echo", task: "p1" }], worktree: true }],
+				context: "lineage",
+				clarify: false,
+			},
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /context: "lineage" does not support chain parallel worktree/);
+	});
+
 	it("keeps default-fork context on run-path errors", async () => {
 		const parentSessionFile = path.join(tempDir, "parent.jsonl");
 		const { manager } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });

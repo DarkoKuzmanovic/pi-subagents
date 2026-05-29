@@ -938,7 +938,7 @@ function normalizeRepeatedParallelCounts(params: SubagentParamsLike): { params?:
 	return { params };
 }
 
-function findLineageUnsupportedCwdReason(params: SubagentParamsLike): string | undefined {
+function findLineageUnsupportedReason(params: SubagentParamsLike): string | undefined {
 	if (params.context !== "lineage") return undefined;
 	if (params.worktree) {
 		return 'context: "lineage" does not support worktree yet because lineage session headers must match child cwd.';
@@ -2359,8 +2359,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		);
 		if (validationError) return validationError;
 
-		const lineageCwdError = findLineageUnsupportedCwdReason(effectiveParams);
-		if (lineageCwdError) return buildRequestedModeError(effectiveParams, lineageCwdError);
+		const lineageUnsupportedError = findLineageUnsupportedReason(effectiveParams);
+		if (lineageUnsupportedError) return buildRequestedModeError(effectiveParams, lineageUnsupportedError);
 		const requestedAsync = effectiveParams.async ?? deps.asyncByDefault;
 		const backgroundRequestedWhileClarifying = (hasChain || hasTasks) && requestedAsync && effectiveParams.clarify === true;
 		const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
