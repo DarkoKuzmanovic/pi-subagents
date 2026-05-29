@@ -217,7 +217,7 @@ export interface SingleResult {
 export interface Details {
 	mode: SubagentRunMode | "management";
 	runId?: string;
-	context?: "fresh" | "fork";
+	context?: "fresh" | "fork" | "lineage";
 	results: SingleResult[];
 	controlEvents?: ControlEvent[];
 	asyncId?: string;

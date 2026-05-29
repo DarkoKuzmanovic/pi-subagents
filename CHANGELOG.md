@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.34.0] - 2026-05-29
+
+### Added
+
+- Add `context: "lineage"` for clean subagent sessions linked to the parent session tree without copying the parent transcript. A lineage child starts with blank model context but its session header points at the parent session file (via `SessionManager.create(..., { parentSession })`), so the relationship is visible in session-tree tools. Supported through the `subagent` tool `context` parameter, agent `defaultContext`, slash entry, and the prompt-template bridge.
+- Add `[lineage]` render badge (non-alarming `muted` color) alongside the existing `[fork]` badge, via a shared `renderContextBadge` helper in `src/tui/render.ts`.
+
+### Notes
+
+- Lineage is an organization/linking feature, not a startup-latency optimization: child Pi processes still pay normal startup cost.
+- V1 rejects `context: "lineage"` combined with `worktree` or per-child `cwd` overrides so session headers cannot disagree with the child process cwd.
+- The `fork-only` intercom mode intentionally does not activate for lineage children because they do not inherit the parent transcript.
+
 ## [0.33.7] - 2026-05-29
 
 ### Fixed

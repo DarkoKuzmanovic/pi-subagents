@@ -19,7 +19,7 @@ interface ExecutorModule {
 			isError?: boolean;
 			content: Array<{ text?: string }>;
 			details?: {
-				context?: "fresh" | "fork";
+				context?: "fresh" | "fork" | "lineage";
 				results?: Array<{ detached?: boolean; exitCode?: number; skills?: string[] }>;
 			};
 		}>;
@@ -47,6 +47,7 @@ const originalUserProfile = process.env.USERPROFILE;
 interface SessionStubOptions {
 	sessionFile?: string;
 	leafId?: string | null;
+	createSession?: (cwd: string, sessionDir?: string, options?: { parentSession?: string }) => { getSessionFile(): string | undefined };
 }
 
 interface SessionManagerStub {
@@ -55,6 +56,7 @@ interface SessionManagerStub {
 	getLeafId(): string | null;
 	constructor: {
 		open(sessionFile: string): { createBranchedSession(leafId: string): string | undefined };
+		create(cwd: string, sessionDir?: string, options?: { parentSession?: string }): { getSessionFile(): string | undefined };
 	};
 }
 
@@ -67,6 +69,12 @@ function makeSessionManagerRecorder(options: SessionStubOptions = {}) {
 			open: () => ({
 				createBranchedSession: () => "/tmp/child.jsonl",
 			}),
+			create: options.createSession ?? ((_cwd: string, sessionDir?: string) => {
+				const childSessionFile = path.join(sessionDir ?? "/tmp", "session.jsonl");
+				fs.mkdirSync(path.dirname(childSessionFile), { recursive: true });
+				fs.writeFileSync(childSessionFile, '{"type":"session","version":1,"id":"child","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
+				return { getSessionFile: () => childSessionFile };
+			}),
 		},
 	};
 	return { manager };
@@ -77,6 +85,10 @@ function makeState(cwd: string) {
 		baseCwd: cwd,
 		currentSessionId: null,
 		asyncJobs: new Map(),
+		foregroundRuns: new Map(),
+		foregroundControls: new Map(),
+		lastForegroundControlId: null,
+		pendingForegroundControlNotices: new Map(),
 		cleanupTimers: new Map(),
 		lastUiContext: null,
 		poller: null,
@@ -190,7 +202,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			.filter((sessionFile): sessionFile is string => Boolean(sessionFile));
 	}
 
-	function makeForkingSessionManagerRecorder(options: { sessionFile: string; leafId: string }) {
+	function makeForkingSessionManagerRecorder(options: { sessionFile: string; leafId: string; createSession?: (cwd: string, sessionDir?: string, options?: { parentSession?: string }) => { getSessionFile(): string | undefined } }) {
 		const openedPaths: string[] = [];
 		const branchedLeafIds: string[] = [];
 		let counter = 0;
@@ -213,6 +225,13 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 						},
 					};
 				},
+				create: options.createSession ?? ((_cwd: string, sessionDir?: string) => {
+					counter++;
+					const childSessionFile = path.join(sessionDir ?? tempDir, `lineage-${counter}.jsonl`);
+					fs.mkdirSync(path.dirname(childSessionFile), { recursive: true });
+					fs.writeFileSync(childSessionFile, '{"type":"session","version":1,"id":"lineage-child","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
+					return { getSessionFile: () => childSessionFile };
+				}),
 			},
 		};
 		return { manager, openedPaths, branchedLeafIds };
@@ -322,6 +341,95 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.deepEqual(readSessionArgsFromCalls(), [path.join(tempDir, "fork-1.jsonl")]);
 	});
 
+	it("uses lineage context to pass a parent-linked clean session", async () => {
+		const parentSessionFile = path.join(tempDir, "parent-lineage.jsonl");
+		const created: Array<{ cwd: string; sessionDir?: string; parentSession?: string }> = [];
+		const { manager, openedPaths, branchedLeafIds } = makeForkingSessionManagerRecorder({
+			sessionFile: parentSessionFile,
+			leafId: "leaf-current",
+			createSession: (cwd, sessionDir, options) => {
+				created.push({ cwd, sessionDir, parentSession: options?.parentSession });
+				const childSessionFile = path.join(sessionDir ?? tempDir, "lineage.jsonl");
+				fs.mkdirSync(path.dirname(childSessionFile), { recursive: true });
+				fs.writeFileSync(childSessionFile, '{"type":"session","version":1,"id":"lineage","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
+				return { getSessionFile: () => childSessionFile };
+			},
+		});
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{ agent: "echo", task: "inspect", context: "lineage" },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details?.context, "lineage");
+		assert.deepEqual(openedPaths, []);
+		assert.deepEqual(branchedLeafIds, []);
+		assert.equal(created.length, 1);
+		assert.equal(created[0]!.cwd, tempDir);
+		assert.equal(created[0]!.parentSession, parentSessionFile);
+		assert.deepEqual(readSessionArgsFromCalls(), [path.join(created[0]!.sessionDir!, "lineage.jsonl")]);
+		assert.equal(readCallArgs().at(-1), "Task: inspect");
+	});
+
+	it("uses agent defaultContext lineage when launch context is omitted", async () => {
+		const parentSessionFile = path.join(tempDir, "parent-default-lineage.jsonl");
+		const created: Array<{ cwd: string; sessionDir?: string; parentSession?: string }> = [];
+		const { manager } = makeForkingSessionManagerRecorder({
+			sessionFile: parentSessionFile,
+			leafId: "leaf-current",
+			createSession: (cwd, sessionDir, options) => {
+				created.push({ cwd, sessionDir, parentSession: options?.parentSession });
+				const childSessionFile = path.join(sessionDir ?? tempDir, "lineage-default.jsonl");
+				fs.mkdirSync(path.dirname(childSessionFile), { recursive: true });
+				fs.writeFileSync(childSessionFile, '{"type":"session","version":1,"id":"lineage-default","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
+				return { getSessionFile: () => childSessionFile };
+			},
+		});
+		const executor = makeExecutorWithDiscoverAgents(() => ({
+			agents: [{ name: "worker", description: "Worker", defaultContext: "lineage" }],
+			projectAgentsDir: null,
+		}));
+
+		const result = await executor.execute(
+			"id",
+			{ agent: "worker", task: "continue clean" },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details?.context, "lineage");
+		assert.deepEqual(readSessionArgsFromCalls(), [path.join(created[0]!.sessionDir!, "lineage-default.jsonl")]);
+		assert.equal(created[0]!.parentSession, parentSessionFile);
+	});
+
+	it("rejects lineage with worktree because child cwd can differ", async () => {
+		const parentSessionFile = path.join(tempDir, "parent-lineage-worktree.jsonl");
+		const { manager } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{
+				tasks: [{ agent: "echo", task: "a" }, { agent: "echo", task: "b" }],
+				context: "lineage",
+				worktree: true,
+			},
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /context: "lineage" does not support worktree/);
+	});
+
 	it("keeps default-fork context on run-path errors", async () => {
 		const parentSessionFile = path.join(tempDir, "parent.jsonl");
 		const { manager } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
@@ -389,6 +497,36 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		const result = await executor.execute(
 			"id",
 			{ tasks: [{ agent: "worker", task: "one" }, { agent: "second", task: "two" }] },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details?.context, "fork");
+		assert.deepEqual(readSessionArgsFromCalls().sort(), [path.join(tempDir, "fork-1.jsonl"), path.join(tempDir, "fork-2.jsonl")]);
+	});
+
+	it("uses fork when top-level parallel defaults mix fork and lineage", async () => {
+		const parentSessionFile = path.join(tempDir, "parent-mixed-defaults.jsonl");
+		const { manager } = makeForkingSessionManagerRecorder({
+			sessionFile: parentSessionFile,
+			leafId: "leaf-current",
+			createSession: () => {
+				throw new Error("lineage session creation should not run when fork wins");
+			},
+		});
+		const executor = makeExecutorWithDiscoverAgents(() => ({
+			agents: [
+				{ name: "worker", description: "Worker", defaultContext: "fork" },
+				{ name: "planner", description: "Planner", defaultContext: "lineage" },
+			],
+			projectAgentsDir: null,
+		}));
+
+		const result = await executor.execute(
+			"id",
+			{ tasks: [{ agent: "worker", task: "one" }, { agent: "planner", task: "two" }] },
 			new AbortController().signal,
 			undefined,
 			makeCtx(manager),

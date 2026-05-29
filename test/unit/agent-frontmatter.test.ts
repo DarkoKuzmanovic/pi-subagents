@@ -54,6 +54,25 @@ Do work
 		assert.equal(worker?.defaultContext, "fork");
 	});
 
+	it("parses lineage defaultContext from discovered agent frontmatter", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-lineage-context-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "planner.md"), `---
+name: planner
+description: Planner
+defaultContext: lineage
+---
+
+Plan work
+`, "utf-8");
+
+		const result = discoverAgents(dir, "project");
+		const planner = result.agents.find((agent) => agent.name === "planner");
+		assert.equal(planner?.defaultContext, "lineage");
+	});
+
 	it("loads packaged planner with fresh defaultContext and worker/oracle with fork", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-default-context-"));
 		tempDirs.push(dir);

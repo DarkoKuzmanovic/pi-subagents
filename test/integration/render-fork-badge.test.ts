@@ -6,7 +6,7 @@ type RenderSubagentResult = (
 		content: Array<{ type: "text"; text: string }>;
 		details?: {
 			mode: "single" | "parallel" | "chain" | "management";
-			context?: "fresh" | "fork";
+			context?: "fresh" | "fork" | "lineage";
 			results: unknown[];
 		};
 	},
@@ -54,6 +54,37 @@ describe("renderSubagentResult fork indicator", () => {
 
 		const text = widget.render(120).join("\n");
 		assert.match(text, /\[fork\]/);
+	});
+
+	it("shows [lineage] when details are empty but context is lineage", () => {
+		const widget = renderSubagentResult!({
+			content: [{ type: "text", text: "Async: reviewer [abc123]" }],
+			details: { mode: "single", context: "lineage", results: [] },
+		}, { expanded: false }, theme);
+
+		const text = widget.render(120).join("\n");
+		assert.match(text, /\[lineage\]/);
+		assert.doesNotMatch(text, /\[fork\]/);
+	});
+
+	it("shows [lineage] on single-result header", () => {
+		const widget = renderSubagentResult!({
+			content: [{ type: "text", text: "done" }],
+			details: {
+				mode: "single",
+				context: "lineage",
+				results: [{
+					agent: "reviewer",
+					task: "review",
+					exitCode: 0,
+					messages: [],
+					usage: emptyUsage,
+				}],
+			},
+		}, { expanded: false }, theme);
+
+		const text = widget.render(120).join("\n");
+		assert.match(text, /\[lineage\]/);
 	});
 
 	it("shows [fork] on single-result header", () => {

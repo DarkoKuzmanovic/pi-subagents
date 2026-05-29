@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createForkContextResolver, resolveSubagentContext } from "../../src/shared/fork-context.ts";
+import { createForkContextResolver, createSubagentContextResolver, resolveSubagentContext } from "../../src/shared/fork-context.ts";
 
 describe("resolveSubagentContext", () => {
 	it("defaults to fresh", () => {
@@ -10,6 +10,10 @@ describe("resolveSubagentContext", () => {
 
 	it("accepts fork", () => {
 		assert.equal(resolveSubagentContext("fork"), "fork");
+	});
+
+	it("accepts lineage", () => {
+		assert.equal(resolveSubagentContext("lineage"), "lineage");
 	});
 });
 
@@ -41,6 +45,34 @@ describe("createForkContextResolver", () => {
 				constructor: { open: () => ({ createBranchedSession: () => "/tmp/child.jsonl" }) },
 			}, "fork"),
 			/Forked subagent context requires a persisted parent session\./,
+		);
+	});
+
+	it("lineage fails fast when parent session file is missing", () => {
+		assert.throws(
+			() => createSubagentContextResolver({
+				getSessionFile: () => undefined,
+				getLeafId: () => "leaf-123",
+				constructor: {
+					open: () => ({ createBranchedSession: () => "/tmp/fork.jsonl" }),
+					create: () => ({ getSessionFile: () => "/tmp/lineage.jsonl" }),
+				},
+			}, "lineage", { cwd: "/repo", sessionDirForIndex: (i = 0) => `/tmp/run-${i}` }),
+			/Lineage subagent context requires a persisted parent session\./,
+		);
+	});
+
+	it("lineage fails fast when session directory options are missing", () => {
+		assert.throws(
+			() => createSubagentContextResolver({
+				getSessionFile: () => "/tmp/parent.jsonl",
+				getLeafId: () => "leaf-123",
+				constructor: {
+					open: () => ({ createBranchedSession: () => "/tmp/fork.jsonl" }),
+					create: () => ({ getSessionFile: () => "/tmp/lineage.jsonl" }),
+				},
+			}, "lineage"),
+			/Lineage subagent context requires session directory options\./,
 		);
 	});
 
@@ -129,6 +161,54 @@ describe("createForkContextResolver", () => {
 		const second = resolver.sessionFileForIndex(7);
 		assert.equal(first, second);
 		assert.equal(calls, 1);
+	});
+
+	it("lineage creates blank child sessions with parentSession without branching", () => {
+		const creates: Array<{ cwd: string; sessionDir?: string; parentSession?: string }> = [];
+		let branchCalls = 0;
+		const resolver = createSubagentContextResolver({
+			getSessionFile: () => "/tmp/parent.jsonl",
+			getLeafId: () => "leaf-123",
+			constructor: {
+				open: () => ({
+					createBranchedSession: () => {
+						branchCalls++;
+						return "/tmp/fork.jsonl";
+					},
+				}),
+				create: (cwd: string, sessionDir?: string, options?: { parentSession?: string }) => {
+					creates.push({ cwd, sessionDir, parentSession: options?.parentSession });
+					return { getSessionFile: () => `${sessionDir}/lineage.jsonl` };
+				},
+			},
+		}, "lineage", { cwd: "/repo", sessionDirForIndex: (i = 0) => `/tmp/run-${i}` });
+
+		assert.equal(resolver.sessionFileForIndex(0), "/tmp/run-0/lineage.jsonl");
+		assert.equal(resolver.sessionFileForIndex(1), "/tmp/run-1/lineage.jsonl");
+		assert.equal(branchCalls, 0);
+		assert.deepEqual(creates, [
+			{ cwd: "/repo", sessionDir: "/tmp/run-0", parentSession: "/tmp/parent.jsonl" },
+			{ cwd: "/repo", sessionDir: "/tmp/run-1", parentSession: "/tmp/parent.jsonl" },
+		]);
+	});
+
+	it("lineage memoizes per index", () => {
+		let creates = 0;
+		const resolver = createSubagentContextResolver({
+			getSessionFile: () => "/tmp/parent.jsonl",
+			getLeafId: () => "leaf-123",
+			constructor: {
+				open: () => ({ createBranchedSession: () => "/tmp/fork.jsonl" }),
+				create: (_cwd: string, sessionDir?: string) => {
+					creates++;
+					return { getSessionFile: () => `${sessionDir}/lineage-${creates}.jsonl` };
+				},
+			},
+		}, "lineage", { cwd: "/repo", sessionDirForIndex: (i = 0) => `/tmp/run-${i}` });
+
+		assert.equal(resolver.sessionFileForIndex(7), "/tmp/run-7/lineage-1.jsonl");
+		assert.equal(resolver.sessionFileForIndex(7), "/tmp/run-7/lineage-1.jsonl");
+		assert.equal(creates, 1);
 	});
 
 	it("does not silently fallback to fresh when branch extraction fails", () => {

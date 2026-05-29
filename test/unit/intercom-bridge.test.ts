@@ -255,6 +255,16 @@ describe("resolveIntercomBridge", () => {
 		assert.equal(bridge.active, false);
 	});
 
+	it("stays inactive for lineage context when mode is fork-only", () => {
+		const bridge = resolveIntercomBridge({
+			config: { mode: "fork-only" },
+			context: "lineage",
+			orchestratorTarget: "main",
+			extensionDir: "/path/that/does/not/matter",
+		});
+		assert.equal(bridge.active, false);
+	});
+
 	it("loads custom instructions from instructionFile", () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-intercom-bridge-test-"));
 		const extensionDir = path.join(tempDir, "pi-intercom");

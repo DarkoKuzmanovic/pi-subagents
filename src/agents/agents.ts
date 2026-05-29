@@ -19,7 +19,7 @@ export type AgentScope = "user" | "project" | "both";
 
 export type AgentSource = "builtin" | "user" | "project";
 type SystemPromptMode = "append" | "replace";
-export type AgentDefaultContext = "fresh" | "fork";
+export type AgentDefaultContext = "fresh" | "fork" | "lineage";
 
 export function defaultSystemPromptMode(name: string): SystemPromptMode {
 	return name === "delegate" ? "append" : "replace";
@@ -335,10 +335,10 @@ function parseBuiltinOverrideEntry(
 	}
 
 	if ("defaultContext" in input) {
-		if (input.defaultContext === "fresh" || input.defaultContext === "fork" || input.defaultContext === false) {
+		if (input.defaultContext === "fresh" || input.defaultContext === "fork" || input.defaultContext === "lineage" || input.defaultContext === false) {
 			override.defaultContext = input.defaultContext;
 		} else {
-			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'defaultContext'; expected 'fresh', 'fork', or false.`);
+			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'defaultContext'; expected 'fresh', 'fork', 'lineage', or false.`);
 		}
 	}
 
@@ -634,9 +634,11 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 				: defaultInheritSkills();
 		const defaultContext = frontmatter.defaultContext === "fork"
 			? "fork" as const
-			: frontmatter.defaultContext === "fresh"
-				? "fresh" as const
-				: undefined;
+			: frontmatter.defaultContext === "lineage"
+				? "lineage" as const
+				: frontmatter.defaultContext === "fresh"
+					? "fresh" as const
+					: undefined;
 
 		let extensions: string[] | undefined;
 		if (frontmatter.extensions !== undefined) {

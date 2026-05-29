@@ -284,8 +284,8 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 	}
 	if (hasKey(cfg, "defaultContext")) {
 		if (cfg.defaultContext === false || cfg.defaultContext === "") target.defaultContext = undefined;
-		else if (cfg.defaultContext === "fresh" || cfg.defaultContext === "fork") target.defaultContext = cfg.defaultContext;
-		else return "config.defaultContext must be 'fresh', 'fork', or false when provided.";
+		else if (cfg.defaultContext === "fresh" || cfg.defaultContext === "fork" || cfg.defaultContext === "lineage") target.defaultContext = cfg.defaultContext;
+		else return "config.defaultContext must be 'fresh', 'fork', 'lineage', or false when provided.";
 	}
 	if (hasKey(cfg, "output")) {
 		if (cfg.output === false || cfg.output === "") target.output = undefined;

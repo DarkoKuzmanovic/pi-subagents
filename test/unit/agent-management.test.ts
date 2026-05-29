@@ -142,4 +142,16 @@ Inspect
 		assert.match(content, /inheritProjectContext: true/);
 		assert.match(content, /inheritSkills: false/);
 	});
+
+	it("creates agents with lineage defaultContext", () => {
+		const result = handleCreate(
+			{ config: { name: "lineage-agent", description: "Lineage helper", scope: "project", defaultContext: "lineage" } },
+			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } },
+		);
+
+		assert.equal(result.isError, false);
+		const filePath = path.join(tempDir, ".pi", "agents", "lineage-agent.md");
+		const content = fs.readFileSync(filePath, "utf-8");
+		assert.match(content, /^defaultContext: lineage$/m);
+	});
 });

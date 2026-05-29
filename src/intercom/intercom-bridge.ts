@@ -60,7 +60,7 @@ export interface IntercomBridgeDiagnostic {
 
 interface ResolveIntercomBridgeInput {
 	config: ExtensionConfig["intercomBridge"];
-	context: "fresh" | "fork" | undefined;
+	context: "fresh" | "fork" | "lineage" | undefined;
 	orchestratorTarget?: string;
 	extensionDir?: string;
 	configPath?: string;

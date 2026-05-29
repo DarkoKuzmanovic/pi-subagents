@@ -854,11 +854,22 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 	else stopWidgetAnimation();
 }
 
+function renderContextBadge(
+	context: Details["context"],
+	theme: Theme,
+	opts?: { prefix?: boolean },
+): string {
+	if (context !== "fork" && context !== "lineage") return "";
+	const color = context === "fork" ? "warning" : "muted";
+	const badge = theme.fg(color, `[${context}]`);
+	return opts?.prefix ? `${badge} ` : ` ${badge}`;
+}
+
 function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme): Component {
 	const output = r.truncation?.text || getSingleResultOutput(r);
 	const progress = r.progress || r.progressSummary;
 	const isRunning = r.progress?.status === "running";
-	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
+	const contextBadge = renderContextBadge(d.context, theme);
 	const stats = statJoin(theme, [
 		r.usage?.turns ? `⟳ ${r.usage.turns}` : "",
 		formatProgressStats(theme, progress),
@@ -917,7 +928,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 			: paused
 				? theme.fg("warning", "■")
 				: theme.fg("success", "✓");
-	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
+	const contextBadge = renderContextBadge(d.context, theme);
 	const c = new Container();
 	const width = getTermWidth() - 4;
 	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
@@ -973,7 +984,7 @@ export function renderSubagentResult(
 	if (!d || !d.results.length) {
 		const t = result.content[0];
 		const text = t?.type === "text" ? t.text : "(no output)";
-		const contextPrefix = d?.context === "fork" ? `${theme.fg("warning", "[fork]")} ` : "";
+		const contextPrefix = renderContextBadge(d?.context, theme, { prefix: true });
 		return new Text(truncLine(`${contextPrefix}${text}`, getTermWidth() - 4), 0, 0);
 	}
 
@@ -991,7 +1002,7 @@ export function renderSubagentResult(
 				: r.exitCode === 0
 					? theme.fg("success", "ok")
 					: theme.fg("error", "failed");
-		const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
+		const contextBadge = renderContextBadge(d.context, theme);
 		const output = r.truncation?.text || getSingleResultOutput(r);
 
 		const progressInfo = isRunning && r.progress
@@ -1117,7 +1128,7 @@ export function renderSubagentResult(
 			: "";
 
 	const modeLabel = d.mode;
-	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
+	const contextBadge = renderContextBadge(d.context, theme);
 	const multiLabel = buildMultiProgressLabel(d, hasRunning);
 	const itemTitle = multiLabel.itemTitle;
 	

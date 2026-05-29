@@ -114,6 +114,35 @@ describe("prompt-template delegation bridge", () => {
 		bridge.dispose();
 	});
 
+	it("accepts lineage context requests", async () => {
+		const events = new FakeEvents();
+		let seenContext: string | undefined;
+		const bridge = registerPromptTemplateDelegationBridge({
+			events,
+			getContext: () => ({ cwd: "/repo" }),
+			execute: async (_requestId, request) => {
+				seenContext = request.context;
+				return { details: { results: [] } };
+			},
+		});
+		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
+
+		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+			requestId: "lineage-1",
+			agent: "worker",
+			task: "do work",
+			context: "lineage",
+			model: "openai/gpt-5",
+			cwd: "/repo",
+		});
+
+		const response = await responsePromise as { requestId: string; isError: boolean };
+		assert.equal(response.requestId, "lineage-1");
+		assert.equal(response.isError, false);
+		assert.equal(seenContext, "lineage");
+		bridge.dispose();
+	});
+
 	it("filters malformed recent output entries in updates", async () => {
 		const events = new FakeEvents();
 		const bridge = registerPromptTemplateDelegationBridge({

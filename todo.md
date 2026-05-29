@@ -1,82 +1,57 @@
 # pi-subagents — TODO
 
-Follow-up items from the review of commits 3ae405a, 6271a88, 849d466.
-Full review: [`review-3-commits.md`](./review-3-commits.md). Fixes already shipped: 956b905, 6abf540.
+This file is the long-lived product backlog for the local `pi-subagents` fork. It is intentionally opinionated: items are grouped by what to build next, what to keep warm, and what to reject unless a real user asks for it.
 
-## Done
+## Now / next
 
-- [x] BLOCKER 1 — `serializeAgent` drops `disallowedTools` and `memory` (956b905)
-- [x] BLOCKER 2 — `cloneOverrideValue` drops the same fields (956b905)
-- [x] MAJOR 1 — `formatAgentDetail` doesn't display these fields (956b905)
-- [x] MAJOR 2 — CHANGELOG entries for the three features (6abf540)
-- [x] NEW — Round-trip regression test for serializer (956b905)
-- [x] MINOR 1 — TOCTOU race in symlink check on `readMemoryIndex` (1884b2f)
-- [x] MINOR 2 — No write-time 200-line cap enforcement: extracted `enforceLineCap` (358af3d)
-- [x] MINOR 3 — Confusing assertion in line-cap test (4f98fa3)
-- [x] NIT 4 — No Unicode normalization guard in `isUnsafeName` (da0f86c)
-- [x] NIT 5 — `resolveMemoryDir` switch has no default case (4b95bb6)
-- [x] NIT 7 — Weak first assertion in skill-preload test (889cade)
+- [ ] **Persistent / warm subagent workers** — keep a small pool of child `pi` worker processes/session shells alive so dispatch can reuse an already-loaded agent instead of paying full Pi startup/extension-load cost every task. Targets the user pain point: latency waiting for fresh child Pi sessions. Different from true in-process sessions: still separate processes for crash isolation, but warmed and reusable. Needs design for worker identity, idle timeout, context reset between tasks, session attachment/resume semantics, cancellation, and safe tool/extension reconfiguration.
+- [ ] **Mid-run steering** — inject a message into a running subagent without killing it. This is the primitive that unlocks better long-running-worker UX: course-correct, ask for wrap-up, or answer a child’s question. Requires: child-process IPC channel or intercom delivery, parent-side `subagent` action `steer`, and a way for a child `pi` session to receive an injected user message mid-turn.
 
-## Intentionally Skipped
+## Keep — high-leverage backlog
 
-- [ ] NIT 6 — Type-only import for `MemoryScope` **skipped**: `MemoryScope` is still a pure type (`export type MemoryScope = "project"`). Changing to non-type import would cause a runtime error. Defer until it gains a runtime value.
+- [ ] **Attach/detach UX for background subagents** — let the parent join a running async child, watch live output, steer if supported, then detach again. Builds on async runner, status/revive, and the conversation-viewer idea.
+- [ ] **Pending-work-aware completion semantics** — prevent parent/chain completion from claiming done while delegated children, background shells, or session jobs are still running. Audit `subagent-executor.ts`, `async-execution.ts`, and completion guards.
+- [ ] **Graceful truncation for oversized subagent output** — return `PARTIAL — full output at <path>` instead of failing or flooding the parent when a child produces huge output. Result files already exist; add a consistent envelope.
+- [ ] **Live status surface** — replace “open `/subagents` to check status” with an always-visible widget or compact status line showing active agents, elapsed time, activity, and attention state. Pair with the conversation viewer.
+- [ ] **Conversation viewer overlay** — live-scroll any running/completed child transcript with auto-follow and pause-on-scroll. Useful before full attach/detach exists.
+- [ ] **Lifecycle events on `pi.events`** — emit `subagents:created/started/completed/failed/steered/compacted` with stable envelopes so other extensions can react.
+- [ ] **Cross-extension RPC** — after lifecycle events exist, add `subagents:rpc:spawn|stop|ping` with `requestId` reply channels and protocol versioning.
 
-## Ideas to port from tintinweb/pi-subagents
+## Keep — defensive polish when touching nearby code
 
-From comparison of [github.com/tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents). Ranked by value-to-effort. Already shipped: persistent memory, tool denylist, skill preloading.
+- [ ] **Fix compact glyph / live-detail render regression** — `test/integration/render-fork-badge.test.ts` has 2 pre-existing failures (`uses glyph-first compact rendering for completed subagents`, `shows live detail hints for running subagents`) tied to `src/tui/render.ts` (~lines 950, 1055: `ProgressSummary`/`AgentProgress` type mismatch and a wrong-arity call). Unrelated to lineage; surfaced during the 0.34.0 lineage work. Unit suite is green; only `test:integration` is affected.
 
-### High value
+- [ ] **Recursive self-dispatch guard test** — verify `maxSubagentDepth` prevents recursive chain/skill self-dispatch at runtime, not just in config.
+- [ ] **Consecutive-block cap for completion guards** — if hook/guard blocks repeatedly, stop after a bounded cap with a warning. Add `PI_SUBAGENT_STOP_HOOK_BLOCK_CAP` override.
+- [ ] **`--json` / structured output for `subagent { action: "list" }`** — enables status bars, dashboards, and scripting without parsing human text.
+- [ ] **Time-warmed spinner/status colors** — green <30s, amber 30–120s, red >120s in `/subagents` or the future live status surface.
 
-- [ ] **Mid-run steering** — inject a message into a running subagent without killing it. Theirs exposes `steer_subagent({ agent_id, message })`; the message interrupts after the current tool call. Game-changer for long-running workers going off-track. Requires: child-process IPC channel (stdin pipe or signal+file), parent-side `subagent` action `steer`, and a way for the child `pi` session to receive an injected user message mid-turn. Architectural — needs design before code.
+## Park / needs stronger demand
 
-- [ ] **Live above-editor widget** — persistent widget showing active agents, spinners, tool activity, token %/context utilization, status icons. Currently `/subagents` is modal — must open to see status. Ours has the TUI hub (`src/tui/`) — extend or add a widget renderer that registers via Pi's widget API (check `docs/tui.md`). Async runner already tracks progress; this is mostly a rendering surface.
+- [ ] **`/goal` completion-condition loops** — “keep working until tests pass / condition is true.” Powerful but broad; probably a dedicated `worker-goal` agent or chain, not a flag on every agent.
+- [ ] **Cron/interval/one-shot scheduling** — session-scoped scheduled agents. Useful, but large surface area and safety implications; defer until there is a real recurring-job use case.
+- [ ] **Projected context cost in `subagent { action: "list" }`** — estimate per-agent token/cost from historical runs. Nice for budgeting, not essential.
+- [ ] **Awaiting-input count in terminal tab title** — useful only after steering/blocking-child UX exists.
+- [ ] **"Summarize up to here" for chain runs** — compress earlier chain artifacts while keeping recent outputs intact. Defer until chains routinely overflow.
 
-- [ ] **Lifecycle events on `pi.events`** — emit `subagents:created/started/completed/failed/steered/compacted` so other extensions can react. Standardize a reply envelope (`{ success: true, data }` / `{ success: false, error }`). Low-effort, high-leverage: enables ecosystem integration. Add to `subagent-executor.ts` / `async-execution.ts` completion paths.
+## Ditch unless requirements change
 
-- [ ] **Cross-extension RPC** — `subagents:rpc:spawn|stop|ping` event handlers with `requestId`-scoped reply channels and protocol versioning. Lets other extensions delegate without importing pi-subagents directly. Builds on lifecycle events above.
+- [ ] **In-process sessions instead of child `pi` processes** — faster startup, but loses crash isolation and would require a major rewrite. Prefer warm separate workers first.
+- [ ] **Claude Code-style API aliases** — `Agent` / `get_subagent_result` aliases would add surface area and two mental models. Keep the native `subagent` API.
+- [ ] **Type-only import for `MemoryScope`** — intentionally skipped because `MemoryScope` is still a pure type. Changing to a runtime import would break.
 
-### Medium value
+## Done archive
 
-- [ ] **Conversation viewer overlay** — live-scrolling overlay for any running/completed agent's transcript. Auto-follow new content, pause on scroll-up. Pairs with the widget — select an agent in the widget, open viewer. Currently you wait for the result file or tail JSONL manually.
+- [x] **Lineage-only subagent context** — `context: "lineage"` clean child sessions linked to the parent session tree without copying the parent transcript; resolver, executor wiring, schema/types/agent-config, `[lineage]` render badge, README, tests. Shipped in 0.34.0. Plan: [`docs/plans/2026-05-29-lineage-only-subagent-context.md`](./docs/plans/2026-05-29-lineage-only-subagent-context.md).
 
-- [ ] **Cron/interval/one-shot scheduling** — `schedule: "0 0 9 * * 1"` or `"5m"` or `"+10m"`. Session-scoped jobs with PID-locked persistence under `.pi/subagent-schedules/<sessionId>.json`. Useful for recurring research/status agents. Restrictions: incompatible with `inherit_context`/`resume`, forces background. Significant surface area — only do if there's real demand.
-
-- [ ] **Graceful turn limits with steering-based wrap-up** — at `max_turns`, send wrap-up steering message, allow N grace turns, hard-abort only after. Produces clean partial results instead of mid-tool cutoff. Depends on steering primitive landing first.
-
-### Low value / probably won't port
-
-- [ ] **In-process sessions instead of child `pi` processes** — theirs runs agents as sessions in the same pi process. Faster startup, no spawn cost, but loses crash isolation. Major architectural rewrite of `subagent-executor.ts`. Trade-off doesn't clearly favor either direction for our orchestration-pipeline use case.
-
-- [ ] **Claude Code-style API alias** — register `Agent` / `get_subagent_result` as aliases that map to our `subagent` modes. Familiarity for CC users, but adds surface area and two mental models. Skip unless users ask.
-
-## Ideas from Claude Code changelog (May 2026, v2.1.126–2.1.145)
-
-Scan of [code.claude.com/docs/en/changelog](https://code.claude.com/docs/en/changelog) since 2026-05-01. Filtered to subagent-orchestration relevance only.
-
-### High value
-
-- [ ] **`/goal` — completion-condition-driven loops** (CC 2.1.139). Set a condition ("until tests pass", "until diff matches spec") and the agent auto-continues across turns until met. Different shape from chains: not "do N steps" but "loop until verified." Pairs naturally with `worker`. Implementation: (a) goal evaluator (LLM call or hook) after each turn, (b) turn-budget cap to prevent runaway, (c) live progress overlay (elapsed/turns/tokens). Probably a `worker-goal` agent variant rather than a flag on every agent. Highest-novelty idea in the entire changelog.
-
-- [ ] **Attach/detach UX for background subagents** (CC 2.1.139–2.1.145, `claude agents` + `claude --bg` + `←`-detach). Today our async runs are poll-only: `subagent { action: "status" }`. CC lets you *join* a running background session, watch live output, optionally steer, detach again. Big UX leap on infrastructure we already have (async runner, job tracker). Pairs with the conversation-viewer overlay already in this todo.
-
-- [ ] **Pending-work-aware completion semantics** (CC 2.1.143–2.1.145). `Stop` / `SubagentStop` hook input now includes `background_tasks` and `session_crons` fields, and the `/goal` evaluator waits for background shells / delegated subagents to finish before firing. Pattern: a parent agent that dispatched N background children should not be allowed to declare "done" while any child is still running. Audit our completion paths in `subagent-executor.ts` / `async-execution.ts` for this guard.
-
-### Defensive patterns (small, adopt when touching the area)
-
-- [ ] **Consecutive-block cap for completion guards** (CC 2.1.143: stop hooks blocking repeatedly now end the turn with a warning after 8 consecutive blocks, env-overrideable). Audit `src/runs/shared/completion-guard.ts` and `long-running-guard.ts` for equivalent: a subagent bounced by hook/condition that never terminates. Add `PI_SUBAGENT_STOP_HOOK_BLOCK_CAP` env override.
-
-- [ ] **Recursive self-dispatch guard** (CC 2.1.145: skill with `context: fork` could re-invoke itself infinitely). Verify `maxSubagentDepth` enforcement actually fires when a chain or skill recursively dispatches itself — not just at config level but at runtime. Add depth counter test.
-
-- [ ] **Graceful truncation instead of hard failure on oversized output** (CC 2.1.145: Read tool returns truncated first page with "PARTIAL view" notice when whole-file read exceeds token limit). Apply to subagent result delivery: a chain step producing a 200K-token result should return `PARTIAL — full output at <path>` instead of failing the whole chain. Result already streams to file; just need a truncation envelope.
-
-### Quality-of-life polish
-
-- [ ] **Projected context cost in `subagent { action: "list" }`** (CC 2.1.143: per-turn and per-invocation token estimates in plugin marketplace browse pane). Show estimated tokens per dispatch per agent based on historical run length. Helps the orchestrator (Opus) pick the right agent for budget.
-
-- [ ] **Time-warmed spinner colors** (CC 2.1.141: spinner warms to amber after 10s to signal still working). In `/subagents` TUI: green <30s, amber 30–120s, red >120s. Visual cue that a subagent might be stuck without opening details.
-
-- [ ] **`--json` output for `subagent { action: "list" }`** (CC 2.1.145: `claude agents --json` for scripting, tmux-resurrect, status bars). Cheap to add. Enables external tooling (status bars, dashboards, automation) to read what's running without parsing TUI output.
-
-- [ ] **Awaiting-input count in terminal tab title** (CC 2.1.145). Becomes essential *if* mid-run steering lands — terminal title shows `[2!]` when 2 subagents are blocked waiting for parent decision. Skip until steering is in.
-
-- [ ] **"Summarize up to here" for chain runs** (CC 2.1.144 rewind menu). For long-running chains where intermediate outputs balloon, allow compressing earlier step outputs while keeping the most recent ones intact. Probably needs `chainDir` artifact rewriting — nontrivial. Defer until chains routinely overflow.
+- [x] `serializeAgent` preserves `disallowedTools` and `memory` (956b905)
+- [x] `cloneOverrideValue` preserves `disallowedTools` and `memory` (956b905)
+- [x] `formatAgentDetail` displays `disallowedTools` and `memory` (956b905)
+- [x] CHANGELOG entries for shipped review fixes (6abf540)
+- [x] Round-trip regression test for serializer (956b905)
+- [x] `readMemoryIndex` symlink TOCTOU race fix (1884b2f)
+- [x] Write-time 200-line cap enforcement via `enforceLineCap` (358af3d)
+- [x] Line-cap assertion cleanup (4f98fa3)
+- [x] Unicode normalization guard in `isUnsafeName` (da0f86c)
+- [x] `resolveMemoryDir` switch default case (4b95bb6)
+- [x] Skill-preload assertion strengthening (889cade)
