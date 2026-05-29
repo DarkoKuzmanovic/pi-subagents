@@ -121,6 +121,47 @@ test("real implementation instructions still trigger after payload stripping", (
 		true,
 	);
 });
+
+test("agents without edit/write tools are never expected to mutate (oracle false-positive)", () => {
+	// oracle/oracle-fresh have bash but no edit/write — they cannot make file changes, so an
+	// implementation-keyword task must not be flagged as a failed implementation run.
+	const readOnlyTools = ["read", "grep", "find", "ls", "bash", "contact_supervisor", "intercom"];
+	// Pure implementation phrasing with NO review/no-edit/analysis wording, so the ONLY thing
+	// that can exempt it is the missing edit/write tools.
+	const implTask = "Fix the failing parser and refactor the drag handler in editor.ts.";
+
+	// Sanity: the exact same task IS flagged when the agent has edit/write — proving the
+	// exemption below comes from the tool allowlist, not from the task text.
+	assert.equal(
+		evaluateCompletionMutationGuard({ agent: "oracle", tools: ["read", "edit"], task: implTask, messages: [assistantText("## Findings")] }).triggered,
+		true,
+	);
+
+	const oracleGuard = evaluateCompletionMutationGuard({
+		agent: "oracle",
+		tools: readOnlyTools,
+		task: implTask,
+		messages: [assistantText("## Findings\n1. Fix the parser by ...")],
+	});
+	assert.equal(oracleGuard.triggered, false);
+
+	// An agent with `write` (e.g. planner) is still expected to mutate for an implementation task.
+	const writerGuard = evaluateCompletionMutationGuard({
+		agent: "custom-writer",
+		tools: ["read", "write"],
+		task: "Implement the approved file changes",
+		messages: [assistantText("I'll do that.")],
+	});
+	assert.equal(writerGuard.triggered, true);
+
+	// Backward-compat: when tools are omitted, behavior is unchanged (still guarded).
+	const legacyGuard = evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: "Implement the approved file changes",
+		messages: [assistantText("I'll do that.")],
+	});
+	assert.equal(legacyGuard.triggered, true);
+});
 test("edit and write tool calls count as mutation attempts", () => {
 	assert.equal(hasMutationToolCall([assistantToolCall("edit", { path: "a.ts" })]), true);
 	assert.equal(hasMutationToolCall([assistantToolCall("write", { path: "a.ts" })]), true);

@@ -634,6 +634,7 @@ async function runSingleStep(
 		const completionGuard = run.exitCode === 0 && !run.error && !hiddenError?.hasError
 			? evaluateCompletionMutationGuard({
 				agent: step.agent,
+				tools: step.tools,
 				task,
 				messages: run.messages,
 			})

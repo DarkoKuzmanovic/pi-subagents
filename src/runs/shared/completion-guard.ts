@@ -72,6 +72,12 @@ interface CompletionMutationGuardInput {
 	agent: string;
 	task: string;
 	messages: Message[];
+	/**
+	 * The agent's resolved tool allowlist. When provided and it contains neither `edit`
+	 * nor `write`, the agent cannot make file changes, so it is never expected to mutate
+	 * (exempts read-only/analysis agents such as oracle). Omit to keep legacy behavior.
+	 */
+	tools?: string[];
 }
 
 interface CompletionMutationGuardResult {
@@ -139,7 +145,8 @@ export function hasMutationToolCall(messages: Message[]): boolean {
 }
 
 export function evaluateCompletionMutationGuard(input: CompletionMutationGuardInput): CompletionMutationGuardResult {
-	const expectedMutation = expectsImplementationMutation(input.agent, input.task);
+	const canMakeFileChanges = input.tools === undefined || input.tools.includes("edit") || input.tools.includes("write");
+	const expectedMutation = canMakeFileChanges && expectsImplementationMutation(input.agent, input.task);
 	const attemptedMutation = hasMutationToolCall(input.messages);
 	return {
 		expectedMutation,

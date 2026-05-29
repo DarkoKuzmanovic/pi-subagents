@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.34.4] - 2026-05-29
+
+### Fixed
+
+- Completion guard no longer flags analysis/proposal agents that have no way to edit files. `evaluateCompletionMutationGuard` now accepts the agent's resolved tool allowlist and treats an agent whose tools contain neither `edit` nor `write` as incapable of file changes, so it is never expected to mutate — fixing the long-standing false "completed without making edits for an implementation task" failure on `oracle`/`oracle-fresh` proposal-only runs (and any read-only custom agent). Agents with `edit`/`write` (worker, reviewer, planner, etc.) remain fully guarded, and the check is backward-compatible (when no tools are supplied, behavior is unchanged). Tools are threaded in from both the foreground (`execution.ts`, `agent.tools`) and async (`subagent-runner.ts`, `step.tools`) call sites.
+
+### Tests
+
+- Added a completion-guard unit test for the tool-aware exemption: a pure-implementation task is exempt for an `oracle`-shaped read-only allowlist, still triggers when `edit` is present (sanity), and remains guarded when tools are omitted (backward compat).
+
 ## [0.34.3] - 2026-05-29
 
 ### Fixed
