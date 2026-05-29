@@ -408,6 +408,7 @@ export interface ForegroundControl {
 	turnCount?: number;
 	toolCount?: number;
 	nestedChildren?: NestedRunSummary[];
+	nestedRoute?: NestedRouteInfo;
 	interrupt?: () => boolean;
 }
 
@@ -611,11 +612,12 @@ export type PublicNestedRunSummary = Pick<
 	| "ownerState" | "mode" | "state" | "agent" | "agents" | "currentStep" | "chainStepCount" | "parallelGroups"
 	| "activityState" | "lastActivityAt" | "currentTool" | "currentToolStartedAt" | "currentPath"
 	| "turnCount" | "toolCount" | "totalTokens" | "startedAt" | "endedAt" | "lastUpdate" | "error"
-	| "steps"
 > & {
 	index?: number;
 	artifactPath?: string;
 	sessionPath?: string;
+	steps?: PublicNestedStepSummary[];
+	children?: PublicNestedRunSummary[];
 };
 
 export interface NestedRouteInfo {

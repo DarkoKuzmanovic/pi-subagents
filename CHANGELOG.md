@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.7] - 2026-05-29
+
+### Fixed
+
+- Restored `ForegroundControl.nestedRoute?: NestedRouteInfo` field dropped during interface extraction; set by `subagent-executor.ts`, read by `nested-events.ts` and `run-id-resolver.ts`.
+- Fixed `PublicNestedRunSummary` projection: removed raw `"steps"` from `Pick<>` (leaked internal `NestedStepSummary`), added `steps?: PublicNestedStepSummary[]` and `children?: PublicNestedRunSummary[]` matching `compactNestedRun()` output.
+- Fixed async widget re-render gating in `async-job-tracker.ts`: added `widgetChanged` check on the terminal-state path (before `continue`) and after the try/catch (covering error path), and gated the final `rerenderWidget` on `widgetChanged && hasUI` — previously rendered unconditionally every poll cycle, making the 0.33.6 `widgetRenderKey` export a no-op.
 ## [0.33.6] - 2026-05-29
 
 ### Fixed

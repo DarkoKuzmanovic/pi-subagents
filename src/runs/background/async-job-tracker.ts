@@ -197,9 +197,9 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 					job.sessionFile = status.sessionFile ?? job.sessionFile;
 					if ((job.status === "complete" || job.status === "failed" || job.status === "paused") && !nestedRefreshFailed && (previousStatus !== job.status || !state.cleanupTimers.has(job.asyncId))) {
 						if (!hasLiveNestedDescendants(job.nestedChildren)) scheduleCleanup(job.asyncId);
+						if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 						continue;
 					}
-					if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 					job.status = job.status === "queued" ? "running" : job.status;
 					job.updatedAt = Date.now();
 				}
@@ -211,9 +211,10 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 					scheduleCleanup(job.asyncId);
 				}
 			}
+				if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 			}
 
-			if (state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
+			if (widgetChanged && state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
 		}, pollIntervalMs);
 		state.poller.unref?.();
 	};
