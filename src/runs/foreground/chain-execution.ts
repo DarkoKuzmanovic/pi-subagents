@@ -8,7 +8,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { ChainClarifyComponent, type ChainClarifyResult, type BehaviorOverride } from "./chain-clarify.ts";
-import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
+import { currentModelFullId, toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import {
 	resolveChainTemplates,
 	createChainDir,
@@ -214,7 +214,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			const taskAgentConfig = input.agents.find((agent) => agent.name === task.agent);
 			const effectiveModel =
 				(task.model ? resolveModelCandidate(task.model, input.availableModels, input.ctx.model?.provider) : null)
-				?? resolveModelCandidate(taskAgentConfig?.model, input.availableModels, input.ctx.model?.provider);
+				?? resolveModelCandidate(taskAgentConfig?.model, input.availableModels, input.ctx.model?.provider)
+				?? (behavior.thinking ? currentModelFullId(input.ctx.model) : undefined);
 			const maxSubagentDepth = resolveChildMaxSubagentDepth(input.maxSubagentDepth, taskAgentConfig?.maxSubagentDepth);
 
 			const taskCwd = input.worktreeSetup
@@ -264,6 +265,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				availableModels: input.availableModels,
 				preferredModelProvider: input.ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
+				effectiveThinking: behavior.thinking,
 				onUpdate: input.onUpdate
 					? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
@@ -756,6 +758,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				outputMode: seqStep.outputMode,
 				reads: tuiOverride?.reads !== undefined ? tuiOverride.reads : seqStep.reads,
 				progress: tuiOverride?.progress !== undefined ? tuiOverride.progress : seqStep.progress,
+				thinking: seqStep.thinking,
 				skills:
 					tuiOverride?.skills !== undefined
 						? tuiOverride.skills
@@ -786,7 +789,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const effectiveModel =
 				tuiOverride?.model
 				?? (seqStep.model ? resolveModelCandidate(seqStep.model, availableModels, ctx.model?.provider) : null)
-				?? resolveModelCandidate(agentConfig.model, availableModels, ctx.model?.provider);
+				?? resolveModelCandidate(agentConfig.model, availableModels, ctx.model?.provider)
+				?? (behavior.thinking ? currentModelFullId(ctx.model) : undefined);
 
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
@@ -845,6 +849,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				availableModels,
 				preferredModelProvider: ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
+				effectiveThinking: behavior.thinking,
 				onUpdate: onUpdate
 					? (p) => {
 						const stepResults = p.details?.results || [];

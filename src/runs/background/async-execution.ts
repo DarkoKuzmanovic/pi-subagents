@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../../agents/agents.ts";
-import { applyThinkingSuffix } from "../shared/pi-args.ts";
+import { applyEffectiveThinkingSuffix } from "../shared/pi-args.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildChainInstructions, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
@@ -102,6 +102,7 @@ interface AsyncExecutionContext {
 	cwd: string;
 	currentSessionId: string;
 	currentModelProvider?: string;
+	currentModel?: string;
 }
 
 interface AsyncChainParams {
@@ -144,6 +145,7 @@ interface AsyncSingleParams {
 	output?: string | boolean;
 	outputMode?: "inline" | "file-only";
 	modelOverride?: string;
+	thinking?: string;
 	availableModels?: AvailableModelInfo[];
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
@@ -321,6 +323,7 @@ export function executeAsyncChain(
 			...(s.progress !== undefined ? { progress: s.progress } : {}),
 			...(stepSkillInput !== undefined ? { skills: stepSkillInput } : {}),
 			...(s.model ? { model: s.model } : {}),
+			...(s.thinking ? { thinking: s.thinking } : {}),
 		};
 	};
 	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior) => {
@@ -347,15 +350,15 @@ export function executeAsyncChain(
 		if (validationError) throw new AsyncStartValidationError(validationError);
 		const task = injectSingleOutputInstruction(`${readInstructions.prefix}${s.task ?? "{previous}"}${progressInstructions.suffix}`, outputPath);
 
-		const primaryModel = resolveModelCandidate(behavior.model ?? a.model, availableModels, ctx.currentModelProvider);
+		const primaryModel = resolveModelCandidate(behavior.model ?? a.model, availableModels, ctx.currentModelProvider) ?? (behavior.thinking ? ctx.currentModel : undefined);
 		return {
 			agent: s.agent,
 			task,
 			cwd: stepCwd,
-			model: applyThinkingSuffix(primaryModel, a.thinking),
-			modelCandidates: buildModelCandidates(behavior.model ?? a.model, a.fallbackModels, availableModels, ctx.currentModelProvider).map((candidate) =>
-				applyThinkingSuffix(candidate, a.thinking),
-			),
+			model: applyEffectiveThinkingSuffix(primaryModel, behavior.thinking ?? a.thinking),
+			modelCandidates: buildModelCandidates(behavior.model ?? a.model, a.fallbackModels, availableModels, ctx.currentModelProvider)
+				.concat(primaryModel ? [primaryModel] : [])
+				.map((candidate) => applyEffectiveThinkingSuffix(candidate, behavior.thinking ?? a.thinking)),
 			tools: a.tools,
 			extensions: a.extensions,
 			mcpDirectTools: a.mcpDirectTools,
@@ -520,7 +523,7 @@ export function executeAsyncSingle(
 	id: string,
 	params: AsyncSingleParams,
 ): AsyncExecutionResult {
-	const { agent, agentConfig, skills, output, outputMode, modelOverride } = params;
+	const { agent, agentConfig, skills, output, outputMode, modelOverride, thinking } = params;
 
 	// Pre-normalize output — chain path uses resolveStepBehavior which has different
 	// default-fallback logic. Explicit false suppresses chain's fallback to agentConfig.output.
@@ -535,6 +538,7 @@ export function executeAsyncSingle(
 		progress: false, // single path has no progress instructions
 		skill: skills,
 		model: modelOverride,
+		thinking,
 	};
 
 	return executeAsyncChain(id, {

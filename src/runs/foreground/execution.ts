@@ -46,7 +46,7 @@ import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
-import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
+import { applyEffectiveThinkingSuffix, applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { captureSingleOutputSnapshot, formatSavedOutputReference, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
@@ -121,7 +121,7 @@ async function runSingleAttempt(
 		outputSnapshot?: SingleOutputSnapshot;
 	},
 ): Promise<SingleResult> {
-	const modelArg = applyThinkingSuffix(model, agent.thinking);
+	const effectiveThinking = options.effectiveThinking ?? agent.thinking;
 	const { args, env: sharedEnv, tempDir } = buildPiArgs({
 		baseArgs: ["--mode", "json", "-p"],
 		task,
@@ -129,7 +129,7 @@ async function runSingleAttempt(
 		sessionDir: options.sessionDir,
 		sessionFile: options.sessionFile,
 		model,
-		thinking: agent.thinking,
+		thinking: effectiveThinking,
 		systemPromptMode: agent.systemPromptMode,
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritSkills: agent.inheritSkills,
@@ -158,7 +158,7 @@ async function runSingleAttempt(
 		exitCode: 0,
 		messages: [],
 		usage: emptyUsage(),
-		model: modelArg,
+		model: applyEffectiveThinkingSuffix(model, effectiveThinking),
 		artifactPaths: shared.artifactPaths,
 		skills: shared.resolvedSkillNames,
 		skillsWarning: shared.skillsWarning,

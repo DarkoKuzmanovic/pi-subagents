@@ -27,6 +27,18 @@ export function toModelInfo(model: RegistryModelLike): ModelInfo {
 	};
 }
 
+export function currentModelFullId(model: unknown): string | undefined {
+	if (!model || typeof model !== "object") return undefined;
+	const record = model as Record<string, unknown>;
+	const provider = typeof record.provider === "string" ? record.provider : undefined;
+	const id = typeof record.id === "string"
+		? record.id
+		: typeof record.modelId === "string"
+			? record.modelId
+			: undefined;
+	return provider && id ? `${provider}/${id}` : undefined;
+}
+
 function splitKnownThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
 	const colonIdx = model.lastIndexOf(":");
 	if (colonIdx === -1) return { baseModel: model, thinkingSuffix: "" };

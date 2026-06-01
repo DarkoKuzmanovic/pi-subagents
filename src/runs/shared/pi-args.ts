@@ -71,6 +71,42 @@ export function applyThinkingSuffix(model: string | undefined, thinking: string 
 	return `${model}:${thinking}`;
 }
 
+/**
+ * Strip any known thinking suffix from a model string.
+ * Used when an inline thinking override needs to remove a pre-existing suffix.
+ */
+export function stripKnownThinkingSuffix(model: string): string {
+	const colonIdx = model.lastIndexOf(":");
+	if (colonIdx !== -1 && THINKING_LEVELS.includes(model.substring(colonIdx + 1))) return model.substring(0, colonIdx);
+	return model;
+}
+
+/**
+ * Apply effective thinking level to a model string, stripping any pre-existing known suffix first.
+ * Handles "off" by stripping without re-appending.
+ */
+export function applyEffectiveThinkingSuffix(model: string | undefined, thinking: string | undefined): string | undefined {
+	if (!model) return model;
+	if (!thinking) return model;
+	const stripped = stripKnownThinkingSuffix(model);
+	if (thinking === "off") return stripped;
+	return `${stripped}:${thinking}`;
+}
+
+export function buildModelThinkingOverride(
+	modelOverride: string | undefined,
+	thinking: string | undefined,
+): { model?: string; thinking?: string } {
+	const override: { model?: string; thinking?: string } = {};
+	if (modelOverride) {
+		override.model = thinking ? stripKnownThinkingSuffix(modelOverride) : modelOverride;
+	}
+	if (thinking) {
+		override.thinking = thinking;
+	}
+	return override;
+}
+
 export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	const args = [...input.baseArgs];
 
@@ -87,7 +123,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		}
 	}
 
-	const modelArg = applyThinkingSuffix(input.model, input.thinking);
+	const modelArg = applyEffectiveThinkingSuffix(input.model, input.thinking);
 	if (modelArg) {
 		args.push("--model", modelArg);
 	}

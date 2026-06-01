@@ -11,6 +11,7 @@ import {
 
 export interface SubagentHubResult {
 	overrides: Map<string, string>; // agent name → model override string
+	thinkingOverrides?: Map<string, string>; // agent name → thinking level override
 }
 
 export class SubagentHubComponent implements Component {
@@ -47,6 +48,7 @@ export class SubagentHubComponent implements Component {
 	modelSelectedIndex = 0;
 	filteredModels: ModelInfo[] = [];
 	agentModelOverrides: Map<string, string> = new Map(); // agent name → preferred fullId
+	agentThinkingOverrides: Map<string, string> = new Map(); // agent name → thinking level
 
 	// Persisted SelectList instances (delegated input handling)
 	private agentSelectList: SelectList | null = null;
@@ -97,18 +99,22 @@ export class SubagentHubComponent implements Component {
 			}
 			// esc = done (apply all overrides)
 			if (matchesKey(data, "escape")) {
-				this.done({ overrides: this.agentModelOverrides });
+				this.done({ overrides: this.agentModelOverrides, thinkingOverrides: this.agentThinkingOverrides });
+				return;
+			}
+			if (matchesKey(data, "tab")) {
+				this.cycleThinkingLevel();
 				return;
 			}
 			// Everything else (up/down/enter/search) goes to SelectList
-			this.agentSelectList.handleInput(data);
+			this.agentSelectList?.handleInput(data);
 			this.tui.requestRender();
 			return;
 		}
 
 		// No SelectList (shouldn't happen, but fallback)
 		if (matchesKey(data, "escape")) {
-			this.done({ overrides: this.agentModelOverrides });
+		this.done({ overrides: this.agentModelOverrides, thinkingOverrides: this.agentThinkingOverrides });
 		} else if (matchesKey(data, "ctrl+c")) {
 			this.done({ overrides: new Map() });
 		}
@@ -181,9 +187,14 @@ export class SubagentHubComponent implements Component {
 			const override = this.agentModelOverrides.get(agent.name);
 			const effectiveModel = override ?? this.resolveAgentEffectiveModel(agent);
 			const isOverridden = override !== undefined || agent.model !== undefined;
+			const { thinkingSuffix } = splitThinkingSuffix(effectiveModel);
+			const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
+			const overriddenThinking = this.agentThinkingOverrides.get(agent.name);
+			const effectiveThinking = overriddenThinking ?? suffixThinking ?? agent.thinking ?? "";
+			const thinkingDisplay = effectiveThinking && effectiveThinking !== "off" ? effectiveThinking : "off";
 			const desc = isOverridden
-				? `${effectiveModel} ✎`
-				: (effectiveModel || "(none)");
+				? `${effectiveModel} ✎  ·  thinking: ${thinkingDisplay}`
+				: `${effectiveModel || "(none)"}  ·  thinking: ${thinkingDisplay}`;
 			return {
 				value: agent.name,
 				label: agent.name,
@@ -213,14 +224,14 @@ export class SubagentHubComponent implements Component {
 
 		// Wire onCancel: SelectList cancel (esc) = done, apply overrides
 		this.agentSelectList.onCancel = () => {
-			this.done({ overrides: this.agentModelOverrides });
+				this.done({ overrides: this.agentModelOverrides, thinkingOverrides: this.agentThinkingOverrides });
 		};
 
 		container.addChild(this.agentSelectList);
 
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(
-			this.formatFooter("enter", "model", "esc", "done", "ctrl+c", "cancel"),
+			this.formatFooter("enter", "model", "tab", "thinking", "esc", "done", "ctrl+c", "cancel"),
 			1, 0,
 		));
 		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
@@ -360,6 +371,30 @@ export class SubagentHubComponent implements Component {
 			return first.fullId;
 		}
 		return "";
+	}
+
+	/** Cycle thinking level for the selected agent */
+	cycleThinkingLevel(): void {
+		const agent = this.agents[this.selectedAgentIndex];
+		if (!agent) return;
+
+		const effectiveModel = this.agentModelOverrides.get(agent.name) ?? this.resolveAgentEffectiveModel(agent);
+		const modelInfo = findModelInfo(effectiveModel, this.availableModels, this.preferredProvider);
+		const availableLevels = getSupportedThinkingLevels(modelInfo);
+		if (availableLevels.length === 0) return;
+
+		// Get current effective thinking
+		const { thinkingSuffix } = splitThinkingSuffix(effectiveModel);
+		const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
+		const overridden = this.agentThinkingOverrides.get(agent.name);
+		const currentThinking = (overridden ?? suffixThinking ?? agent.thinking ?? "off") as import("../shared/model-info.ts").ThinkingLevel;
+
+		// Cycle to next level
+		const currentIndex = availableLevels.indexOf(currentThinking);
+		const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % availableLevels.length;
+		const nextLevel = availableLevels[nextIndex]!;
+
+		this.agentThinkingOverrides.set(agent.name, nextLevel);
 	}
 
 	/** Enter model selector mode */

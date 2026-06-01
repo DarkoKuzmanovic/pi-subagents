@@ -20,6 +20,7 @@ import {
 } from "../tui/subagent-hub.ts";
 import { toModelInfo } from "../shared/model-info.ts";
 import { isParallelStep, type ChainStep } from "../shared/settings.ts";
+import { buildModelThinkingOverride } from "../runs/shared/pi-args.ts";
 import type {
 	SlashSubagentResponse,
 	SlashSubagentUpdate,
@@ -750,7 +751,7 @@ export function registerSlashCommands(
 				return;
 			}
 
-			const result = await ctx.ui.custom<SubagentHubResult>(
+			const result = await ctx.ui.custom(
 				(tui, theme, _kb, done) =>
 					new SubagentHubComponent(
 						tui,
@@ -765,19 +766,25 @@ export function registerSlashCommands(
 					overlay: true,
 					overlayOptions: { anchor: "center", width: "60%", minWidth: 60, maxWidth: 100, maxHeight: "80%" },
 				},
-			);
+			) as SubagentHubResult | undefined;
 
 			if (!result) return;
 
-			for (const [agentName, modelOverride] of result.overrides) {
-				saveBuiltinAgentOverride(cwd, agentName, "user", {
-					model: modelOverride,
-				});
+			const overrideAgentNames = new Set<string>([
+				...result.overrides.keys(),
+				...(result.thinkingOverrides?.keys() ?? []),
+			]);
+			for (const agentName of overrideAgentNames) {
+				const override = buildModelThinkingOverride(
+					result.overrides.get(agentName),
+					result.thinkingOverrides?.get(agentName),
+				);
+				saveBuiltinAgentOverride(cwd, agentName, "user", override);
 			}
 
-		if (result.overrides.size > 0) {
-			ctx.ui.notify("Subagent model overrides saved", "success");
-		}
+			if (result.overrides.size > 0 || (result.thinkingOverrides && result.thinkingOverrides.size > 0)) {
+				ctx.ui.notify("Subagent overrides saved", "success");
+			}
 		},
 	});
 }

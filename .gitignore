@@ -9,4 +9,10 @@ node_modules/
 .pi-lens
 .serena
 context.md
-.pi
+.pi/*
+!.pi/pmti/
+!.pi/pmti/project/
+!.pi/pmti/project/**
+!.pi/pmti/milestones/
+!.pi/pmti/milestones/**
+.pi/pmti/tasks/

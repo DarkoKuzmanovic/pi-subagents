@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.35.0] - 2026-06-01
+
+### Added
+
+- Inline `thinking` level override for `subagent` tool dispatch, chain steps, and parallel tasks. The `thinking` field is accepted as an optional parameter on top-level single dispatch (`{ agent, task, thinking }`), chain step objects (`{ agent, task, thinking }`), and parallel task objects (`{ agent, task, thinking }`). Accepted values: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+
+- Precedence: inline dispatch `thinking` > `agentOverrides.thinking` > agent file `thinking` > session default. Explicit `thinking: "off"` strips any pre-existing known model suffix (e.g., `provider/model:high` → `provider/model`) so inline thinking truly wins over baked suffixes.
+
+- `src/shared/settings.ts` behavior-resolution surfaces (`StepOverrides`, `SequentialStep`, `ParallelTaskItem`, `ResolvedStepBehavior`, `resolveStepBehavior`) now carry `thinking` as a first-class field. Chain and parallel step thinking does not leak between steps — each step resolves independently.
+
+- `/subagents` TUI hub displays effective thinking level per agent and supports cycling with Tab. Because `/subagents` is a configuration hub, selected thinking levels are persisted as agent overrides; when model and thinking are saved together, known model thinking suffixes are stripped to avoid competing representations.
+
+- New helpers in `src/runs/shared/pi-args.ts`: `stripKnownThinkingSuffix(model)` strips a known thinking suffix; `applyEffectiveThinkingSuffix(model, thinking)` strips any existing known suffix before applying the effective level (including `off`).
+
+- Runtime normalization at the child-session argument boundary: foreground and background paths use `applyEffectiveThinkingSuffix` to normalize model strings before spawning children, and inline thinking without an explicit model uses the current session model when available so it can override the session default.
+
+### Changed
+
+- `SubagentHubResult` interface now includes optional `thinkingOverrides?: Map<string, string>`.
+- `SubagentParams` (TypeBox schema) includes optional `thinking` field for single-agent dispatch.
+- `TaskItem`, `ParallelTaskSchema`, `ChainItem` schemas include optional `thinking` field.
+
+### Tests
+
+- Added 46 unit tests covering suffix helpers, current-model fallback, `buildPiArgs`, `resolveStepBehavior` / `resolveParallelBehaviors` propagation, hub override save construction, foreground propagation guardrails, and thinking precedence including `thinking: "off"` with pre-existing `:high` suffix.
+
 ## [0.34.4] - 2026-05-29
 
 ### Fixed

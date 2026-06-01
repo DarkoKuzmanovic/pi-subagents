@@ -22,6 +22,7 @@ export interface ResolvedStepBehavior {
 	progress: boolean;
 	skills: string[] | false;
 	model?: string;
+	thinking?: string;
 }
 
 export interface StepOverrides {
@@ -31,6 +32,7 @@ export interface StepOverrides {
 	progress?: boolean;
 	skills?: string[] | false;
 	model?: string;
+	thinking?: string;
 }
 
 function normalizeOutputOverride(output: string | false | undefined): string | false | undefined {
@@ -52,6 +54,7 @@ export interface SequentialStep {
 	progress?: boolean;
 	skill?: string | string[] | false;
 	model?: string;
+	thinking?: string;
 }
 
 /** Parallel task item within a parallel step */
@@ -66,6 +69,7 @@ interface ParallelTaskItem {
 	progress?: boolean;
 	skill?: string | string[] | false;
 	model?: string;
+	thinking?: string;
 }
 
 /** Parallel step: multiple agents running concurrently */
@@ -218,7 +222,8 @@ export function resolveStepBehavior(
 
 	const outputMode = stepOverrides.outputMode ?? "inline";
 	const model = stepOverrides.model ?? agentConfig.model;
-	return { output, outputMode, reads, progress, skills, model };
+	const thinking = stepOverrides.thinking ?? agentConfig.thinking;
+	return { output, outputMode, reads, progress, skills, model, thinking };
 }
 
 export function resolveTaskTextForFileUpdatePolicy(task: string | undefined, originalTask?: string): string | undefined {
@@ -607,7 +612,8 @@ export function resolveParallelBehaviors(
 
 		const outputMode = task.outputMode ?? "inline";
 		const model = task.model ?? config.model;
-		return { output, outputMode, reads, progress, skills, model };
+		const thinking = task.thinking ?? config.thinking;
+		return { output, outputMode, reads, progress, skills, model, thinking };
 	});
 }
 
