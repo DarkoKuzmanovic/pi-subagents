@@ -45,7 +45,7 @@ Reply with [1], [2], [3], or further instructions:
 [3] Pause — I want to review before any handoff.
 ```
 
-Hard gate: do not dispatch `worker`, `delegate`, or any implementation chain until I pick `[1]` or explicitly approve handoff.
+Hard gate: do not dispatch `worker`, `worker-low`, `worker-high`, `test-writer`, or any implementation chain until I pick `[1]` or explicitly approve handoff.
 
 Plan target, scope, or spec reference:
 

@@ -118,6 +118,7 @@ export interface SubagentResultIntercomChild {
 }
 
 export interface SubagentResultIntercomPayload {
+	[key: string]: unknown;
 	to: string;
 	message: string;
 	requestId?: string;
@@ -141,7 +142,7 @@ export interface SubagentResultIntercomPayload {
 // ============================================================================
 
 export interface AgentProgress {
-	index: number;
+	index?: number;
 	agent: string;
 	status: "pending" | "running" | "completed" | "failed" | "detached";
 	activityState?: ActivityState;
@@ -167,10 +168,22 @@ export interface ToolCallSummary {
 	expandedText: string;
 }
 
-interface ProgressSummary {
+export interface ProgressSummary {
 	toolCount: number;
 	tokens: number;
 	durationMs: number;
+	status?: AgentProgress["status"];
+	index?: number;
+	agent?: string;
+	task?: string;
+	skills?: string[];
+	activityState?: ActivityState;
+	lastActivityAt?: number;
+	currentTool?: string;
+	currentToolArgs?: string;
+	currentToolStartedAt?: number;
+	recentTools?: AgentProgress["recentTools"];
+	recentOutput?: string[];
 }
 
 // ============================================================================
@@ -407,7 +420,9 @@ export interface ForegroundControl {
 	currentPath?: string;
 	turnCount?: number;
 	toolCount?: number;
+	tokens?: number;
 	nestedChildren?: NestedRunSummary[];
+	children?: NestedRunSummary[];
 	nestedRoute?: NestedRouteInfo;
 	interrupt?: () => boolean;
 }
@@ -419,13 +434,13 @@ export interface SubagentState {
 	foregroundRuns: Map<string, ForegroundResumeRun>;
 	foregroundControls: Map<string, ForegroundControl>;
 	lastForegroundControlId: string | null;
-	pendingForegroundControlNotices: Map<string, ReturnType<typeof setTimeout>>;
+	pendingForegroundControlNotices: Map<string, NodeJS.Timeout>;
 	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
 	lastUiContext: ExtensionContext | null;
 	poller: NodeJS.Timeout | null;
 	completionSeen: Map<string, number>;
 	watcher: FSWatcher | null;
-	watcherRestartTimer: ReturnType<typeof setTimeout> | null;
+	watcherRestartTimer: NodeJS.Timeout | null;
 	resultFileCoalescer: {
 		schedule(file: string, delayMs?: number): boolean;
 		clear(): void;
@@ -600,7 +615,7 @@ export interface NestedRunSummary extends NestedRunAddress {
 	turnCount?: number;
 	toolCount?: number;
 	totalTokens?: TokenUsage;
-	startedAt: number;
+	startedAt?: number;
 	endedAt?: number;
 	lastUpdate?: number;
 	error?: string;

@@ -174,6 +174,7 @@ interface GroupedResultIntercomMessageInput {
 	children: SubagentResultIntercomChild[];
 	nestedChildren?: NestedRunSummary[];
 	asyncId?: string;
+	asyncDir?: string;
 	chainSteps?: number;
 }
 

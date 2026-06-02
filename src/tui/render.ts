@@ -13,6 +13,7 @@ import {
 	type AsyncParallelGroupStatus,
 	type Details,
 	MAX_WIDGET_JOBS,
+	type ProgressSummary,
 	WIDGET_KEY,
 } from "../shared/types.ts";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "../shared/formatters.ts";
@@ -236,7 +237,7 @@ function resultGlyph(result: Details["results"][number], output: string, theme: 
 	return theme.fg("success", "✓");
 }
 
-function compactCurrentActivity(progress: AgentProgress): string {
+function compactCurrentActivity(progress: Pick<AgentProgress, "currentTool" | "currentToolArgs" | "currentToolStartedAt" | "activityState" | "lastActivityAt"> | ProgressSummary): string {
 	return formatCurrentToolLine(progress, getTermWidth() - 4, false) ?? buildLiveStatusLine(progress) ?? "thinking…";
 }
 

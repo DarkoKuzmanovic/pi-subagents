@@ -1,14 +1,14 @@
 ---
-description: Parallel cleanup review
+description: Mesh cleanup review
 ---
 
-Run a fresh-context parallel cleanup review of the current work.
+Run a fresh-context mesh cleanup review of the current work.
 
 Use the `subagent` tool. First inspect available agents/skills if needed, then launch two reviewer subagents in parallel with `context: "fresh"`. Do not use forked context unless I explicitly ask for it. Reviewers must inspect the repository, relevant instructions, and current diff directly from files and commands. They must not rely on the main conversation history.
 
 Do not write reviewer output files into the repository unless I explicitly ask for artifacts. Prefer `output: false` for each reviewer task.
 
-Reviewer 1: deslop pass.
+Reviewer 1: slop/deslop pass.
 
 If the `deslop` skill is available, pass it to this reviewer. If not, inline the guidance below. Ask this reviewer to look for AI-slop patterns in the changed scope:
 - comments that restate code, placeholder text, stale rationale, or debug leftovers;
@@ -21,7 +21,7 @@ If the `deslop` skill is available, pass it to this reviewer. If not, inline the
 
 Tell this reviewer to treat tool output and slop-scan-style findings as leads, not verdicts. It should flag only concrete issues in the requested scope with evidence, severity, file/line references, and the smallest safe fix.
 
-Reviewer 2: verbosity pass.
+Reviewer 2: verbosity/simplicity pass.
 
 If the `verbosity-cleaner` skill is available, pass it to this reviewer. If not, inline the guidance below. Ask this reviewer to look for needless verbosity in code, tests, docs, status text, grouped messages, receipts, and changelog wording:
 - single-use helpers that merely paraphrase an expression;

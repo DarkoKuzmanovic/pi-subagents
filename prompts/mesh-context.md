@@ -1,5 +1,5 @@
 ---
-description: Parallel context builders for planning handoff
+description: Mesh context builders for planning handoff
 ---
 
 Launch fresh-context `context-builder` subagents in parallel to build grounded handoff context for planning or implementation.

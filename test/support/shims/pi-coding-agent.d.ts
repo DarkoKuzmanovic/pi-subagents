@@ -2,9 +2,10 @@
 // Broad types — the goal is import resolution, not type precision
 
 export interface ExtensionAPI {
-	registerProvider: any;
-	registerCommand: any;
-	registerShortcut: any;
+	registerProvider: (...args: any[]) => any;
+	registerCommand: (...args: any[]) => any;
+	registerShortcut: (...args: any[]) => any;
+	registerMessageRenderer: <T = any>(type: string, renderer: (message: any, options: any, theme: any) => any) => void;
 	on: any;
 	exec: any;
 	getThinkingLevel: any;
@@ -17,16 +18,17 @@ export interface ExtensionContext {
 	cwd: string;
 	model?: any;
 	hasUI: boolean;
-	ui: any;
+	ui: { custom: <T = any>(...args: any[]) => Promise<T>; theme: any; requestRender?: () => void; [key: string]: any };
 	sessionManager: any;
 	getContextUsage: any;
+	modelRegistry?: any;
 	[key: string]: any;
 }
 
-export interface ToolDefinition {
+export interface ToolDefinition<T = any, U = any> {
 	name: string;
 	description?: string;
-	handler: any;
+	handler?: T;
 	[key: string]: any;
 }
 

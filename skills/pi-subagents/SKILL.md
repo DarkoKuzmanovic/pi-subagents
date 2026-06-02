@@ -17,7 +17,7 @@ Use this skill when the parent orchestrator needs to launch a specialized subage
 ## When to Use
 
 - **Advisory review**: use fresh-context `reviewer` agents for adversarial code review, or fork to `oracle` when inherited decisions and drift matter
-- **Implementation handoff**: have `oracle` advise, then `worker` implement only after an approved direction
+- **Implementation handoff**: after an approved direction, choose `worker-low`, `worker`, or `worker-high` by task hardness; use `test-writer` for focused test work
 - **Recon and planning**: use `scout` or `context-builder`, then `planner`
 - **Parallel exploration**: run multiple non-conflicting tasks concurrently
 - **Long-running work**: launch async/background runs and inspect them later
@@ -41,28 +41,29 @@ you are guiding a human through an interactive flow.
 Packaged prompt shortcuts are also available for repeatable workflows. Treat them as reusable orchestration recipes, not just human slash commands. When the user asks for one of these shapes, or when the workflow clearly fits, apply the same pattern directly with `subagent(...)` and other tools:
 
 - `/mesh-review` — fresh-context reviewers with distinct review angles, then synthesis
-- `/parallel-research` — combine `researcher` and `scout` for external evidence plus local code context
-- `/parallel-handoff-plan` — external-reference research plus local `context-builder` passes, followed by a synthesis handoff plan and implementation-ready meta-prompt
+- `/mesh-recon` — quick researcher/scout recon by default; add `deep` for artifact-backed lane synthesis
+- `/mesh-handoff` — external-reference research plus local `context-builder` passes, followed by a synthesis handoff plan and implementation-ready meta-prompt
+- `/mesh-context` — parallel `context-builder` passes for planning or implementation handoff context
+- `/mesh-cleanup` — cleanup review lanes for simplicity, slop, and verbosity; `autofix` applies only fixes worth doing now
 - `/brainstorm` — design-first exploration before any implementation, with clarifying questions and approach tradeoffs
 - `/write-plan` — author an implementation plan against a spec/intent, with explicit validation commands
-- `/parallel-cleanup` — two fresh-context reviewers (deslop + verbosity passes) for an adversarial cleanup review of the current diff
-- `/reflect-chain` — analyze a chain run's artifacts and suggest improvements to chain templates, agents, and prompts
+- `/gather-context-and-clarify` — gather focused context, then ask the remaining clarification questions before planning or implementation
 
 ## Applying Prompt Techniques Without Slash Commands
 
 The prompt templates in `prompts/` encode workflows the parent agent can run on demand. If the user provides a URL, issue, PR, plan, local file, screenshot, or freeform target, treat that target as the primary scope: read or fetch it before launching children, then include it explicitly in every child task. Do not depend on the parent conversation history when the recipe calls for fresh context.
 
-### Parallel review technique
+### Mesh review technique
 
 Use this when the user wants adversarial review of a diff, plan, issue, file, or implemented work. Launch fresh-context `reviewer` agents with distinct angles generated from the actual target. Common angles are correctness/regressions, tests/validation, and simplicity/maintainability; adapt for TypeScript, UI, security, docs, or large structural changes. Reviewers should inspect files and diffs directly, return concise evidence-backed findings with file/line references, and avoid edits unless the user explicitly asks for a writer pass. The parent synthesizes fixes worth doing now, optional improvements, and feedback to ignore/defer before applying anything.
 
-### Parallel research technique
+### Mesh recon technique
 
-Use this when the question needs both external evidence and local implications. Combine `researcher` for official docs, specs, ecosystem behavior, recent changes, benchmarks, and primary sources with `scout` for repository files, patterns, constraints, tests, and likely integration points. Give each child a distinct angle: external evidence, local code context, and practical tradeoffs. Ask for source links or file ranges, confidence level, gaps, and decision implications. Do not ask these children to edit unless implementation was explicitly requested.
+Use this when the question needs both external evidence and local implications. `/mesh-recon` is lightweight by default: combine `researcher` for official docs, specs, ecosystem behavior, recent changes, benchmarks, and primary sources with `scout` for repository files, patterns, constraints, tests, and likely integration points. Give each child a distinct angle: external evidence, local code context, and practical tradeoffs. Ask for source links or file ranges, confidence level, gaps, and decision implications. Do not ask these children to edit unless implementation was explicitly requested. Use `/mesh-recon deep` when the question is decision-heavy enough to need lane artifact files plus a `synthesizer` step.
 
-### Parallel context-build technique
+### Mesh context technique
 
-Use this before planning or implementation when a stronger handoff is needed. Run a chain with one parallel step of `context-builder` agents rather than top-level parallel tasks, so relative output files live under the temporary chain directory. Give every task a distinct output path such as `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`, and `context-build/validation-and-risks.md`. Choose two or three builders: request/scope, codebase/patterns, and validation/risks. Each builder must read every relevant file needed to understand its slice, follow imports/callers/tests/docs/config, conduct tool-available web research when needed, and include a compact `meta-prompt` section. The parent synthesizes the outputs into important context, recommended next meta-prompt, open questions, assumptions, and artifact paths.
+Use `/mesh-context` before planning or implementation when a stronger handoff is needed. Run a chain with one parallel step of `context-builder` agents rather than top-level parallel tasks, so relative output files live under the temporary chain directory. Give every task a distinct output path such as `context-build/request-and-scope.md`, `context-build/codebase-and-patterns.md`, and `context-build/validation-and-risks.md`. Choose two or three builders: request/scope, codebase/patterns, and validation/risks. Each builder must read every relevant file needed to understand its slice, follow imports/callers/tests/docs/config, conduct tool-available web research when needed, and include a compact `meta-prompt` section. The parent synthesizes the outputs into important context, recommended next meta-prompt, open questions, assumptions, and artifact paths.
 
 Example shape:
 
@@ -93,9 +94,9 @@ subagent({
 });
 ```
 
-### Parallel handoff-plan technique
+### Mesh handoff technique
 
-Use this when the user needs a solution brief or implementation-ready handoff from an external reference plus local code context, such as “study this library behavior, inspect our codebase, then produce a worker prompt.” Run a chain with a first parallel group and a second synthesis `context-builder` step. The first group usually includes `researcher` for external projects/docs/prompt guidance and `context-builder` for local code context; add a second `context-builder` for implementation strategy only when the scope is large enough to benefit. Use distinct output paths under `handoff/`, then have the synthesis `context-builder` read those outputs and write `handoff/final-handoff-plan.md` with the recommended approach, likely files, constraints, non-goals, validation, risks, unresolved questions, and final compact implementation-ready meta-prompt.
+Use `/mesh-handoff` when the user needs a solution brief or implementation-ready handoff from an external reference plus local code context, such as “study this library behavior, inspect our codebase, then produce a worker prompt.” Run a chain with a first parallel group and a second synthesis `context-builder` step. The first group usually includes `researcher` for external projects/docs/prompt guidance and `context-builder` for local code context; add a second `context-builder` for implementation strategy only when the scope is large enough to benefit. Use distinct output paths under `handoff/`, then have the synthesis `context-builder` read those outputs and write `handoff/final-handoff-plan.md` with the recommended approach, likely files, constraints, non-goals, validation, risks, unresolved questions, and final compact implementation-ready meta-prompt.
 
 Example shape:
 
@@ -138,9 +139,9 @@ Use this at the start of non-trivial design work when the user wants to explore 
 ### Write-plan technique
 
 Use this when the user has a spec, intent, or approved design and wants a concrete implementation plan an executor can pick up. Read the spec/intent (and any referenced files) directly before drafting. Produce step-by-step tasks with file paths, signatures or contracts where they matter, explicit validation commands, and a placeholder scan. Treat "TBD", "appropriate error handling", or other vague filler as a self-review gate — resolve them before handoff. Do not start implementation from this command unless explicitly asked.
-### Parallel cleanup technique
+### Mesh cleanup technique
 
-Use this after implementation when the user wants cleanup review or when a final pass would reduce AI-slop. Launch two fresh-context `reviewer` tasks with `output: false` and `progress: false`: one deslop pass and one verbosity pass. If the `deslop` or `verbosity-cleaner` skills are available, pass the relevant skill to that reviewer; otherwise inline the criteria. Both reviewers are review-only and should flag concrete issues with severity, file/line references, and smallest safe fixes. Review-only/no-edit beats progress-writing or artifact-writing instructions. The parent decides what to apply and asks before making changes unless cleanup was already authorized.
+Use `/mesh-cleanup` after implementation when the user wants cleanup review or when a final pass would reduce AI-slop. Launch two fresh-context `reviewer` tasks with `output: false` and `progress: false`: one deslop pass and one verbosity pass. If the `deslop` or `verbosity-cleaner` skills are available, pass the relevant skill to that reviewer; otherwise inline the criteria. Both reviewers are review-only and should flag concrete issues with severity, file/line references, and smallest safe fixes. Review-only/no-edit beats progress-writing or artifact-writing instructions. The parent decides what to apply and asks before making changes unless cleanup was already authorized.
 
 ## Builtin Agents
 
@@ -151,14 +152,18 @@ and user/project agents override builtins with the same name.
 | ----------------- | ------------------------------------------- | ---------------- | ------------------------------------------------------------------------- |
 | `scout`           | Fast codebase recon                         | fresh (implicit) | Writes `context.md` handoff material                                      |
 | `planner`         | Creates implementation plans                | fresh            | Writes `plan.md`; reads `context.md`                                      |
-| `worker`          | Implementation and approved oracle handoffs | fork             | Single-writer implementation with decision escalation                     |
+| `worker-low`      | Low-complexity implementation               | fork             | Small, low-risk edits with early escalation if scope grows                |
+| `worker`          | Normal implementation and oracle handoffs   | fork             | Single-writer implementation with decision escalation                     |
+| `worker-high`     | High-complexity implementation              | fork             | Difficult/high-stakes execution with extra thinking                       |
+| `test-writer`     | Focused test implementation                 | fresh            | Adds or updates tests using existing project test infrastructure          |
 | `reviewer`        | Review-and-fix specialist                   | fresh (implicit) | Can edit/fix reviewed code                                                |
 | `context-builder` | Requirements/codebase handoff builder       | fresh (implicit) | Writes structured context files                                           |
 | `researcher`      | Web research brief generator                | fresh (implicit) | Writes `research.md`                                                      |
-| `delegate`        | Lightweight generic delegate                | fresh (implicit) | No fixed output; generic delegated work                                   |
 | `oracle`          | Decision-consistency advisory review        | fork             | Advisory review, intercom coordination                                    |
 | `oracle-fresh`    | Drift-check oracle for chain workflows      | fresh            | Reads chain artifacts instead of forking; cheaper alternative to `oracle` |
-| `deslopper`       | Codebase cleanup and dead-code removal      | fresh            | Read-only audit (`--review`) or surgical cleanup with verification        |
+| `janitor`         | Repository hygiene and cleanup              | fresh            | Dead code, stale docs, orphaned artifacts; `--review` for audit-only      |
+| `deslopper`       | Deprecated alias for `janitor`              | fresh            | Compatibility alias; prefer `janitor` for new dispatches                  |
+| `synthesizer`     | Fan-in synthesis of parallel briefs         | fresh            | Writes `synthesis.md`                                                     |
 
 Builtin agents inherit the current Pi default model unless a run, user setting, or project setting overrides `model`. Override builtin defaults before copying full agent files when a small tweak is enough.
 
@@ -211,7 +216,7 @@ Direct settings example:
 
 Useful override fields: `model`, `fallbackModels`, `thinking`,
 `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `defaultContext`,
-`disabled`, `skills`, `tools`, and `systemPrompt`. Create a user or project
+`memory`, `disabled`, `skills`, `tools`, and `systemPrompt`. Create a user or project
 agent with the same name only when you want a substantially different agent.
 
 ## Discovery and Scope Rules
@@ -229,8 +234,9 @@ Chains live in:
 
 Built-in chain templates bundled with the package:
 
-- `go` — scout → context-builder → worker → delegate (test-writer) → reviewer
-- `review` — 3× parallel reviewer → context-builder synthesis
+- `go` — scout → context-builder → worker → test-writer → reviewer
+
+The former `review` chain has been retired; use `/mesh-review` for parallel model-diverse review and synthesis.
   Discovery is recursive. `.chain.md` files do not define agents. Agents and chains can set optional frontmatter `package: code-analysis`; `name: scout` plus `package: code-analysis` registers as runtime name `code-analysis.scout` while serialization keeps `name` and `package` separate.
 
 Precedence is by parsed runtime name:
@@ -617,25 +623,27 @@ copying a full builtin file.
 ## Prompt Template Integration
 
 The package includes prompt shortcuts for common workflows: `/mesh-review`,
-`/parallel-research`, `/parallel-handoff-plan`, `/brainstorm`, `/write-plan`,
-and `/parallel-cleanup`. Use them when the user wants repeatable review,
-research, implementation-handoff context, design exploration, plan authoring,
-or cleanup-review patterns. `/mesh-review autofix` and
-`/parallel-cleanup autofix` synthesize reviewer feedback and then apply only the
-fixes worth doing now. Parent agents can also apply the same recipes directly
-with `subagent(...)` when the user describes the workflow in natural language
-instead of invoking a slash command.
+`/mesh-recon`, `/mesh-handoff`, `/mesh-context`, `/mesh-cleanup`, `/brainstorm`,
+`/write-plan`, and `/gather-context-and-clarify`. Use them when the user wants
+repeatable review, research, implementation-handoff context, design exploration,
+plan authoring, focused context gathering, or cleanup-review patterns.
+`/mesh-review autofix` and `/mesh-cleanup autofix` synthesize reviewer feedback
+and then apply only the fixes worth doing now. Parent agents can also apply the
+same recipes directly with `subagent(...)` when the user describes the workflow
+in natural language instead of invoking a slash command.
 
-If `pi-prompt-template-model` is installed, additional user prompt templates can delegate into
-`pi-subagents`. This is useful when a slash command should always run through a
-particular agent or with forked context.
+Pi's prompt-template system loads bundled prompts from `package.json` `pi.prompts`
+and user/project prompt directories. The prompt-template bridge can turn template
+requests into `pi-subagents` tool runs, which is useful when a slash command
+should always run through particular agents, context modes, outputs, or model
+settings.
 
 ## Important Constraints
 
 - **Forking requires a persisted parent session.** If the current session does not
-  have a persisted session file, forked runs fail. Packaged `planner`, `worker`,
-  and `oracle` default to forked context, so use `context: "fresh"` explicitly
-  when that is not available or not wanted.
+  have a persisted session file, forked runs fail. Packaged implementation workers
+  (`worker-low`, `worker`, `worker-high`) and `oracle` default to forked context,
+  so use `context: "fresh"` explicitly when that is not available or not wanted.
 - **Forked runs inherit parent history.** They are branched threads, not fresh
   filtered contexts. Use fresh context for adversarial reviewers unless the user explicitly asks for forked context.
 - **Default subagent nesting depth is 2.** Deeper recursive delegation is blocked
@@ -697,30 +705,34 @@ subagent({
 
 When you are the orchestrating agent for a new feature or non-trivial change, factor in the packaged prompt workflows without literally invoking slash commands. Use the same patterns through tools and subagents.
 
-Keep builtin agent defaults unless the user explicitly asks for a different model, thinking level, skills, output behavior, context mode, or other override. Do not add overrides just because you are orchestrating; the defaults encode the intended role behavior. In particular, packaged `worker` and `oracle` default to forked context; `planner` and `oracle-fresh` default to fresh context with curated `defaultReads`.
+Keep builtin agent defaults unless the user explicitly asks for a different model, thinking level, skills, output behavior, context mode, or other override. Do not add overrides just because you are orchestrating; the defaults encode the intended role behavior. In particular, packaged `worker-low`, `worker`, `worker-high`, and `oracle` default to forked context; `planner`, `reviewer`, `test-writer`, and `oracle-fresh` default to fresh context with curated reads where specified.
+
+Choose the implementation worker deliberately: use `worker-low` for small, low-risk edits with a clear local pattern; `worker` for ordinary 2–3 file implementation; and `worker-high` for architecture-sensitive, schema/config/routing, tricky-test, or high-blast-radius work. If the task is specifically to add or repair tests without product behavior changes, use `test-writer` instead of a generic implementation worker.
 
 When the user approves launching a subagent to carry out a plan or workflow, treat that as approval to generate a proper role-specific meta prompt for that subagent. Include the approved plan path or summary, clarified requirements, non-goals, relevant context, role boundaries, files or areas to inspect, acceptance criteria, expected output, and validation expectations. Do not pass vague instructions like “implement the plan fully” or “review this” by themselves.
 
 - `/brainstorm` maps to: stay design-first with the `brainstorming` skill; launch `scout` if local context matters and `researcher` if external evidence would shape the choice; ask clarifying questions with `ask_user`; compare 2–3 approaches with tradeoffs before any implementation.
 - `/write-plan` maps to: use the `writing-plans` skill; read the spec/intent and any referenced files; draft a step-by-step plan with file paths, signatures where they matter, explicit validation commands, and a placeholder scan.
+- `/gather-context-and-clarify` maps to: run `scout` and/or `researcher` only for justified knowledge gaps, synthesize what is known, then ask the smallest set of remaining questions with `ask_user` before planning or implementation.
 - `/mesh-review` maps to: launch fresh-context `reviewer` agents with distinct review angles; synthesize the feedback before applying anything.
-- `/parallel-research` maps to: combine local `scout` context with external `researcher` evidence when current docs, ecosystem behavior, or API details matter.
-- `/parallel-handoff-plan` maps to: run external `researcher` plus local/strategy `context-builder` passes, then a synthesis `context-builder` that writes an implementation handoff plan and implementation-ready meta-prompt.
-- `/parallel-cleanup` maps to: use review-only cleanup passes after implementation, especially for simplicity, verbosity, and redundant tests.
+- `/mesh-recon` maps to: combine local `scout` context with external `researcher` evidence when current docs, ecosystem behavior, API details, or local implications matter; add `deep` for lane artifacts plus `synthesizer` fan-in.
+- `/mesh-handoff` maps to: run external `researcher` plus local/strategy `context-builder` passes, then a synthesis `context-builder` that writes an implementation handoff plan and implementation-ready meta-prompt.
+- `/mesh-context` maps to: run parallel `context-builder` passes for planning or implementation handoff context.
+- `/mesh-cleanup` maps to: use review-only cleanup passes after implementation, especially for simplicity, verbosity, slop, and redundant tests.
 
 For feature work, use this sequence as scaffolding for parent-agent behavior:
 
 ```text
-clarify → planner → worker → parallel fresh-context reviewers → worker
+clarify → planner → worker-low/worker/worker-high → parallel fresh-context reviewers → worker
 ```
 
-The first `worker` implements the approved plan. The parallel reviewers inspect the resulting diff from fresh context. The final `worker` applies synthesized review fixes in forked context. Do not stop after parallel review unless the user explicitly asked for review-only output or the review surfaced a decision that needs approval first.
+The first implementation worker applies the approved plan. The parallel reviewers inspect the resulting diff from fresh context. The final fix worker applies synthesized review fixes in forked context. Do not stop after parallel review unless the user explicitly asked for review-only output or the review surfaced a decision that needs approval first.
 
 Keep orchestration authority in the parent session. Child subagents should not launch more subagents, read this skill, or run their own orchestration loops. Spawned subagents do not receive the `pi-subagents` skill, parent-only status/control/slash messages, prior parent `subagent` tool-call/tool-result artifacts, or the `subagent` extension tool. Child context filtering also strips old hidden orchestration-instruction messages when they appear in inherited history. Every child also receives a boundary instruction that says the parent owns orchestration, the child must not propose or run subagents, and implementation children must call real edit/write tools instead of printing pseudo tool calls. Pass children concrete role-specific work instead.
 
 1. Clarify first. This is mandatory. Gather code context with `scout` or `context-builder`, add `researcher` only when external evidence matters, then ask the user clarifying questions with `ask_user` until scope, acceptance criteria, constraints, and non-goals are clear.
 2. Plan when useful. For complex work, call `planner` or write a plan doc yourself and get approval before implementation. For simple work, confirm shared understanding and explicitly note why planning is skipped.
-3. Implement with one writer. After approval, launch `worker` with a proper meta prompt that includes clarified requirements, relevant context, plan path or summary, acceptance criteria, and validation expectations. Packaged `worker` defaults to forked context; pass `context: "fresh"` only when you intentionally want a fresh child.
+3. Implement with one writer. After approval, launch the right implementation role (`worker-low`, `worker`, or `worker-high`) with a proper meta prompt that includes clarified requirements, relevant context, plan path or summary, acceptance criteria, and validation expectations. Packaged implementation workers default to forked context; pass `context: "fresh"` only when you intentionally want a fresh child.
 4. Review after implementation. After the worker completes, launch parallel fresh-context `reviewer` agents for correctness/regressions, tests/validation, and simplicity/maintainability. Use `output: false` unless review artifacts are explicitly needed.
 5. Synthesize, then run the fix worker. Separate blockers, fixes worth doing now, optional improvements, and feedback to ignore/defer, then launch a forked `worker` to apply fixes worth doing now when the workflow is implementation-authorized. If reviewers found scope/product/architecture choices that were not approved, ask the user first instead of applying them.
 6. Validate and complete. After the fix worker returns, run or confirm focused validation, update docs/changelog when relevant, and summarize what changed and why.
@@ -790,10 +802,10 @@ subagent({
 ### Saved chain
 
 ```text
-/chain review-chain -- review this branch
+/chain go -- implement this approved plan
 ```
 
-Use saved `.chain.md` workflows when the user wants a repeatable multi-agent flow without rewriting the chain each time.
+Use saved `.chain.md` workflows when the user wants a repeatable multi-agent flow without rewriting the chain each time. The bundled `go` chain is the only current saved chain and runs scout → context-builder → worker → test-writer → reviewer.
 
 ## Error Handling
 

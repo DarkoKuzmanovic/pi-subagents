@@ -38,7 +38,7 @@ Reply with [1], [2], [3], or further instructions:
 [3] Keep brainstorming — answer follow-up questions first.
 ```
 
-Hard gate: do not invoke `planner`, `worker`, `delegate`, or any implementation skill until I pick a direction. If the user wants a plan written for the chosen direction, use `/write-plan` next.
+Hard gate: do not invoke `planner`, `worker`, `test-writer`, or any implementation skill until I pick a direction. If the user wants a plan written for the chosen direction, use `/write-plan` next.
 
 Topic, target, or focus for this brainstorm:
 

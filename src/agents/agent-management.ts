@@ -24,9 +24,9 @@ import type { Details } from "../shared/types.ts";
 
 type ManagementAction = "list" | "get" | "create" | "update" | "delete";
 type ManagementScope = "user" | "project";
-type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry">;
+type ManagementContext = Pick<ExtensionContext, "cwd"> & { modelRegistry?: ExtensionContext["modelRegistry"] };
 
-interface ManagementParams {
+export interface ManagementParams {
 	action?: string;
 	agent?: string;
 	chainName?: string;
@@ -563,7 +563,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 			if (sw) warnings.push(sw);
 		}
 		if (updated.name !== oldName) {
-			const renamed = renamePath("agent", target.filePath, updated.name, target.source, ctx.cwd);
+			const renamed = renamePath("agent", target.filePath, updated.name, target.source as ManagementScope, ctx.cwd);
 			if (renamed.error) return result(renamed.error, true);
 			updated.filePath = renamed.filePath!;
 		}
@@ -613,7 +613,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 		warnings.push(...chainStepWarnings(ctx, updated.steps));
 	}
 	if (updated.name !== oldName) {
-		const renamed = renamePath("chain", target.filePath, updated.name, target.source, ctx.cwd);
+		const renamed = renamePath("chain", target.filePath, updated.name, target.source as ManagementScope, ctx.cwd);
 		if (renamed.error) return result(renamed.error, true);
 		updated.filePath = renamed.filePath!;
 	}

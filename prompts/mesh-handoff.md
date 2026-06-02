@@ -1,8 +1,8 @@
 ---
-description: Parallel research/context builders into an implementation handoff plan
+description: Mesh research/context builders into an implementation handoff plan
 ---
 
-Use parallel subagents to understand the request, compare any external references, inspect the local codebase, and produce a grounded implementation handoff plan with a final implementation-ready meta-prompt.
+Use mesh subagents to understand the request, compare any external references, inspect the local codebase, and produce a grounded implementation handoff plan with a final implementation-ready meta-prompt.
 
 Primary request, target, or focus:
 

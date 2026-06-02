@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OutputMode } from "../shared/types.ts";
 import type { MemoryScope } from "../shared/memory.ts";
+export type { MemoryScope } from "../shared/memory.ts";
 import { KNOWN_FIELDS } from "./agent-serializer.ts";
 import { parseChain } from "./chain-serializer.ts";
 import { mergeAgentsForScope } from "./agent-selection.ts";
@@ -21,12 +22,12 @@ export type AgentSource = "builtin" | "user" | "project";
 type SystemPromptMode = "append" | "replace";
 export type AgentDefaultContext = "fresh" | "fork" | "lineage";
 
-export function defaultSystemPromptMode(name: string): SystemPromptMode {
-	return name === "delegate" ? "append" : "replace";
+export function defaultSystemPromptMode(_name: string): SystemPromptMode {
+	return "replace";
 }
 
-export function defaultInheritProjectContext(name: string): boolean {
-	return name === "delegate";
+export function defaultInheritProjectContext(_name: string): boolean {
+	return false;
 }
 
 export function defaultInheritSkills(): boolean {
@@ -97,6 +98,7 @@ export interface AgentConfig {
 	output?: string;
 	defaultReads?: string[];
 	defaultProgress?: boolean;
+	memory?: MemoryScope;
 	interactive?: boolean;
 	maxSubagentDepth?: number;
 	disabled?: boolean;
@@ -703,7 +705,7 @@ function loadChainsFromDir(dir: string, source: AgentSource): ChainConfig[] {
 		}
 
 		try {
-			chains.push(parseChain(content, source, filePath));
+			chains.push(parseChain(content, source as Exclude<AgentSource, "builtin">, filePath));
 		} catch {
 			continue;
 		}

@@ -58,7 +58,7 @@ export interface SequentialStep {
 }
 
 /** Parallel task item within a parallel step */
-interface ParallelTaskItem {
+export interface ParallelTaskItem {
 	agent: string;
 	task?: string;
 	cwd?: string;
@@ -73,8 +73,9 @@ interface ParallelTaskItem {
 }
 
 /** Parallel step: multiple agents running concurrently */
-interface ParallelStep {
+export interface ParallelStep {
 	parallel: ParallelTaskItem[];
+	cwd?: string;
 	concurrency?: number;
 	failFast?: boolean;
 	worktree?: boolean;

@@ -52,6 +52,7 @@ import {
 	type Details,
 	type IntercomEventBus,
 	type ResolvedControlConfig,
+	type NestedRouteInfo,
 	type SingleResult,
 	MAX_CONCURRENCY,
 	resolveChildMaxSubagentDepth,
@@ -118,6 +119,10 @@ interface ParallelChainRunInput {
 		lastActivityAt?: number;
 		currentTool?: string;
 		currentToolStartedAt?: number;
+		currentPath?: string;
+		turnCount?: number;
+		tokens?: number;
+		toolCount?: number;
 		interrupt?: () => boolean;
 	};
 	results: SingleResult[];
@@ -345,6 +350,10 @@ interface ChainExecutionParams {
 		currentTool?: string;
 		currentToolStartedAt?: number;
 		interrupt?: () => boolean;
+		currentPath?: string;
+		turnCount?: number;
+		tokens?: number;
+		toolCount?: number;
 	};
 	chainSkills?: string[];
 	chainDir?: string;
@@ -352,6 +361,7 @@ interface ChainExecutionParams {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	inlineReads?: boolean;
+	nestedRoute?: NestedRouteInfo;
 	}
 
 interface ChainExecutionResult {

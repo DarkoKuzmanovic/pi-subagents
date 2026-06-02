@@ -9,7 +9,7 @@ import { resolveAsyncRunLocation } from "./async-resume.ts";
 import { flatToLogicalStepIndex, normalizeParallelGroups } from "./parallel-groups.ts";
 import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
 
-interface RunStatusParams {
+export interface RunStatusParams {
 	action?: "status";
 	id?: string;
 	runId?: string;

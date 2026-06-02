@@ -160,6 +160,7 @@ type ChildMessage = Message & {
 };
 
 interface ChildEvent {
+	[key: string]: unknown;
 	type?: string;
 	message?: ChildMessage;
 	toolName?: string;

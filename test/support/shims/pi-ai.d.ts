@@ -2,7 +2,7 @@
 
 export interface Message {
 	role: string;
-	content: string | any[];
+	content: any;
 	[key: string]: any;
 }
 

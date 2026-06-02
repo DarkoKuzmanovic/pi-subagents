@@ -10,14 +10,16 @@ export interface TUI {
 }
 
 export class Box {
-	constructor(opts: any);
+	constructor(...args: any[]);
 	addChild(child: any): void;
 	render(width: number): string[];
 }
 
 export class Container {
+	constructor(...args: any[]);
 	children: any[];
 	addChild(child: any): void;
+	clear(): void;
 	render(width: number): string[];
 }
 
@@ -27,7 +29,7 @@ export class Text {
 }
 
 export class Markdown {
-	constructor(text: string);
+	constructor(text: string, ...args: any[]);
 	render(width: number): string[];
 }
 
@@ -38,7 +40,7 @@ export class Spacer {
 
 export function visibleWidth(text: string): number;
 export function truncateToWidth(text: string, width: number, ellipsis?: string): string;
-export function wrapTextWithAnsi(text: string, width: number): string[];
+export function wrapTextWithAnsi(text: string, width: number, ...args: any[]): string[];
 
 export const Key: Record<string, any>;
 export interface SelectItem {

@@ -6,14 +6,14 @@
 
 ## Features
 
-- **10 builtin agents** — scout, planner, worker, reviewer, oracle, context-builder, researcher, delegate, deslopper, oracle-fresh
+- **14 builtin agents** — scout, planner, worker-low, worker, worker-high, test-writer, reviewer, oracle, context-builder, researcher, janitor, deslopper, oracle-fresh, synthesizer
 - **Chains** — sequential multi-step pipelines with `{task}`, `{previous}`, `{chain_dir}` template variables and fan-out/fan-in parallel groups
 - **Parallel execution** — concurrent agents with grouped output, optional worktree isolation
 - **Background runs** — detached async execution with status polling, completion notifications, and resume
 - **Forked context** — real branched sessions from the parent leaf, not injected summaries
 - **Clarify UI** — TUI preview/edit flow for chains with model, thinking, skills, and output pickers
 - **Intercom bridge** — optional `pi-intercom` companion lets children contact the parent for decisions
-- **Prompt templates** — 7 reusable workflow shortcuts (`/mesh-review`, `/parallel-research`, etc.)
+- **Prompt templates** — mesh-first reusable workflow shortcuts (`/mesh-review`, `/mesh-recon`, `/mesh-cleanup`, etc.)
 - **Skills injection** — per-agent or per-step skill overrides with project-first discovery
 - **Inline reads** — fresh-context children get pre-loaded files, saving a full context fork
 - **Session sharing** — export runs to HTML and upload to GitHub Gist
@@ -100,7 +100,7 @@ Those are ordinary Pi requests. Pi decides whether to call `subagent`, which age
 | Scout before planning    | “Use scout to inspect the auth flow before planning.”                                  |
 | Run in the background    | “Run this in the background.”                                                          |
 | Browse agents            | “Show me the available subagents.”                                                     |
-| Use a saved workflow     | “Run the review chain on this branch.”                                                 |
+| Use a saved workflow     | “Run `/mesh-review` on this branch.”                                                  |
 | See running work         | “Show active async runs.”                                                              |
 | Check setup              | “Check whether subagents are configured correctly.”                                    |
 
@@ -113,13 +113,17 @@ The extension ships with builtin agents you can use immediately.
 | `scout`           | Fast local codebase recon: relevant files, entry points, data flow, risks, and where another agent should start.                            |
 | `researcher`      | Web/docs research with sources: official docs, specs, benchmarks, recent changes, and a concise research brief.                             |
 | `planner`         | A concrete implementation plan from existing context. It should read and plan, not edit code.                                               |
-| `worker`          | Implementation work, including approved oracle handoffs. It edits files, validates, and escalates unapproved decisions instead of guessing. |
+| `worker-low`      | Small, low-risk implementation work where the scope is clear and should escalate if it grows.                                                |
+| `worker`          | Normal implementation work, including approved oracle handoffs. It edits files, validates, and escalates unapproved decisions.              |
+| `worker-high`     | Difficult, high-stakes, or broad implementation work that needs extra reasoning while preserving worker scope discipline.                   |
+| `test-writer`     | Focused test implementation after code changes. It discovers test infrastructure and adds/updates tests without changing product behavior.  |
 | `reviewer`        | Code review and small fixes. It checks the implementation against the task/plan, tests, edge cases, and simplicity.                         |
 | `context-builder` | A stronger setup pass before planning: gathers code context and writes handoff material such as `context.md` and `meta-prompt.md`.          |
 | `oracle`          | A second opinion before acting. It challenges assumptions, catches drift, and recommends the safest next move without editing.              |
 | `oracle-fresh`    | A cheaper drift-check oracle that reads chain artifacts instead of forking the parent. Use for chain-based validation.                      |
-| `deslopper`       | Code cleanup and dead-code removal. Identifies unused exports, naming issues, and structural problems with supervisor escalation.           |
-| `delegate`        | A lightweight general delegate when you want a child agent that behaves close to the parent session.                                        |
+| `janitor`         | Repository hygiene: dead code, stale docs, orphaned artifacts, naming issues, and structural cleanup. Use `--review` for audit-only.       |
+| `deslopper`       | Deprecated compatibility alias for `janitor`. Prefer `janitor` for new cleanup work.                                                        |
+| `synthesizer`     | Fan-in synthesis after parallel briefs. It preserves evidence, surfaces conflicts, and writes decision-ready synthesis.                     |
 
 A simple rule of thumb: use `scout` before you understand the code, `researcher` before you trust external facts, `planner` before a bigger change, `worker` to implement, `reviewer` to check, and `oracle` when the decision itself feels risky.
 
@@ -197,16 +201,14 @@ The package includes reusable prompt templates for common workflows. You do not 
 
 | Prompt                        | Use it for                                                                                                  |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `/mesh-review`            | Launch fresh-context reviewers with distinct angles, then synthesize what to fix.                           |
-| `/parallel-research`          | Combine `researcher` and `scout` for external evidence, local code context, and practical tradeoffs.        |
-| `/parallel-handoff-plan`      | Combine external research and `context-builder` passes into an implementation handoff plan and meta-prompt. |
+| `/mesh-review`                | Launch fresh-context reviewers with distinct angles, then synthesize what to fix.                           |
+| `/mesh-recon`                 | Quick parallel researcher/scout recon; add `deep` for artifact-backed lane synthesis.                       |
+| `/mesh-handoff`               | Combine external research and `context-builder` passes into an implementation handoff plan and meta-prompt. |
+| `/mesh-context`               | Run parallel `context-builder` passes for planning or implementation handoff context.                       |
+| `/mesh-cleanup`               | Run review-only cleanup passes after implementation; add `autofix` to apply only fixes worth doing now.     |
 | `/brainstorm`                 | Design-first exploration before any implementation, with clarifying questions and approach tradeoffs.       |
 | `/write-plan`                 | Author an implementation plan from a spec/intent with explicit validation commands and a placeholder scan.  |
-| `/parallel-cleanup`           | Run review-only cleanup passes after implementation.                                                        |
-| `/reflect-chain`              | Analyze a chain run's artifacts and suggest improvements to chain templates, agents, and prompts.           |
-
-Add `autofix` to `/mesh-review` or `/parallel-cleanup` to apply only the synthesized fixes worth doing now after reviewers return.
-
+| `/gather-context-and-clarify` | Gather focused context, then ask the remaining clarification questions before planning or implementation.        |
 ## Optional pi-intercom companion
 
 `pi-subagents` works without `pi-intercom`. Install `pi-intercom` only if you want child agents to talk back to the parent Pi session while they are running.
@@ -424,7 +426,7 @@ Use these fields when an agent should see more:
 | `inheritSkills: true`         | Let the child see Pi’s discovered skills catalog.                                                 |
 | `defaultContext: fork`        | Use forked session context when a launch omits `context`; explicit `context: "fresh"` still wins. |
 
-Builtin agents opt into project instruction inheritance by default so they follow repo-specific rules out of the box. `delegate` also uses append mode because its job is orchestration inside the parent workflow.
+Builtin agents opt into project instruction inheritance by default so they follow repo-specific rules out of the box. Custom agents created without explicit frontmatter use conservative generic defaults (`systemPromptMode: replace`, no implicit project/skill inheritance).
 
 ### Agent frontmatter
 
@@ -547,10 +549,11 @@ Create chains by writing `.chain.md` files directly or with the `subagent({ acti
 
 ### Built-in chain templates
 
-| Chain    | Steps                                                                | Description                                                                                  |
-| -------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `go`     | scout → context-builder → worker → delegate (test-writer) → reviewer | Full implementation pipeline: gather context, plan, implement, write tests, review.          |
-| `review` | correctness → tests → simplicity → context-builder (synthesis)       | Sequential model-diverse review with correctness, test quality, and simplicity perspectives. |
+| Chain | Steps                                                        | Description                                                                         |
+| ----- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `go`  | scout → context-builder → worker → test-writer → reviewer    | Full implementation pipeline: gather context, plan, implement, write tests, review. |
+
+The former `review` chain has been retired. Use `/mesh-review` for model-diverse review plus synthesis.
 
 ## Chain variables
 
@@ -621,7 +624,7 @@ What the bundled skill covers:
 
 If you are writing an agent that orchestrates subagents, the bundled skill helps it behave correctly without guessing the patterns. If you are a human user, you do not need to read it directly; the README and prompt shortcuts encode the same workflows in user-facing form.
 
-The package also bundles a `test-writer` skill (`skills/test-writer/SKILL.md`) for subagents tasked with writing tests. It guides the agent through mandatory test infrastructure discovery — finding the exact test runner command, loader shims, existing helpers, and mock patterns — before writing any test code. The `go` chain template uses this skill on its delegate step.
+The package also bundles a `test-writer` skill (`skills/test-writer/SKILL.md`) for subagents tasked with writing tests. It guides the agent through mandatory test infrastructure discovery — finding the exact test runner command, loader shims, existing helpers, and mock patterns — before writing any test code. The `test-writer` builtin agent uses this skill, and the `go` chain invokes `test-writer` directly.
 
 ## Programmatic tool usage
 
@@ -915,7 +918,7 @@ The result watcher emits `subagent:async-complete`; `src/extension/index.ts` reg
 
 ## Prompt-template integration
 
-`pi-subagents` works standalone through natural language, the `subagent` tool, slash commands, and the packaged prompt shortcuts listed near the top of this README. If you use [pi-prompt-template-model](https://github.com/nicobailon/pi-prompt-template-model), you can also wrap subagent delegation in your own reusable prompt templates.
+`pi-subagents` works standalone through natural language, the `subagent` tool, slash commands, and the packaged prompt shortcuts listed near the top of this README. Pi loads bundled prompt templates from this package's `pi.prompts` manifest entry plus user/project prompt directories. The prompt-template bridge lets those templates request subagent runs with prescribed agents, context modes, outputs, and model settings.
 
 Example:
 
@@ -932,7 +935,7 @@ Use url in the prompt to take screenshot: $@
 
 Then `/take-screenshot https://example.com` switches to Sonnet, delegates to `browser-screenshoter` with `/tmp/screenshots` as cwd, and restores your model when done. Runtime overrides like `--cwd=<path>` and `--subagent=<name>` work too.
 
-For more reusable workflows on top of subagents, including `/chain-prompts` and compare-style prompts such as `/best-of-n`, install `pi-prompt-template-model` separately and copy the examples you want into `~/.pi/agent/prompts/`.
+For additional reusable workflows on top of subagents, add custom prompt templates under `~/.pi/agent/prompts/`, project `.pi/prompts/`, or another package that declares `pi.prompts`.
 
 ## Changes from upstream
 
@@ -963,7 +966,7 @@ Optimizations:
 
 Custom agents:
 
-- **`deslopper`**: Code cleanup agent with `contact_supervisor` tool for escalation. Designed for dead code removal, import cleanup, and structural simplification.
+- **`janitor`**: Repository hygiene agent with `contact_supervisor` escalation. Designed for dead code removal, stale docs, orphaned artifact audits, and structural cleanup. `deslopper` remains as a deprecated compatibility alias.
 - **`oracle-fresh`**: See Features above.
 
 All changes verified empirically. 515 unit tests pass, 4 pre-existing integration test failures (infra: missing `typebox` + `.agents/skills` path in CI).

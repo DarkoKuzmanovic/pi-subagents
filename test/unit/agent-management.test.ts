@@ -129,17 +129,17 @@ Inspect
 		assert.doesNotMatch(content, /^package:/m);
 	});
 
-	it("creates delegate with its builtin prompt defaults", () => {
+	it("creates custom agents with generic prompt defaults", () => {
 		const result = handleCreate(
-			{ config: { name: "delegate", description: "Delegate helper", scope: "project" } },
+			{ config: { name: "utility", description: "Utility helper", scope: "project" } },
 			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } },
 		);
 
 		assert.equal(result.isError, false);
-		const filePath = path.join(tempDir, ".pi", "agents", "delegate.md");
+		const filePath = path.join(tempDir, ".pi", "agents", "utility.md");
 		const content = fs.readFileSync(filePath, "utf-8");
-		assert.match(content, /systemPromptMode: append/);
-		assert.match(content, /inheritProjectContext: true/);
+		assert.match(content, /systemPromptMode: replace/);
+		assert.match(content, /inheritProjectContext: false/);
 		assert.match(content, /inheritSkills: false/);
 	});
 

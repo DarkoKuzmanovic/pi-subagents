@@ -63,8 +63,8 @@ Rules:
 
 This section will be passed to the next step to avoid rediscovery.
 
-## delegate
-skills: test-writer
+## test-writer
+# Uses the bundled test-writer agent prompt and skill.
 progress: true
 
 Write unit tests for the changes just made. Read the git diff to see what changed.

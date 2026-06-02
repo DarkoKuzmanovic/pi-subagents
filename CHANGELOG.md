@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.35.2] - 2026-06-02
+
+### Changed
+
+- Retired the `/parallel-*` prompt-template family in favor of a mesh-first command system.
+- Reworked `/mesh-recon` so simple recon is the default and `deep`/`--deep` selects the artifact-backed lane synthesis workflow.
+- Added `/mesh-cleanup`, `/mesh-context`, and `/mesh-handoff` as the cleanup, context-building, and handoff-plan replacements for the retired parallel workflows.
+- Updated README, AGENTS, and the bundled `pi-subagents` skill guidance to document the mesh command family.
+- Corrected the bundled `pi-subagents` skill and README prompt inventories to remove stale `/reflect-chain` and old prompt-template extension references, and refreshed `/gather-context-and-clarify` to use `ask_user`.
+
+## [0.35.1] - 2026-06-02
+
+### Added
+
+- Added `worker-low` and `worker-high` builtin agents so orchestrators and PMTI task packets can route low-complexity and high-complexity implementation work without runtime schema changes.
+- Added a dedicated `test-writer` builtin agent for focused test implementation; the `go` chain now calls `test-writer` directly instead of using generic `delegate` with the test-writer skill.
+- Added `janitor` as the primary repository hygiene agent, broadening the old dead-code cleanup role to include stale docs and orphaned artifact audits.
+
+### Changed
+
+- Replaced the vague builtin `delegate` agent with `test-writer`, and removed the old delegate-specific custom-agent default behavior.
+- Reworked `deslopper` into a deprecated compatibility alias for `janitor`; new cleanup dispatches should use `janitor`.
+- Refreshed README, AGENTS, and the bundled `pi-subagents` skill inventory, including removal of the stale `review` chain reference in favor of `/mesh-review`.
+
+### Tests
+
+- Added/updated agent frontmatter and management regression tests for the renamed builtins, worker variants, and generic custom-agent defaults.
+
 ## [0.35.0] - 2026-06-01
 
 ### Added

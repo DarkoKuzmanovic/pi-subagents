@@ -287,10 +287,10 @@ Do work
 			const result = discoverAgents(dir, "both");
 			const scout = result.agents.find((agent) => agent.name === "scout");
 			const reviewer = result.agents.find((agent) => agent.name === "reviewer");
-			const delegate = result.agents.find((agent) => agent.name === "delegate");
+			const testWriter = result.agents.find((agent) => agent.name === "test-writer");
 			assert.equal(scout?.inheritProjectContext, true);
 			assert.equal(reviewer?.inheritProjectContext, true);
-			assert.equal(delegate?.inheritProjectContext, true);
+			assert.equal(testWriter?.inheritProjectContext, true);
 		} finally {
 			if (previousHome === undefined) delete process.env.HOME;
 			else process.env.HOME = previousHome;
@@ -323,7 +323,31 @@ Do work
 		}
 	});
 
-	it("worker and delegate include the child-facing supervisor tool", () => {
+	it("bundles renamed worker and cleanup roles without deprecated delegate builtin", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-renamed-roles-"));
+		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-renamed-roles-home-"));
+		tempDirs.push(dir);
+		tempDirs.push(homeDir);
+		const previousHome = process.env.HOME;
+		const previousUserProfile = process.env.USERPROFILE;
+
+		try {
+			process.env.HOME = homeDir;
+			process.env.USERPROFILE = homeDir;
+			const names = discoverAgentsAll(dir).builtin.map((agent) => agent.name);
+			for (const expected of ["worker-low", "worker-high", "test-writer", "janitor"]) {
+				assert.ok(names.includes(expected), `${expected} builtin should be discovered`);
+			}
+			assert.equal(names.includes("delegate"), false);
+		} finally {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+			if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+			else process.env.USERPROFILE = previousUserProfile;
+		}
+	});
+
+	it("implementation-family builtins include the child-facing supervisor tool", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-supervisor-tool-"));
 		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-supervisor-tool-home-"));
 		tempDirs.push(dir);
@@ -335,7 +359,7 @@ Do work
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
 			const agents = discoverAgentsAll(dir).builtin;
-			for (const name of ["worker", "delegate"]) {
+			for (const name of ["worker", "worker-low", "worker-high", "test-writer"]) {
 				const agent = agents.find((candidate) => candidate.name === name);
 				assert.ok(agent, `${name} builtin should be discovered`);
 				assert.deepEqual(agent?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);
@@ -348,24 +372,24 @@ Do work
 		}
 	});
 
-	it("defaults delegate to append mode with inherited project context", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-delegate-default-prompt-settings-"));
+	it("defaults custom agents to replace mode without implicit project context", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-generic-default-prompt-settings-"));
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "delegate.md"), `---
-name: delegate
-description: Delegate
+		fs.writeFileSync(path.join(agentsDir, "utility.md"), `---
+name: utility
+description: Utility
 ---
 
 Do work
 `, "utf-8");
 
 		const result = discoverAgents(dir, "project");
-		const delegate = result.agents.find((agent) => agent.name === "delegate");
-		assert.equal(delegate?.systemPromptMode, "append");
-		assert.equal(delegate?.inheritProjectContext, true);
-		assert.equal(delegate?.inheritSkills, false);
+		const utility = result.agents.find((agent) => agent.name === "utility");
+		assert.equal(utility?.systemPromptMode, "replace");
+		assert.equal(utility?.inheritProjectContext, false);
+		assert.equal(utility?.inheritSkills, false);
 	});
 });
 
