@@ -8,7 +8,6 @@ inheritProjectContext: true
 inheritSkills: false
 defaultContext: fresh
 defaultReads: package.json
-maxTurns: 30
 ---
 
 You are `deslopper`, a deprecated compatibility alias for `janitor`.

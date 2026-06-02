@@ -82,6 +82,8 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/fetch failed/i,
 	/network error/i,
 	/socket hang up/i,
+	/(?:connection|stream|socket|request|response)\s+terminated/i,
+	/terminated unexpectedly/i,
 	/upstream/i,
 	/timed? out/i,
 	/timeout/i,

@@ -12,6 +12,17 @@ function stripAnsi(text: string): string {
 	return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+function makeTheme() {
+	return {
+		fg(_key: string, text: string) {
+			return text;
+		},
+		bold(text: string) {
+			return text;
+		},
+	};
+}
+
 function makeModels(count: number): { provider: string; id: string; fullId: string }[] {
 	const providers = ["openai", "anthropic", "google"];
 	const models: { provider: string; id: string; fullId: string }[] = [];
@@ -53,7 +64,7 @@ describe("subagent hub", {
 		const models = makeModels(5);
 		const component = new SubagentHubComponent!(
 			{ requestRender() {} },
-			{ fg(_key: string, text: string) { return text; } },
+			makeTheme(),
 			agents,
 			models,
 			"openai",
@@ -69,7 +80,7 @@ describe("subagent hub", {
 		assert.match(stripped, /oracle/);
 		assert.match(stripped, /openai\/model-0/);
 		assert.match(stripped, /Subagent Models/);
-		assert.match(stripped, /Confirm/);
+		assert.match(stripped, /enter model/);
 	});
 
 	it("enter and exit model selector via direct methods", () => {
@@ -77,7 +88,7 @@ describe("subagent hub", {
 		const models = makeModels(3);
 		const component = new SubagentHubComponent!(
 			{ requestRender() {} },
-			{ fg(_key: string, text: string) { return text; } },
+			makeTheme(),
 			agents,
 			models,
 			undefined,
@@ -107,7 +118,7 @@ describe("subagent hub", {
 		const models = makeModels(5);
 		const component = new SubagentHubComponent!(
 			{ requestRender() {} },
-			{ fg(_key: string, text: string) { return text; } },
+			makeTheme(),
 			agents,
 			models,
 			undefined,
@@ -143,7 +154,7 @@ describe("subagent hub", {
 		const models = makeModels(3);
 		const component = new SubagentHubComponent!(
 			{ requestRender() {} },
-			{ fg(_key: string, text: string) { return text; } },
+			makeTheme(),
 			agents,
 			models,
 			undefined,
@@ -162,7 +173,7 @@ describe("subagent hub", {
 		const models = makeModels(10);
 		const component = new SubagentHubComponent!(
 			{ requestRender() {} },
-			{ fg(_key: string, text: string) { return text; } },
+			makeTheme(),
 			agents,
 			models,
 			undefined,

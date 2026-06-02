@@ -38,6 +38,13 @@ interface ExecutorModule {
 	};
 }
 
+interface AsyncExecutionModule {
+	isAsyncAvailable?: () => boolean;
+}
+
+const asyncExecutionMod = await tryImport<AsyncExecutionModule>("./src/runs/background/async-execution.ts");
+const asyncAvailable = asyncExecutionMod?.isAsyncAvailable?.() === true;
+
 const executorMod = await tryImport<ExecutorModule>("./src/runs/foreground/subagent-executor.ts");
 const available = !!executorMod?.createSubagentExecutor;
 const createSubagentExecutor = executorMod?.createSubagentExecutor;
@@ -133,6 +140,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			foregroundRuns: new Map(),
 			foregroundControls: new Map(),
 			lastForegroundControlId: null,
+			pendingForegroundControlNotices: new Map(),
 			cleanupTimers: new Map(),
 			lastUiContext: null,
 			poller: null,
@@ -346,7 +354,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		}
 	});
 
-	it("resume action revives completed multi-child async runs by index", async () => {
+	it("resume action revives completed multi-child async runs by index", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "revived async child b" });
 		const runId = `resume-revive-multi-${Date.now()}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);
@@ -389,7 +397,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		}
 	});
 
-	it("resume action revives completed async runs with no-poll handoff guidance", async () => {
+	it("resume action revives completed async runs with no-poll handoff guidance", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "revived answer" });
 		const runId = `resume-revive-${Date.now()}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);
@@ -436,7 +444,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		}
 	});
 
-	it("resume action revives a completed foreground child by index", async () => {
+	it("resume action revives a completed foreground child by index", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "first child done" });
 		mockPi.onCall({ output: "second child done" });
 		mockPi.onCall({ output: "revived foreground answer" });
@@ -639,7 +647,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			);
 
 			assert.equal(result.isError, true);
-			assert.match(result.content[0]?.text ?? "", /Ambiguous async run id prefix/);
+			assert.match(result.content[0]?.text ?? "", /Ambiguous subagent run id prefix/);
 		} finally {
 			fs.rmSync(firstAsyncDir, { recursive: true, force: true });
 			fs.rmSync(secondAsyncDir, { recursive: true, force: true });

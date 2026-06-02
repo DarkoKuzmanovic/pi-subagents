@@ -920,7 +920,7 @@ Triage
 				) as Array<{ value: string; label: string }>;
 				assert.deepEqual(
 					completions.map((completion) => completion.value).sort(),
-					["release-flow", "researcher", "review", "review-flow", "reviewer"],
+					["release-flow", "researcher", "review-flow", "reviewer"],
 				);
 				const chainLabels = completions
 					.filter((c) => c.label.includes("(chain)"))
@@ -928,7 +928,6 @@ Triage
 					.sort();
 				assert.deepEqual(chainLabels, [
 					"release-flow",
-					"review",
 					"review-flow",
 				]);
 				assert.equal(

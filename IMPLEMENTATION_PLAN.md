@@ -49,7 +49,7 @@ Per-agent config tradeoffs surfaced during the mesh-recon/mesh-review review ses
 - [ ] **worker model override** — `MiniMax-M2.7-highspeed` → a quality model (gpt-5.5 or deepseek); affects cost and implementation quality.
 - [ ] **researcher model override** — `MiniMax-M2.7-highspeed` → `kimi-k2.6-precision`; affects research quality.
 - [ ] **scout thinking level** — `thinking: low` → `medium`; speed vs depth tradeoff.
-- [ ] **delegate redesign** — `systemPromptMode: append` → `replace` with a narrow base prompt; bigger rewrite, unclear scope.
+- [x] **delegate redesign** — replaced vague `delegate` role with dedicated `test-writer` builtin agent and updated the `go` chain to call it directly. Shipped in 0.35.1.
 
 ## Done archive
 

@@ -347,7 +347,7 @@ Do work
 		}
 	});
 
-	it("implementation-family builtins include the child-facing supervisor tool", () => {
+	it("implementation-family builtins expose the current child-facing tool sets", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-supervisor-tool-"));
 		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-supervisor-tool-home-"));
 		tempDirs.push(dir);
@@ -359,11 +359,15 @@ Do work
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
 			const agents = discoverAgentsAll(dir).builtin;
-			for (const name of ["worker", "worker-low", "worker-high", "test-writer"]) {
+			const workerTools = ["read", "grep", "find", "ls", "bash", "edit", "write", "context_mode_ctx_execute", "context_mode_ctx_execute_file", "context_mode_ctx_batch_execute", "contact_supervisor"];
+			for (const name of ["worker", "worker-low", "worker-high"]) {
 				const agent = agents.find((candidate) => candidate.name === name);
 				assert.ok(agent, `${name} builtin should be discovered`);
-				assert.deepEqual(agent?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);
+				assert.deepEqual(agent?.tools, workerTools);
 			}
+			const testWriter = agents.find((candidate) => candidate.name === "test-writer");
+			assert.ok(testWriter, "test-writer builtin should be discovered");
+			assert.deepEqual(testWriter?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);
 		} finally {
 			if (previousHome === undefined) delete process.env.HOME;
 			else process.env.HOME = previousHome;

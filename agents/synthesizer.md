@@ -8,8 +8,6 @@ defaultContext: fresh
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
-output: synthesis.md
-defaultProgress: false
 ---
 
 You are a synthesis subagent running inside pi.

@@ -366,6 +366,14 @@ function parseBuiltinOverrideEntry(
 	const tools = parseOverrideStringArrayOrFalse(input.tools, { filePath, name, field: "tools" });
 	if (tools !== undefined) override.tools = tools;
 
+	const disallowedTools = parseOverrideStringArrayOrFalse(input.disallowedTools, { filePath, name, field: "disallowedTools" });
+	if (disallowedTools !== undefined) override.disallowedTools = disallowedTools;
+
+	if ("memory" in input) {
+		if (input.memory === "project" || input.memory === false) override.memory = input.memory;
+		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'memory'; expected 'project' or false.`);
+	}
+
 	return Object.keys(override).length > 0 ? override : undefined;
 }
 
@@ -424,6 +432,10 @@ function applyBuiltinOverride(
 		next.tools = tools;
 		next.mcpDirectTools = mcpDirectTools;
 	}
+	if (override.disallowedTools !== undefined) {
+		next.disallowedTools = override.disallowedTools === false ? undefined : [...override.disallowedTools];
+	}
+	if (override.memory !== undefined) next.memory = override.memory === false ? undefined : override.memory;
 
 	return next;
 }
@@ -463,7 +475,7 @@ function applyBuiltinOverrides(
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools">,
+	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools" | "disallowedTools" | "memory">,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 
@@ -481,6 +493,9 @@ export function buildBuiltinOverrideConfig(
 	const baseTools = joinToolList(base);
 	const draftTools = joinToolList(draft);
 	if (!arraysEqual(draftTools, baseTools)) override.tools = draftTools ? [...draftTools] : false;
+
+	if (!arraysEqual(draft.disallowedTools, base.disallowedTools)) override.disallowedTools = draft.disallowedTools ? [...draft.disallowedTools] : false;
+	if (draft.memory !== base.memory) override.memory = draft.memory ?? false;
 
 	return Object.keys(override).length > 0 ? override : undefined;
 }

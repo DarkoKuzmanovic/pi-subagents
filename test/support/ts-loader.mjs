@@ -104,10 +104,25 @@ export class SelectList {
     this.items = items || [];
     this.height = height || 10;
     this.selectedIndex = 0;
+    this.theme = theme;
   }
   getSelected() { return this.items[this.selectedIndex]; }
-  render(width) { return this.items.slice(0, this.height).map((i) => String(i.label || i)); }
+  setSelectedIndex(index) {
+    const max = Math.max(0, this.items.length - 1);
+    this.selectedIndex = Math.min(Math.max(0, index), max);
+    if (this.onSelectionChange) this.onSelectionChange(this.getSelected());
+  }
+  render(width) {
+    return this.items.slice(0, this.height).map((item, index) => {
+      const label = String(item.label || item);
+      const description = item.description ? " " + item.description : "";
+      const prefix = index === this.selectedIndex ? "> " : "  ";
+      return prefix + label + description;
+    });
+  }
+  handleInput() { return false; }
   handleKey() { return false; }
+  invalidate() { return false; }
 }
 `;
 

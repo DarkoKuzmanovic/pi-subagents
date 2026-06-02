@@ -23,6 +23,7 @@ interface ClarifyTestComponent {
 	renderThinkingSelector(): string[];
 	handleModelSelectorInput(data: string): void;
 	handleInput(data: string): void;
+	updateBehavior(stepIndex: number, field: "model", value: string): void;
 	render(width: number): string[];
 }
 
@@ -118,7 +119,7 @@ describe("chain clarify model display", { skip: !available ? "pi packages not av
 		assert.doesNotMatch(rendered, /medium - Moderate reasoning/);
 	});
 
-	it("drops thinking when switching to a model that does not support it", () => {
+	it("preselects the current model and drops thinking for unsupported targets", () => {
 		const component = new ChainClarifyComponent(
 			{ requestRender() {} },
 			{ fg(_key: string, text: string) { return text; } },
@@ -151,9 +152,9 @@ describe("chain clarify model display", { skip: !available ? "pi packages not av
 		component.applyThinkingLevel("high");
 		component.selectedStep = 0;
 		component.enterModelSelector();
-		component.modelSelectedIndex = component.filteredModels.findIndex((model) => model.fullId === "test/basic-model");
-		component.handleModelSelectorInput("\r");
 
+		assert.equal(component.filteredModels[component.modelSelectedIndex]?.fullId, "test/reasoning-model");
+		component.updateBehavior(0, "model", "test/basic-model");
 		assert.equal(component.getEffectiveModel(0), "test/basic-model");
 	});
 
@@ -228,7 +229,7 @@ describe("chain clarify model display", { skip: !available ? "pi packages not av
 		}
 	});
 
-	it("keeps the current model selected and preserves thinking when switching models", () => {
+	it("preselects the current model and preserves thinking for compatible targets", () => {
 		const component = new ChainClarifyComponent(
 			{ requestRender() {} },
 			{ fg(_key: string, text: string) { return text; } },
@@ -265,10 +266,7 @@ describe("chain clarify model display", { skip: !available ? "pi packages not av
 		component.enterModelSelector();
 
 		assert.equal(component.filteredModels[component.modelSelectedIndex]?.fullId, "github-copilot/gpt-5-mini");
-
-		component.modelSelectedIndex = component.filteredModels.findIndex((model) => model.fullId === "github-copilot/gpt-5");
-		component.handleModelSelectorInput("\r");
-
+		component.updateBehavior(0, "model", "github-copilot/gpt-5:high");
 		assert.equal(component.getEffectiveModel(0), "github-copilot/gpt-5:high");
 	});
 });

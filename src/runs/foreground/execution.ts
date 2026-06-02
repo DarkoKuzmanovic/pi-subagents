@@ -651,8 +651,11 @@ async function runSingleAttempt(
 					detachForIntercom();
 					return;
 				}
-				proc.kill("SIGTERM");
-				setTimeout(() => !proc.killed && proc.kill("SIGKILL"), 3000);
+				trySignalChild(proc, "SIGTERM");
+				setTimeout(() => {
+					if (processClosed || settled || detached) return;
+					trySignalChild(proc, "SIGKILL");
+				}, 3000).unref?.();
 			};
 			if (options.signal.aborted) kill();
 			else {

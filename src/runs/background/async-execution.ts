@@ -357,9 +357,9 @@ export function executeAsyncChain(
 			task,
 			cwd: stepCwd,
 			model: applyEffectiveThinkingSuffix(primaryModel, behavior.thinking ?? a.thinking),
-			modelCandidates: buildModelCandidates(behavior.model ?? a.model, a.fallbackModels, availableModels, ctx.currentModelProvider)
-				.concat(primaryModel ? [primaryModel] : [])
-				.map((candidate) => applyEffectiveThinkingSuffix(candidate, behavior.thinking ?? a.thinking)),
+			modelCandidates: Array.from(
+				new Set(buildModelCandidates(behavior.model ?? a.model, a.fallbackModels, availableModels, ctx.currentModelProvider).concat(primaryModel ? [primaryModel] : [])),
+			).map((candidate) => applyEffectiveThinkingSuffix(candidate, behavior.thinking ?? a.thinking)),
 			tools: a.tools,
 			extensions: a.extensions,
 			mcpDirectTools: a.mcpDirectTools,

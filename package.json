@@ -1,6 +1,6 @@
 {
   "name": "pi-subagents",
-	"version": "0.35.2",
+	"version": "0.35.3",
   "description": "Pi extension for delegating tasks to subagents with chains, parallel execution, and TUI clarification",
   "author": "Darko Kuzmanovic",
   "license": "MIT",
@@ -32,8 +32,6 @@
     "chains/",
     "skills/**/*",
     "prompts/**/*",
-    "docs/worker-bakeoff/**/*",
-    "docs/scout-bakeoff/**/*",
     "README.md",
     "CHANGELOG.md"
   ],

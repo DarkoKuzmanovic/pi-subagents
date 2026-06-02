@@ -8,7 +8,6 @@ inheritProjectContext: true
 inheritSkills: false
 defaultContext: fresh
 defaultReads: package.json
-maxTurns: 30
 ---
 
 You are `janitor`: a repository hygiene and cleanup agent.

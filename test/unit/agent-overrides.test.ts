@@ -242,4 +242,69 @@ describe("builtin agent overrides", () => {
 			tools: false,
 		});
 	});
+
+	it("applies disallowedTools and memory overrides to builtin agents", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: {
+				agentOverrides: {
+					reviewer: {
+						disallowedTools: ["bash"],
+						memory: "project",
+					},
+				},
+			},
+		});
+
+		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
+		assert.ok(reviewer);
+		assert.equal(reviewer.source, "builtin");
+		assert.deepEqual(reviewer.disallowedTools, ["bash"]);
+		assert.equal(reviewer.memory, "project");
+	});
+
+	it("captures disallowedTools and memory diffs in override config", () => {
+		const shared = {
+			model: "openai/gpt-5.4",
+			fallbackModels: undefined,
+			thinking: "high" as const,
+			systemPromptMode: "replace" as const,
+			inheritProjectContext: true,
+			inheritSkills: false,
+			defaultContext: "fresh" as const,
+			disabled: false,
+			systemPrompt: "Base prompt",
+			skills: undefined,
+			tools: undefined,
+			mcpDirectTools: undefined,
+		};
+		const override = buildBuiltinOverrideConfig(
+			{ ...shared, disallowedTools: [], memory: undefined },
+			{ ...shared, disallowedTools: ["bash", "web_search"], memory: "project" },
+		);
+		assert.deepEqual(override?.disallowedTools, ["bash", "web_search"]);
+		assert.equal(override?.memory, "project");
+	});
+
+	it("clears disallowedTools and memory with false sentinels", () => {
+		const shared = {
+			model: undefined,
+			fallbackModels: undefined,
+			thinking: undefined,
+			systemPromptMode: "replace" as const,
+			inheritProjectContext: true,
+			inheritSkills: false,
+			defaultContext: undefined,
+			disabled: false,
+			systemPrompt: "Base prompt",
+			skills: undefined,
+			tools: undefined,
+			mcpDirectTools: undefined,
+		};
+		const override = buildBuiltinOverrideConfig(
+			{ ...shared, disallowedTools: ["bash"], memory: "project" },
+			{ ...shared, disallowedTools: undefined, memory: undefined },
+		);
+		assert.equal(override?.disallowedTools, false);
+		assert.equal(override?.memory, false);
+	});
 });

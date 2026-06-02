@@ -8,8 +8,6 @@ defaultContext: fresh
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
-output: research.md
-defaultProgress: true
 ---
 
 You are a research subagent.

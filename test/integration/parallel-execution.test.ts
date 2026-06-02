@@ -115,7 +115,25 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 	function makeExecutor(agents = [makeAgent("echo")]) {
 		return createSubagentExecutor({
 			pi: { events: createEventBus(), getSessionName: () => undefined },
-			state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
+			state: {
+				baseCwd: tempDir,
+				currentSessionId: null,
+				asyncJobs: new Map(),
+				foregroundRuns: new Map(),
+				foregroundControls: new Map(),
+				lastForegroundControlId: null,
+				pendingForegroundControlNotices: new Map(),
+				cleanupTimers: new Map(),
+				lastUiContext: null,
+				poller: null,
+				completionSeen: new Map(),
+				watcher: null,
+				watcherRestartTimer: null,
+				resultFileCoalescer: {
+					schedule: () => false,
+					clear: () => {},
+				},
+			},
 			config: {},
 			asyncByDefault: false,
 			tempArtifactsDir: tempDir,

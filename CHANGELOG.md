@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.35.3] - 2026-06-03
+
+### Fixed
+
+- Foreground abort now reliably escalates to `SIGKILL` for children that ignore `SIGTERM`; the escalation timer is guarded on live process state (`processClosed`/`settled`/`detached`) and `unref()`ed instead of relying on `proc.killed`.
+- Builtin agent overrides for `disallowedTools` and `memory` are now parsed, applied, and round-tripped instead of being silently ignored.
+- Async model fallback no longer re-queues the primary model as a duplicate candidate before falling back.
+- Narrowed the model-fallback retry matcher so ordinary tool/bash output containing "terminated" no longer triggers provider fallback; only provider/stream-style wording does.
+
+### Changed
+
+- `worker`, `worker-low`, and `worker-high` now expose the context-mode execution tools and share a unified child-facing tool set.
+- Cleaned duplicated agent frontmatter (`scout`, `researcher`, `synthesizer`) and removed the unused `maxTurns` field from `janitor`/`deslopper`.
+
+### Removed
+
+- Retired the scout/worker bakeoff benchmark kit (`prompts/*-bakeoff.md`, `docs/*-bakeoff/`, associated tests, and `package.json` `files` entries) and obsolete one-off scratch reports.
+
+### Tests
+
+- Refreshed the integration suite to match current runtime (model-selector/keybinding/chain/theme-stub expectations) — `test:integration` is green again.
+- Added regression tests for `disallowedTools`/`memory` overrides and the narrowed model-fallback retry matcher.
+
 ## [0.35.2] - 2026-06-02
 
 ### Changed
