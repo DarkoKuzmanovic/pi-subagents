@@ -335,7 +335,7 @@ Do work
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
 			const names = discoverAgentsAll(dir).builtin.map((agent) => agent.name);
-			for (const expected of ["worker-low", "worker-high", "test-writer", "janitor"]) {
+			for (const expected of ["worker-light", "worker-heavy", "test-writer", "janitor"]) {
 				assert.ok(names.includes(expected), `${expected} builtin should be discovered`);
 			}
 			assert.equal(names.includes("delegate"), false);
@@ -360,7 +360,7 @@ Do work
 			process.env.USERPROFILE = homeDir;
 			const agents = discoverAgentsAll(dir).builtin;
 			const workerTools = ["read", "grep", "find", "ls", "bash", "edit", "write", "context_mode_ctx_execute", "context_mode_ctx_execute_file", "context_mode_ctx_batch_execute", "contact_supervisor"];
-			for (const name of ["worker", "worker-low", "worker-high"]) {
+			for (const name of ["worker", "worker-light", "worker-heavy"]) {
 				const agent = agents.find((candidate) => candidate.name === name);
 				assert.ok(agent, `${name} builtin should be discovered`);
 				assert.deepEqual(agent?.tools, workerTools);

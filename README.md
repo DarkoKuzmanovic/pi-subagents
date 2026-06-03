@@ -6,7 +6,7 @@
 
 ## Features
 
-- **14 builtin agents** — scout, planner, worker-low, worker, worker-high, test-writer, reviewer, oracle, context-builder, researcher, janitor, deslopper, oracle-fresh, synthesizer
+- **14 builtin agents** — scout, planner, worker-light, worker, worker-heavy, test-writer, reviewer, oracle, context-builder, researcher, janitor, deslopper, oracle-fresh, synthesizer
 - **Chains** — sequential multi-step pipelines with `{task}`, `{previous}`, `{chain_dir}` template variables and fan-out/fan-in parallel groups
 - **Parallel execution** — concurrent agents with grouped output, optional worktree isolation
 - **Background runs** — detached async execution with status polling, completion notifications, and resume
@@ -113,9 +113,9 @@ The extension ships with builtin agents you can use immediately.
 | `scout`           | Fast local codebase recon: relevant files, entry points, data flow, risks, and where another agent should start.                            |
 | `researcher`      | Web/docs research with sources: official docs, specs, benchmarks, recent changes, and a concise research brief.                             |
 | `planner`         | A concrete implementation plan from existing context. It should read and plan, not edit code.                                               |
-| `worker-low`      | Small, low-risk implementation work where the scope is clear and should escalate if it grows.                                                |
+| `worker-light`      | Small, low-risk implementation work where the scope is clear and should escalate if it grows.                                                |
 | `worker`          | Normal implementation work, including approved oracle handoffs. It edits files, validates, and escalates unapproved decisions.              |
-| `worker-high`     | Difficult, high-stakes, or broad implementation work that needs extra reasoning while preserving worker scope discipline.                   |
+| `worker-heavy`     | Difficult, high-stakes, or broad implementation work that needs extra reasoning while preserving worker scope discipline.                   |
 | `test-writer`     | Focused test implementation after code changes. It discovers test infrastructure and adds/updates tests without changing product behavior.  |
 | `reviewer`        | Code review and small fixes. It checks the implementation against the task/plan, tests, edge cases, and simplicity.                         |
 | `context-builder` | A stronger setup pass before planning: gathers code context and writes handoff material such as `context.md` and `meta-prompt.md`.          |

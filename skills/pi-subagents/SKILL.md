@@ -17,7 +17,7 @@ Use this skill when the parent orchestrator needs to launch a specialized subage
 ## When to Use
 
 - **Advisory review**: use fresh-context `reviewer` agents for adversarial code review, or fork to `oracle` when inherited decisions and drift matter
-- **Implementation handoff**: after an approved direction, choose `worker-low`, `worker`, or `worker-high` by task hardness; use `test-writer` for focused test work
+- **Implementation handoff**: after an approved direction, choose `worker-light`, `worker`, or `worker-heavy` by task hardness; use `test-writer` for focused test work
 - **Recon and planning**: use `scout` or `context-builder`, then `planner`
 - **Parallel exploration**: run multiple non-conflicting tasks concurrently
 - **Long-running work**: launch async/background runs and inspect them later
@@ -152,9 +152,9 @@ and user/project agents override builtins with the same name.
 | ----------------- | ------------------------------------------- | ---------------- | ------------------------------------------------------------------------- |
 | `scout`           | Fast codebase recon                         | fresh (implicit) | Writes `context.md` handoff material                                      |
 | `planner`         | Creates implementation plans                | fresh            | Writes `plan.md`; reads `context.md`                                      |
-| `worker-low`      | Low-complexity implementation               | fork             | Small, low-risk edits with early escalation if scope grows                |
+| `worker-light`      | Low-complexity implementation               | fork             | Small, low-risk edits with early escalation if scope grows                |
 | `worker`          | Normal implementation and oracle handoffs   | fork             | Single-writer implementation with decision escalation                     |
-| `worker-high`     | High-complexity implementation              | fork             | Difficult/high-stakes execution with extra thinking                       |
+| `worker-heavy`     | High-complexity implementation              | fork             | Difficult/high-stakes execution with extra thinking                       |
 | `test-writer`     | Focused test implementation                 | fresh            | Adds or updates tests using existing project test infrastructure          |
 | `reviewer`        | Review-and-fix specialist                   | fresh (implicit) | Can edit/fix reviewed code                                                |
 | `context-builder` | Requirements/codebase handoff builder       | fresh (implicit) | Writes structured context files                                           |
@@ -642,7 +642,7 @@ settings.
 
 - **Forking requires a persisted parent session.** If the current session does not
   have a persisted session file, forked runs fail. Packaged implementation workers
-  (`worker-low`, `worker`, `worker-high`) and `oracle` default to forked context,
+  (`worker-light`, `worker`, `worker-heavy`) and `oracle` default to forked context,
   so use `context: "fresh"` explicitly when that is not available or not wanted.
 - **Forked runs inherit parent history.** They are branched threads, not fresh
   filtered contexts. Use fresh context for adversarial reviewers unless the user explicitly asks for forked context.
@@ -705,9 +705,9 @@ subagent({
 
 When you are the orchestrating agent for a new feature or non-trivial change, factor in the packaged prompt workflows without literally invoking slash commands. Use the same patterns through tools and subagents.
 
-Keep builtin agent defaults unless the user explicitly asks for a different model, thinking level, skills, output behavior, context mode, or other override. Do not add overrides just because you are orchestrating; the defaults encode the intended role behavior. In particular, packaged `worker-low`, `worker`, `worker-high`, and `oracle` default to forked context; `planner`, `reviewer`, `test-writer`, and `oracle-fresh` default to fresh context with curated reads where specified.
+Keep builtin agent defaults unless the user explicitly asks for a different model, thinking level, skills, output behavior, context mode, or other override. Do not add overrides just because you are orchestrating; the defaults encode the intended role behavior. In particular, packaged `worker-light`, `worker`, `worker-heavy`, and `oracle` default to forked context; `planner`, `reviewer`, `test-writer`, and `oracle-fresh` default to fresh context with curated reads where specified.
 
-Choose the implementation worker deliberately: use `worker-low` for small, low-risk edits with a clear local pattern; `worker` for ordinary 2–3 file implementation; and `worker-high` for architecture-sensitive, schema/config/routing, tricky-test, or high-blast-radius work. If the task is specifically to add or repair tests without product behavior changes, use `test-writer` instead of a generic implementation worker.
+Choose the implementation worker deliberately: use `worker-light` for small, low-risk edits with a clear local pattern; `worker` for ordinary 2–3 file implementation; and `worker-heavy` for architecture-sensitive, schema/config/routing, tricky-test, or high-blast-radius work. If the task is specifically to add or repair tests without product behavior changes, use `test-writer` instead of a generic implementation worker.
 
 When the user approves launching a subagent to carry out a plan or workflow, treat that as approval to generate a proper role-specific meta prompt for that subagent. Include the approved plan path or summary, clarified requirements, non-goals, relevant context, role boundaries, files or areas to inspect, acceptance criteria, expected output, and validation expectations. Do not pass vague instructions like “implement the plan fully” or “review this” by themselves.
 
@@ -723,7 +723,7 @@ When the user approves launching a subagent to carry out a plan or workflow, tre
 For feature work, use this sequence as scaffolding for parent-agent behavior:
 
 ```text
-clarify → planner → worker-low/worker/worker-high → parallel fresh-context reviewers → worker
+clarify → planner → worker-light/worker/worker-heavy → parallel fresh-context reviewers → worker
 ```
 
 The first implementation worker applies the approved plan. The parallel reviewers inspect the resulting diff from fresh context. The final fix worker applies synthesized review fixes in forked context. Do not stop after parallel review unless the user explicitly asked for review-only output or the review surfaced a decision that needs approval first.
@@ -732,7 +732,7 @@ Keep orchestration authority in the parent session. Child subagents should not l
 
 1. Clarify first. This is mandatory. Gather code context with `scout` or `context-builder`, add `researcher` only when external evidence matters, then ask the user clarifying questions with `ask_user` until scope, acceptance criteria, constraints, and non-goals are clear.
 2. Plan when useful. For complex work, call `planner` or write a plan doc yourself and get approval before implementation. For simple work, confirm shared understanding and explicitly note why planning is skipped.
-3. Implement with one writer. After approval, launch the right implementation role (`worker-low`, `worker`, or `worker-high`) with a proper meta prompt that includes clarified requirements, relevant context, plan path or summary, acceptance criteria, and validation expectations. Packaged implementation workers default to forked context; pass `context: "fresh"` only when you intentionally want a fresh child.
+3. Implement with one writer. After approval, launch the right implementation role (`worker-light`, `worker`, or `worker-heavy`) with a proper meta prompt that includes clarified requirements, relevant context, plan path or summary, acceptance criteria, and validation expectations. Packaged implementation workers default to forked context; pass `context: "fresh"` only when you intentionally want a fresh child.
 4. Review after implementation. After the worker completes, launch parallel fresh-context `reviewer` agents for correctness/regressions, tests/validation, and simplicity/maintainability. Use `output: false` unless review artifacts are explicitly needed.
 5. Synthesize, then run the fix worker. Separate blockers, fixes worth doing now, optional improvements, and feedback to ignore/defer, then launch a forked `worker` to apply fixes worth doing now when the workflow is implementation-authorized. If reviewers found scope/product/architecture choices that were not approved, ask the user first instead of applying them.
 6. Validate and complete. After the fix worker returns, run or confirm focused validation, update docs/changelog when relevant, and summarize what changed and why.
