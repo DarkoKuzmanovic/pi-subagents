@@ -999,3 +999,48 @@ test("subagent-hub: enterModelSelector for agent with existing override pre-sele
 	assert.ok(component.modelSelectedIndex >= 0);
 	assert.ok(component.modelSelectedIndex < component.filteredModels.length);
 });
+
+// ── Thinking level: cycle + persistence (regression: off/high/off bug) ────
+
+test("subagent-hub: seeds existing thinking config so a no-touch exit preserves it", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b"]);
+	(agents[0] as any).thinking = "high";
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+		"/tmp",
+	);
+
+	// Configured agent is seeded; unconfigured agent stays absent (no thinking:"off" noise).
+	assert.equal(component.agentThinkingOverrides.get("a"), "high");
+	assert.equal(component.agentThinkingOverrides.has("b"), false);
+});
+
+test("subagent-hub: cycles thinking even when model metadata reports no reasoning levels", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a"], ["vendor/no-reasoning"]);
+	// reasoning:false previously collapsed the cycle to ["off"], trapping the user on off.
+	const models = [{ provider: "vendor", id: "no-reasoning", fullId: "vendor/no-reasoning", reasoning: false }];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+		"/tmp",
+	);
+
+	assert.equal(component.agentThinkingOverrides.has("a"), false, "starts unset");
+	component.cycleThinkingLevel();
+	const after = component.agentThinkingOverrides.get("a");
+	assert.ok(after && after !== "off", `expected a non-off level after cycling, got ${String(after)}`);
+});

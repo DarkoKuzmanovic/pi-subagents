@@ -3,7 +3,7 @@ import { DynamicBorder, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
 import { Container, SelectList, Spacer, Text, matchesKey } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../agents/agents.ts";
-import { findModelInfo, getSupportedThinkingLevels, type ModelInfo } from "../shared/model-info.ts";
+import { findModelInfo, getSupportedThinkingLevels, THINKING_LEVELS, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
 import {
 	resolveModelCandidate,
 	splitThinkingSuffix,
@@ -37,6 +37,18 @@ export class SubagentHubComponent implements Component {
 				if (resolved) {
 					this.agentModelOverrides.set(agent.name, resolved);
 				}
+			}
+		}
+
+		// Seed thinking overrides from existing agent config so that exiting the hub
+		// without re-cycling an agent round-trips its level instead of erasing it.
+		// The save loop rebuilds overrides from these maps; without seeding, a no-op
+		// open+exit would drop every agent's persisted thinking.
+		for (const agent of this.agents) {
+			const { thinkingSuffix } = agent.model ? splitThinkingSuffix(agent.model) : { thinkingSuffix: "" };
+			const seeded = (thinkingSuffix ? thinkingSuffix.slice(1) : undefined) ?? agent.thinking;
+			if (seeded && seeded !== "off") {
+				this.agentThinkingOverrides.set(agent.name, seeded);
 			}
 		}
 	}
@@ -378,16 +390,19 @@ export class SubagentHubComponent implements Component {
 		const agent = this.agents[this.selectedAgentIndex];
 		if (!agent) return;
 
+		// The hub is an explicit configuration surface, so allow cycling through
+		// every thinking level. Model reasoning metadata can be stale or incomplete
+		// (a capable reasoning model may be reported as off-only), which previously
+		// trapped users: the cycle could not leave "off" so nothing was ever
+		// persisted. The runtime normalizes/applies the chosen level at dispatch.
 		const effectiveModel = this.agentModelOverrides.get(agent.name) ?? this.resolveAgentEffectiveModel(agent);
-		const modelInfo = findModelInfo(effectiveModel, this.availableModels, this.preferredProvider);
-		const availableLevels = getSupportedThinkingLevels(modelInfo);
-		if (availableLevels.length === 0) return;
+		const availableLevels: ThinkingLevel[] = [...THINKING_LEVELS];
 
 		// Get current effective thinking
 		const { thinkingSuffix } = splitThinkingSuffix(effectiveModel);
 		const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
 		const overridden = this.agentThinkingOverrides.get(agent.name);
-		const currentThinking = (overridden ?? suffixThinking ?? agent.thinking ?? "off") as import("../shared/model-info.ts").ThinkingLevel;
+		const currentThinking = (overridden ?? suffixThinking ?? agent.thinking ?? "off") as ThinkingLevel;
 
 		// Cycle to next level
 		const currentIndex = availableLevels.indexOf(currentThinking);
