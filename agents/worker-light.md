@@ -1,5 +1,6 @@
 ---
 name: worker-light
+disabled: true
 description: Low-complexity implementation agent for small, low-risk tasks with clear scope
 systemPromptMode: replace
 inheritProjectContext: true

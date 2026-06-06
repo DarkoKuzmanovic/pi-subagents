@@ -2,24 +2,38 @@
 
 ## Current milestone
 
+No active PMTI milestone is currently open. M0 and M1 are closed in `.pi/pmti/project/changes-log.md`.
+
+## Completed milestones
+
 ### M0 — Thinking level dispatch controls
 
-Expose `thinking` level as a per-dispatch override in the `subagent` tool and `/subagents` TUI, with precedence `inline > agentOverrides > agent file > session default` and tests proving single, chain, parallel, and TUI paths.
+Exposed `thinking` level as a per-dispatch override in the `subagent` tool and `/subagents` TUI, with precedence `inline > agentOverrides > agent file > session default` and tests proving single, chain, parallel, and TUI paths.
 
 **Source:** `TODO.md` entry requested 2026-06-01.
 
+### M1 — Model lanes, JSON shortcut, and six-role roster
+
+Added named model lanes, lane dispatch propagation, `/subagents config|json|edit`, and the six-role visible builtin roster (`context-builder`, `planner`, `worker`, `reviewer`, `oracle`, `janitor`). Compatibility agent files remain preserved but disabled by default.
+
+**Source:** PMTI continuation requested 2026-06-05 from session 019e97b9-50a5-79a0-bd2c-11d80a0ca406.
+
 ## Later candidate milestones
 
-### M1 — Legacy task context triage
+### Legacy task context triage
 
 Review existing `.pi/tasks/` histories and decide whether any durable lessons should be promoted into PMTI project decisions, watch items, or future milestone candidates.
 
-### M2 — Subagent UX and orchestration polish
+### Subagent UX and orchestration polish
 
-Use post-M0 feedback to improve `/subagents` discoverability, dispatch previews, and safe defaults without changing runtime semantics.
+Use post-M0/M1 feedback to improve `/subagents` discoverability, dispatch previews, lane ergonomics, and safe defaults without changing runtime semantics unexpectedly.
+
+### Lane-editing TUI
+
+Design a first-class lane-editing TUI only after the JSON control plane and model-lane dispatch have baked in real use.
 
 ## Phase-boundary notes
 
 - M0 is coherent because it finishes one user-visible capability across API, runtime, TUI, and verification.
-- M1 is intentionally separate so historical task migration does not block the active TODO item.
-- M2 depends on the new thinking controls being stable enough to observe in real use.
+- M1 is coherent because it finishes model-lane routing, the JSON editing shortcut, and the default six-role roster as one product-facing simplification.
+- Legacy task migration and lane-editing UI remain intentionally separate so they do not block the completed lane/roster milestone.

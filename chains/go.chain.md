@@ -1,10 +1,10 @@
 ---
 name: go
-description: Scout codebase → build implementation plan → worker implements → test writer adds tests → reviewer validates
+description: Build codebase context → create implementation plan → worker implements → reviewer validates
 ---
 
-## scout
-output: scout-context.md
+## context-builder
+output: context.md
 progress: true
 
 Map the codebase areas relevant to: {task}
@@ -17,19 +17,19 @@ Include:
 - Line ranges for key code blocks the worker will need to edit
 
 **Test infrastructure (mandatory):**
-- Exact test runner command (copy-paste ready, e.g. `npx tsx --test --import ./test/support/register-loader.mjs`)
+- Exact test runner command (copy-paste ready, e.g. `node --experimental-strip-types --import ./test/support/register-loader.mjs --test`)
 - Test file naming and location conventions
 - Key helpers and factories in test/support/
-- Known quirks: loader shims, stubbed modules, TypeScript compatibility (strip-types vs transform-types vs tsx)
+- Known quirks: loader shims, stubbed modules, TypeScript compatibility (strip-types vs transform-types)
 - The closest existing test file to use as a reference pattern
 
 Be thorough — the worker will implement based solely on your context.
 
-## context-builder
-output: implementation-plan.md
+## planner
+output: plan.md
 progress: true
 
-Read the scout context from {previous}.
+Read the codebase context from {previous}.
 
 Write a specific implementation plan for: {task}
 
@@ -38,9 +38,9 @@ The plan must include:
 - What to change in each file (specific code, not vague descriptions)
 - Order of changes (dependencies first)
 - Test file locations and what tests to add
-- Validation command to run after changes (use the exact test runner command from the scout context — do not guess)
+- Validation command to run after changes (use the exact test runner command from the context — do not guess)
 
-**Constraint verification:** Before finalizing the plan, verify every function signature, type, and enum value you reference against the scout context. If the scout says a function accepts `"user" | "project"`, do not write `"both"` in the plan.
+**Constraint verification:** Before finalizing the plan, verify every function signature, type, and enum value you reference against the codebase context. If the context says a function accepts `"user" | "project"`, do not write `"both"` in the plan.
 
 Write this as a contract a worker agent can follow without judgment calls.
 
@@ -58,24 +58,10 @@ Rules:
 
 **End your response with a "Test Infrastructure" section** that documents:
 - The exact test runner command you used
-- Any quirks you discovered (e.g., "matchesKey shim returns false — test via direct method calls")
+- Any quirks you discovered
 - Which test helper functions you used
 
 This section will be passed to the next step to avoid rediscovery.
-
-## test-writer
-# Uses the bundled test-writer agent prompt and skill.
-progress: true
-
-Write unit tests for the changes just made. Read the git diff to see what changed.
-
-**Before writing any tests**, read the "Test Infrastructure" section from the previous step. Use the exact test runner command and patterns documented there. Do not re-discover test infrastructure that was already found.
-
-Rules:
-- Follow existing test patterns in the project (check nearby test files for helpers, structure, mocking)
-- Cover: happy path, edge cases, error cases for each changed function
-- Run the tests and fix any failures before finishing
-- Keep tests focused — one assertion concept per test
 
 ## reviewer
 output: false

@@ -3,7 +3,7 @@ import { DynamicBorder, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
 import { Container, SelectList, Spacer, Text, matchesKey } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../agents/agents.ts";
-import { findModelInfo, getSupportedThinkingLevels, THINKING_LEVELS, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
+import { findModelInfo, getSupportedThinkingLevels, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
 import {
 	resolveModelCandidate,
 	splitThinkingSuffix,
@@ -46,7 +46,8 @@ export class SubagentHubComponent implements Component {
 		// open+exit would drop every agent's persisted thinking.
 		for (const agent of this.agents) {
 			const { thinkingSuffix } = agent.model ? splitThinkingSuffix(agent.model) : { thinkingSuffix: "" };
-			const seeded = (thinkingSuffix ? thinkingSuffix.slice(1) : undefined) ?? agent.thinking;
+			const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
+			const seeded = agent.thinking ?? suffixThinking;
 			if (seeded && seeded !== "off") {
 				this.agentThinkingOverrides.set(agent.name, seeded);
 			}
@@ -202,7 +203,7 @@ export class SubagentHubComponent implements Component {
 			const { thinkingSuffix } = splitThinkingSuffix(effectiveModel);
 			const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
 			const overriddenThinking = this.agentThinkingOverrides.get(agent.name);
-			const effectiveThinking = overriddenThinking ?? suffixThinking ?? agent.thinking ?? "";
+			const effectiveThinking = overriddenThinking ?? agent.thinking ?? suffixThinking ?? "";
 			const thinkingDisplay = effectiveThinking && effectiveThinking !== "off" ? effectiveThinking : "off";
 			const desc = isOverridden
 				? `${effectiveModel} ✎  ·  thinking: ${thinkingDisplay}`
@@ -390,22 +391,20 @@ export class SubagentHubComponent implements Component {
 		const agent = this.agents[this.selectedAgentIndex];
 		if (!agent) return;
 
-		// The hub is an explicit configuration surface, so allow cycling through
-		// every thinking level. Model reasoning metadata can be stale or incomplete
-		// (a capable reasoning model may be reported as off-only), which previously
-		// trapped users: the cycle could not leave "off" so nothing was ever
-		// persisted. The runtime normalizes/applies the chosen level at dispatch.
 		const effectiveModel = this.agentModelOverrides.get(agent.name) ?? this.resolveAgentEffectiveModel(agent);
-		const availableLevels: ThinkingLevel[] = [...THINKING_LEVELS];
+		const modelInfo = findModelInfo(effectiveModel, this.availableModels, this.preferredProvider);
+		const availableLevels: ThinkingLevel[] = getSupportedThinkingLevels(modelInfo);
 
 		// Get current effective thinking
 		const { thinkingSuffix } = splitThinkingSuffix(effectiveModel);
 		const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
 		const overridden = this.agentThinkingOverrides.get(agent.name);
-		const currentThinking = (overridden ?? suffixThinking ?? agent.thinking ?? "off") as ThinkingLevel;
+		const currentThinking = (overridden ?? agent.thinking ?? suffixThinking ?? "off") as ThinkingLevel;
 
 		// Cycle to next level
 		const currentIndex = availableLevels.indexOf(currentThinking);
+		if (availableLevels.length === 0) return;
+		if (currentIndex >= 0 && availableLevels.length === 1) return;
 		const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % availableLevels.length;
 		const nextLevel = availableLevels[nextIndex]!;
 

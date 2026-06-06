@@ -32,3 +32,13 @@
 **Rationale:** Existing hub/chain-clarify paths already use known `:level` suffixes on model strings, but tool and chain/parallel dispatch need an explicit field so precedence is clear. A single normalization boundary prevents competing mechanisms.
 
 **Implementation requirement:** `src/shared/settings.ts` owns chain/parallel behavior resolution and must carry `thinking` through `StepOverrides`, `SequentialStep`, `ParallelTaskItem`, `ResolvedStepBehavior`, and `resolveStepBehavior`. Runtime normalization must strip any existing known suffix before applying an inline value, including `off`.
+
+## 2026-06-06 — M1 model lane and roster simplification
+
+**Decision:** Represent light/medium/heavy implementation routing as named `subagents.modelLanes` for the primary `worker` role instead of keeping separate visible `worker-light` and `worker-heavy` builtins.
+
+**Rationale:** Lane overrides keep model selection explicit at dispatch time while reducing the visible role roster to durable responsibilities. Compatibility agent files remain available for opt-in overrides and reference, but default discovery and list output should focus on six roles.
+
+**Implementation requirement:** Disabled compatibility agents stay parseable through `discoverAgentsAll`; normal `discoverAgents` and management list output hide them unless explicitly re-enabled. Public guidance should route local/web recon through `context-builder`, synthesis through `reviewer`, test-focused implementation through `worker`, and cleanup through `janitor`.
+
+**Future work:** A lane-editing TUI is deferred until the JSON control plane has baked in real use.

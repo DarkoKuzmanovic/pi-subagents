@@ -22,6 +22,7 @@ export const KNOWN_FIELDS = new Set([
 	"interactive",
 	"maxSubagentDepth",
 	"disallowedTools",
+	"disabled",
 	"memory",
 	]);
 
@@ -52,6 +53,7 @@ export function serializeAgent(config: AgentConfig): string {
 	lines.push(`inheritProjectContext: ${config.inheritProjectContext ? "true" : "false"}`);
 	lines.push(`inheritSkills: ${config.inheritSkills ? "true" : "false"}`);
 	if (config.defaultContext) lines.push(`defaultContext: ${config.defaultContext}`);
+	if (config.disabled !== undefined) lines.push(`disabled: ${config.disabled ? "true" : "false"}`);
 
 	const skillsValue = joinComma(config.skills);
 	if (skillsValue) lines.push(`skills: ${skillsValue}`);

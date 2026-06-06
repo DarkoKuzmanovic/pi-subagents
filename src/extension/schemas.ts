@@ -45,6 +45,7 @@ const TaskItem = Type.Object({
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking for this task" })),
 	model: Type.Optional(Type.String({ description: "Override model for this task (e.g. 'google/gemini-3-pro')" })),
+	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this task (for example 'easy' or 'hard')." })),
 	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for this task. Takes precedence over agent config for this dispatch only." })),
 	skill: Type.Optional(SkillOverride),
 });
@@ -61,6 +62,7 @@ const ParallelTaskSchema = Type.Object({
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for this task" })),
+	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this parallel task." })),
 	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for this parallel task" })),
 });
 
@@ -77,6 +79,7 @@ const ChainItem = Type.Object({
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for this step" })),
+	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this chain step." })),
 	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for this chain step" })),
 	parallel: Type.Optional(Type.Array(ParallelTaskSchema, { minItems: 1, description: "Tasks to run in parallel" })),
 	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: 4)" })),
@@ -172,6 +175,7 @@ export const SubagentParams = Type.Object({
 	outputMode: Type.Optional(OutputModeOverride),
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for single agent (e.g. 'anthropic/claude-sonnet-4)'" })),
+	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this single-agent dispatch." })),
 	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for single agent dispatch. Takes precedence over agent config for this dispatch only." })),
 	reads: Type.Optional(ReadsOverride),
 });

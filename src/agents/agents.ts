@@ -232,16 +232,16 @@ function findNearestProjectRoot(cwd: string): string | null {
 	}
 }
 
-function getUserAgentSettingsPath(): string {
+export function getUserAgentSettingsPath(): string {
 	return path.join(os.homedir(), ".pi", "agent", "settings.json");
 }
 
-function getProjectAgentSettingsPath(cwd: string): string | null {
+export function getProjectAgentSettingsPath(cwd: string): string | null {
 	const projectRoot = findNearestProjectRoot(cwd);
 	return projectRoot ? path.join(projectRoot, ".pi", "settings.json") : null;
 }
 
-function readSettingsFileStrict(filePath: string): Record<string, unknown> {
+export function readSettingsFileStrict(filePath: string): Record<string, unknown> {
 	if (!fs.existsSync(filePath)) return {};
 	let raw: string;
 	try {
@@ -696,6 +696,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			output: frontmatter.output,
 			defaultReads: defaultReads && defaultReads.length > 0 ? defaultReads : undefined,
 			defaultProgress: frontmatter.defaultProgress === "true",
+			disabled: frontmatter.disabled === "true" || frontmatter.disabled === true ? true : undefined,
 			interactive: frontmatter.interactive === "true",
 			maxSubagentDepth:
 				Number.isInteger(parsedMaxSubagentDepth) && parsedMaxSubagentDepth >= 0

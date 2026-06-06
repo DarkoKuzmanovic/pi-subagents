@@ -41,12 +41,14 @@ import {
 	type SingleResult,
 	type SubagentState,
 } from "../shared/types.ts";
+import { CONFIG_KEYWORDS, openSettingsInEditor, resolveUserSettingsPath, seedModelLanesIfMissing } from "./subagents-config.ts";
 
 interface InlineConfig {
 	output?: string | false;
 	outputMode?: "inline" | "file-only";
 	reads?: string[] | false;
 	model?: string;
+	lane?: string;
 	skill?: string[] | false;
 	progress?: boolean;
 }
@@ -75,6 +77,9 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 				break;
 			case "model":
 				config.model = val || undefined;
+				break;
+			case "lane":
+				config.lane = val || undefined;
 				break;
 			case "skill":
 			case "skills":
@@ -214,6 +219,7 @@ const mapSavedChainSteps = (
 				progress: step.progress,
 				skill: step.skill ?? step.skills,
 				model: step.model,
+				...(step.lane ? { lane: step.lane } : {}),
 			};
 		},
 	);
@@ -586,6 +592,7 @@ export function registerSlashCommands(
 				params.outputMode = inline.outputMode;
 			if (inline.skill !== undefined) params.skill = inline.skill;
 			if (inline.model) params.model = inline.model;
+			if (inline.lane) params.lane = inline.lane;
 			if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashSubagent(pi, ctx, params);
@@ -593,7 +600,7 @@ export function registerSlashCommands(
 	});
 
 	// Merged /chain: supports both inline chain syntax and saved chain files.
-	// Inline: /chain scout "task" -> planner
+	// Inline: /chain context-builder "task" -> planner
 	// Saved:  /chain go -- "fix the bug"
 	// Detection: if the first token (before any ` -> ` or quote) matches a saved chain name
 	//           AND " -- " is present, treat as saved-chain mode. Otherwise parse inline.
@@ -672,6 +679,7 @@ export function registerSlashCommands(
 				: {}),
 			...(config.reads !== undefined ? { reads: config.reads } : {}),
 			...(config.model ? { model: config.model } : {}),
+			...(config.lane ? { lane: config.lane } : {}),
 			...(config.skill !== undefined ? { skill: config.skill } : {}),
 			...(config.progress !== undefined ? { progress: config.progress } : {}),
 		}));
@@ -688,7 +696,7 @@ export function registerSlashCommands(
 
 	pi.registerCommand("chain", {
 		description:
-			'Run agents in sequence: /chain scout "task" -> planner  OR  /chain chainName -- task [--bg] [--fork]',
+			'Run agents in sequence: /chain context-builder "task" -> planner  OR  /chain chainName -- task [--bg] [--fork]',
 		getArgumentCompletions: makeAgentCompletions(state, true, true),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
@@ -702,7 +710,7 @@ export function registerSlashCommands(
 
 	pi.registerCommand("parallel", {
 		description:
-			'Run agents in parallel: /parallel scout "task1" -> reviewer "task2" [--bg] [--fork]',
+			'Run agents in parallel: /parallel context-builder "task1" -> reviewer "task2" [--bg] [--fork]',
 		getArgumentCompletions: makeAgentCompletions(state, true),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
@@ -717,6 +725,7 @@ export function registerSlashCommands(
 					: {}),
 				...(config.reads !== undefined ? { reads: config.reads } : {}),
 				...(config.model ? { model: config.model } : {}),
+				...(config.lane ? { lane: config.lane } : {}),
 				...(config.skill !== undefined ? { skill: config.skill } : {}),
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
@@ -741,6 +750,25 @@ export function registerSlashCommands(
 	pi.registerCommand("subagents", {
 		description: "Open subagent model configuration hub",
 		handler: async (_args, ctx) => {
+			// /subagents config|json|edit — JSON control-plane shortcut
+			if (CONFIG_KEYWORDS.has(_args.trim().toLowerCase())) {
+				const settingsPath = resolveUserSettingsPath();
+				try {
+					seedModelLanesIfMissing(settingsPath);
+				} catch (err) {
+					const reason = err instanceof Error ? err.message : String(err);
+					ctx.ui.notify(`Settings error: ${reason}. Path: ${settingsPath}`, "error");
+					return;
+				}
+				const openResult = openSettingsInEditor(settingsPath);
+				if (openResult.error) {
+					ctx.ui.notify(`${openResult.error}. Edit manually: ${settingsPath}`, "warning");
+				} else {
+					ctx.ui.notify(`Opened settings: ${settingsPath}`);
+				}
+				return;
+			}
+
 			const cwd = state.baseCwd;
 			const { agents } = discoverAgents(cwd, "both");
 			const availableModels = ctx.modelRegistry.getAvailable().map(toModelInfo);

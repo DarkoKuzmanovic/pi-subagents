@@ -37,3 +37,33 @@ Changed files (M0 scope only):
 - `test/unit/thinking-dispatch.test.ts` (46 tests)
 - `package.json`
 - `CHANGELOG.md`
+
+## 2026-06-06 — M1 implementation (model lanes and six-role roster)
+
+Implemented model lane dispatch, the `/subagents config` JSON shortcut, and the six-role builtin roster.
+
+- Added `subagents.modelLanes` parsing/resolution with project-over-user precedence and explicit missing-lane errors.
+- Threaded optional `lane` through single dispatch, top-level parallel, chain steps, slash inline config, and async serialization before child model candidates are built.
+- Added `/subagents config|json|edit` to seed missing `subagents.modelLanes` in user settings and open the JSON with safe argv-based editor launch.
+- Disabled eight compatibility builtins by default (`scout`, `researcher`, `synthesizer`, `test-writer`, `worker-light`, `worker-heavy`, `oracle-fresh`, `deslopper`) while preserving their files and `discoverAgentsAll` visibility.
+- Updated the default `go` chain to `context-builder → planner → worker → reviewer`.
+- Updated README, bundled skill documentation, CHANGELOG, and package version to 0.36.0; full lane-editing TUI is deferred.
+- Final fresh-context review found one documentation fix-back in `skills/pi-subagents/SKILL.md`; follow-up review returned no findings.
+
+Changed files (M1 scope):
+- `agents/deslopper.md`, `agents/oracle-fresh.md`, `agents/researcher.md`, `agents/scout.md`, `agents/synthesizer.md`, `agents/test-writer.md`, `agents/worker-heavy.md`, `agents/worker-light.md`
+- `chains/go.chain.md`
+- `README.md`, `skills/pi-subagents/SKILL.md`
+- `src/agents/agent-serializer.ts`, `src/agents/agents.ts`, `src/agents/model-lanes.ts`
+- `src/extension/schemas.ts`
+- `src/runs/foreground/subagent-executor.ts`
+- `src/shared/settings.ts`
+- `src/slash/slash-commands.ts`, `src/slash/subagents-config.ts`
+- `test/integration/async-execution.test.ts`, `test/integration/parallel-execution.test.ts`, `test/integration/slash-commands.test.ts`
+- `test/unit/agent-disabled.test.ts`, `test/unit/agent-frontmatter.test.ts`, `test/unit/model-lanes.test.ts`, `test/unit/schemas.test.ts`, `test/unit/subagents-config.test.ts`
+- `CHANGELOG.md`, `package.json`, `.pi/pmti/milestones/M1.md`, `.pi/pmti/project/changes-log.md`, `.pi/pmti/project/decisions.md`, `.pi/pmti/project/roadmap.md`
+
+Validation:
+- Focused closeout tests: agent frontmatter serialization and slash-command integration pass after final review fix-back.
+- Full unit suite: 702 tests, 655 pass, 0 fail, 47 skipped. Full integration suite: 340 tests, 312 pass, 0 fail, 28 skipped.
+- Typecheck remains blocked in the orchestrator environment because `tsc` is unavailable locally.

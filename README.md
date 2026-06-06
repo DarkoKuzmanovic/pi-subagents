@@ -2,11 +2,11 @@
 
 > **Fork of [nicobailon/pi-subagents](https://github.com/nicobailon/pi-subagents)** — diverged with bug fixes, token-economy optimizations, and custom agents.
 
-`pi-subagents` lets Pi delegate work to focused child agents. Use it for code review, scouting, implementation, parallel audits, saved workflows, background jobs, and anything else that benefits from a second or third set of model eyes.
+`pi-subagents` lets Pi delegate work to focused child agents. Use it for code review, context building, implementation, parallel audits, saved workflows, background jobs, and anything else that benefits from a second or third set of model eyes.
 
 ## Features
 
-- **14 builtin agents** — scout, planner, worker-light, worker, worker-heavy, test-writer, reviewer, oracle, context-builder, researcher, janitor, deslopper, oracle-fresh, synthesizer
+- **Six default builtin roles** — context-builder, planner, worker, reviewer, oracle, and janitor. Compatibility agents remain on disk but are disabled by default.
 - **Chains** — sequential multi-step pipelines with `{task}`, `{previous}`, `{chain_dir}` template variables and fan-out/fan-in parallel groups
 - **Parallel execution** — concurrent agents with grouped output, optional worktree isolation
 - **Background runs** — detached async execution with status polling, completion notifications, and resume
@@ -40,7 +40,7 @@ Ask oracle for a second opinion on my current plan.
 ```
 
 ```text
-Use scout to understand this code based on our discussion then ask me clarification questions.
+Use context-builder to understand this code based on our discussion then ask me clarification questions.
 ```
 
 ```text
@@ -82,7 +82,7 @@ Have worker implement this approved plan. Afterward, run parallel reviewers, sum
 ```
 
 ```text
-Use scout to understand the auth flow, then have planner turn that into an implementation plan.
+Use context-builder to understand the auth flow, then have planner turn that into an implementation plan.
 ```
 
 Those are ordinary Pi requests. Pi decides whether to call `subagent`, which agent to use, and whether a chain or parallel run makes sense.
@@ -97,7 +97,7 @@ Those are ordinary Pi requests. Pi decides whether to call `subagent`, which age
 | Run parallel reviewers   | “Run reviewers for correctness, tests, and cleanup.”                                   |
 | Implement then review    | “Implement this, then review it.”                                                      |
 | Execute a plan carefully | “Have worker implement this approved plan, then run reviewers and apply the feedback.” |
-| Scout before planning    | “Use scout to inspect the auth flow before planning.”                                  |
+| Gather context before planning | “Use context-builder to inspect the auth flow before planning.”                         |
 | Run in the background    | “Run this in the background.”                                                          |
 | Browse agents            | “Show me the available subagents.”                                                     |
 | Use a saved workflow     | “Run `/mesh-review` on this branch.”                                                  |
@@ -110,22 +110,16 @@ The extension ships with builtin agents you can use immediately.
 
 | Agent             | Use it when you want...                                                                                                                     |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scout`           | Fast local codebase recon: relevant files, entry points, data flow, risks, and where another agent should start.                            |
-| `researcher`      | Web/docs research with sources: official docs, specs, benchmarks, recent changes, and a concise research brief.                             |
+| `context-builder` | Local or external context before planning: relevant files, entry points, data flow, risks, source-backed notes, and handoff material.       |
 | `planner`         | A concrete implementation plan from existing context. It should read and plan, not edit code.                                               |
-| `worker-light`      | Small, low-risk implementation work where the scope is clear and should escalate if it grows.                                                |
-| `worker`          | Normal implementation work, including approved oracle handoffs. It edits files, validates, and escalates unapproved decisions.              |
-| `worker-heavy`     | Difficult, high-stakes, or broad implementation work that needs extra reasoning while preserving worker scope discipline.                   |
-| `test-writer`     | Focused test implementation after code changes. It discovers test infrastructure and adds/updates tests without changing product behavior.  |
-| `reviewer`        | Code review and small fixes. It checks the implementation against the task/plan, tests, edge cases, and simplicity.                         |
-| `context-builder` | A stronger setup pass before planning: gathers code context and writes handoff material such as `context.md` and `meta-prompt.md`.          |
+| `worker`          | Implementation work, including lane-based easy/hard routing and approved oracle handoffs. It edits files, validates, and escalates decisions. |
+| `reviewer`        | Code review, synthesis, and small fix-back guidance. It checks the implementation against the task/plan, tests, edge cases, and simplicity. |
 | `oracle`          | A second opinion before acting. It challenges assumptions, catches drift, and recommends the safest next move without editing.              |
-| `oracle-fresh`    | A cheaper drift-check oracle that reads chain artifacts instead of forking the parent. Use for chain-based validation.                      |
 | `janitor`         | Repository hygiene: dead code, stale docs, orphaned artifacts, naming issues, and structural cleanup. Use `--review` for audit-only.       |
-| `deslopper`       | Deprecated compatibility alias for `janitor`. Prefer `janitor` for new cleanup work.                                                        |
-| `synthesizer`     | Fan-in synthesis after parallel briefs. It preserves evidence, surfaces conflicts, and writes decision-ready synthesis.                     |
+|
+| Compatibility agents | `scout`, `researcher`, `synthesizer`, `test-writer`, `worker-light`, `worker-heavy`, `oracle-fresh`, and `deslopper` are preserved but disabled by default; use the roles above plus `lane` or `context: "fresh"` instead. |
 
-A simple rule of thumb: use `scout` before you understand the code, `researcher` before you trust external facts, `planner` before a bigger change, `worker` to implement, `reviewer` to check, and `oracle` when the decision itself feels risky.
+A simple rule of thumb: use `context-builder` before you understand the code or external facts, `planner` before a bigger change, `worker` to implement, `reviewer` to check or synthesize, `oracle` when the decision itself feels risky, and `janitor` for cleanup.
 
 ## Changing a builtin agent's model
 
@@ -191,7 +185,7 @@ clarify → planner → worker → fresh reviewers → worker
 
 Use the optional prompt shortcuts below when you want the pattern to be repeatable.
 
-Packaged `planner`, `worker`, and `oracle` default to forked context when a launch omits `context`; pass `context: "fresh"` when you intentionally want a fresh child run.
+Packaged `worker` and `oracle` default to forked context when a launch omits `context`; planning and context roles default to fresh context. Pass `context: "fresh"` when you intentionally want a fresh child run.
 
 Child-safety boundaries are enforced at runtime. Spawned child sessions do not register the `subagent` tool, do not receive the bundled `pi-subagents` skill, and receive explicit boundary instructions that they are not the parent orchestrator and must not propose or run subagents. Forked child context filtering also removes parent-only subagent artifacts (including old hidden orchestration-instruction messages, slash/status/control messages, and prior parent `subagent` tool-call/tool-result history) while preserving ordinary prose and unrelated tool calls/results.
 
@@ -202,7 +196,7 @@ The package includes reusable prompt templates for common workflows. You do not 
 | Prompt                        | Use it for                                                                                                  |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `/mesh-review`                | Launch fresh-context reviewers with distinct angles, then synthesize what to fix.                           |
-| `/mesh-recon`                 | Quick parallel researcher/scout recon; add `deep` for artifact-backed lane synthesis.                       |
+| `/mesh-recon`                 | Quick parallel context-builder recon; add `deep` for artifact-backed lane synthesis.                       |
 | `/mesh-handoff`               | Combine external research and `context-builder` passes into an implementation handoff plan and meta-prompt. |
 | `/mesh-context`               | Run parallel `context-builder` passes for planning or implementation handoff context.                       |
 | `/mesh-cleanup`               | Run review-only cleanup passes after implementation; add `autofix` to apply only fixes worth doing now.     |
@@ -266,28 +260,28 @@ Commands validate agent names locally, support tab completion, and send results 
 Use `->` to separate steps and give each step its own task:
 
 ```text
-/chain scout "scan the codebase" -> planner "create an implementation plan"
-/parallel scanner "find security issues" -> reviewer "check code style"
+/chain context-builder "scan the codebase" -> planner "create an implementation plan"
+/parallel context-builder "find security issues" -> reviewer "check code style"
 ```
 
 Both double and single quotes work. You can also use `--` as a delimiter:
 
 ```text
-/chain scout -- scan code -> planner -- analyze auth
+/chain context-builder -- scan code -> planner -- analyze auth
 ```
 
 Steps without a task inherit behavior from the execution mode. Chain steps get `{previous}`, the prior step’s output. Parallel steps use the first available task as a fallback.
 
 ```text
-/chain scout "analyze auth" -> planner -> worker
-# scout gets "analyze auth"; planner gets scout output; worker gets planner output
+/chain context-builder "analyze auth" -> planner -> worker
+# context-builder gets "analyze auth"; planner gets context-builder output; worker gets planner output
 ```
 
 For a shared task, list agents and place one `--` before the task:
 
 ```text
-/chain scout planner -- analyze the auth system
-/parallel scout reviewer -- check for security issues
+/chain context-builder planner -- analyze the auth system
+/parallel context-builder reviewer -- check for security issues
 ```
 
 ### Inline per-step config
@@ -295,8 +289,8 @@ For a shared task, list agents and place one `--` before the task:
 Append `[key=value,...]` to an agent name to override defaults for that step:
 
 ```text
-/chain scout[output=context.md] "scan code" -> planner[reads=context.md] "analyze auth"
-/run scout[model=anthropic/claude-sonnet-4] summarize this codebase
+/chain context-builder[output=context.md] "scan code" -> planner[reads=context.md] "analyze auth"
+/run worker[lane=hard] summarize this codebase
 /parallel reviewer[skills=code-review+security] "review backend" -> reviewer[model=openai/gpt-5-mini] "review frontend"
 ```
 
@@ -308,6 +302,7 @@ Append `[key=value,...]` to an agent name to override defaults for that step:
 | `model`      | `model=anthropic/claude-sonnet-4` | Override model for this step.                                                                                                                         |
 | `skills`     | `skills=planning+review`          | Override injected skills. `+` separates multiple skills.                                                                                              |
 | `progress`   | `progress`                        | Enable progress tracking.                                                                                                                             |
+| `lane`       | `lane=hard`                       | Resolve a named model/thinking lane from `subagents.modelLanes` before dispatch.                                                                  |
 
 Set `output=false`, `reads=false`, or `skills=false` to disable that behavior explicitly. Do not use `output=false` for file-only returns; use `outputMode=file-only` with an `output` path.
 
@@ -316,17 +311,17 @@ Set `output=false`, `reads=false`, or `skills=false` to disable that behavior ex
 Add `--bg` to run in the background:
 
 ```text
-/run scout "audit the codebase" --bg
-/chain scout "analyze auth" -> planner "design refactor" -> worker --bg
-/parallel scout "scan frontend" -> scout "scan backend" --bg
+/run context-builder "audit the codebase" --bg
+/chain context-builder "analyze auth" -> planner "design refactor" -> worker --bg
+/parallel context-builder "scan frontend" -> context-builder "scan backend" --bg
 ```
 
 Add `--fork` to start each child from a real branched session created from the parent’s current leaf:
 
 ```text
 /run reviewer "review this diff" --fork
-/chain scout "analyze this branch" -> planner "plan next steps" --fork
-/parallel scout "audit frontend" -> reviewer "audit backend" --fork
+/chain context-builder "analyze this branch" -> planner "plan next steps" --fork
+/parallel context-builder "audit frontend" -> reviewer "audit backend" --fork
 ```
 
 You can combine them in either order:
@@ -375,12 +370,10 @@ Project discovery also reads legacy `.agents/**/*.md` files. Nested subdirectori
 
 Builtin agents load at the lowest priority, so a user or project agent with the same name overrides them. They do not pin a provider model; they inherit your current Pi default model unless you set `subagents.agentOverrides.<name>.model`. `oracle` is an advisory reviewer that critiques direction and proposes an execution prompt without editing files. `worker` is the implementation agent for normal tasks and approved oracle handoffs.
 
-The `researcher` builtin needs a web-tool extension. Two options are supported:
+For web-backed research, use `context-builder` with a clear web-research prompt and make sure the parent Pi session has web tools available. Common options include:
 
-- [pi-web-access](https://github.com/nicobailon/pi-web-access) provides `web_search`, `fetch_content`, and `get_search_content`. `fetch_content` also handles GitHub repos, PDFs, and YouTube transcripts.
-- [`@counterposition/pi-web-search`](https://www.npmjs.com/package/@counterposition/pi-web-search) provides `web_search` and `web_fetch` (clean markdown pages via Jina).
-
-Install one or both; missing tools are silently unavailable, and the `researcher` prompt picks the right tool based on what's installed.
+- [pi-web-access](https://github.com/nicobailon/pi-web-access) for `web_search`, `fetch_content`, and `get_search_content`.
+- [`@counterposition/pi-web-search`](https://www.npmjs.com/package/@counterposition/pi-web-search) for `web_search` and `web_fetch`.
 
 ```bash
 pi install npm:pi-web-access
@@ -434,10 +427,10 @@ A typical agent looks like this:
 
 ```yaml
 ---
-name: scout
-# Optional: registers this as code-analysis.scout while preserving name: scout
+name: helper
+# Optional: registers this as code-analysis.helper while preserving name: helper
 package: code-analysis
-description: Fast codebase recon
+description: Focused project helper
 tools: read, grep, find, ls, bash, mcp:chrome-devtools
 extensions:
 model: claude-haiku-4-5
@@ -460,7 +453,7 @@ Important fields:
 
 | Field                   | Notes                                                                                                                                                                      |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `package`               | Optional package identifier. A file with `name: scout` and `package: code-analysis` registers as `code-analysis.scout`; serialization keeps `name` and `package` separate. |
+| `package`               | Optional package identifier. A file with `name: helper` and `package: code-analysis` registers as `code-analysis.helper`; serialization keeps `name` and `package` separate. |
 | `tools`                 | Builtin tool allowlist. `mcp:` entries select direct MCP tools when `pi-mcp-adapter` is installed.                                                                         |
 | `extensions`            | Omitted means normal extensions; empty means no extensions; comma-separated values allowlist specific extensions.                                                          |
 | `model`                 | Default model. Bare ids prefer the current provider when possible, then unique registry matches.                                                                           |
@@ -518,11 +511,11 @@ Example:
 
 ```md
 ---
-name: scout-planner
+name: context-plan
 description: Gather context then plan implementation
 ---
 
-## scout
+## context-builder
 
 output: context.md
 
@@ -544,14 +537,14 @@ For `output`, `reads`, `skills`, and `progress`, chain behavior is three-state: 
 Create chains by writing `.chain.md` files directly or with the `subagent({ action: "create", config: ... })` management action. Run them with natural language or:
 
 ```text
-/chain scout-planner -- refactor authentication
+/chain context-plan -- refactor authentication
 ```
 
 ### Built-in chain templates
 
 | Chain | Steps                                                        | Description                                                                         |
 | ----- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `go`  | scout → context-builder → worker → test-writer → reviewer    | Full implementation pipeline: gather context, plan, implement, write tests, review. |
+| `go`  | context-builder → planner → worker → reviewer | Full implementation pipeline: gather context, plan, implement, and review. |
 
 The former `review` chain has been retired. Use `/mesh-review` for model-diverse review plus synthesis.
 
@@ -592,9 +585,9 @@ Discovery uses project-first precedence:
 Use agent defaults, override them at runtime, or disable them:
 
 ```ts
-{ agent: "scout", task: "..." }
-{ agent: "scout", task: "...", skill: "tmux, safe-bash" }
-{ agent: "scout", task: "...", skill: false }
+{ agent: "worker", task: "..." }
+{ agent: "worker", task: "...", skill: "test-writer" }
+{ agent: "worker", task: "...", skill: false }
 ```
 
 For chains, `skill` at the top level is additive. A step-level `skill` overrides that step; `false` disables skills for that step.
@@ -617,14 +610,14 @@ What the bundled skill covers:
 
 - **Delegation patterns**: when to launch which agent, whether to use single, parallel, chain, or async mode, and whether to use fresh or forked context
 - **Prompt workflow recipes**: how to apply the packaged techniques directly with `subagent(...)` when the user describes the workflow in natural language instead of invoking a slash command. This includes parallel review, parallel research, parallel handoff-plan, brainstorm, write-plan, and parallel cleanup
-- **Role-agent prompting guidance**: compact contract prompts instead of long scripts, what to include in role-specific meta prompts, and retrieval budgets for researchers
+- **Role-agent prompting guidance**: compact contract prompts instead of long scripts, what to include in role-specific meta prompts, and retrieval budgets for context-building research
 - **Safety boundaries**: child agents must not run subagents, must not invent intercom targets, and must escalate unapproved decisions
 - **Intercom conventions**: when to ask vs send, and how parent-side result delivery works with `pi-intercom`
 - **Control and diagnostics**: attention signals, soft interrupts, status, and the `doctor` action
 
 If you are writing an agent that orchestrates subagents, the bundled skill helps it behave correctly without guessing the patterns. If you are a human user, you do not need to read it directly; the README and prompt shortcuts encode the same workflows in user-facing form.
 
-The package also bundles a `test-writer` skill (`skills/test-writer/SKILL.md`) for subagents tasked with writing tests. It guides the agent through mandatory test infrastructure discovery — finding the exact test runner command, loader shims, existing helpers, and mock patterns — before writing any test code. The `test-writer` builtin agent uses this skill, and the `go` chain invokes `test-writer` directly.
+The package also bundles a `test-writer` skill (`skills/test-writer/SKILL.md`) for subagents tasked with writing tests. It guides the agent through mandatory test infrastructure discovery — finding the exact test runner command, loader shims, existing helpers, and mock patterns — before writing any test code. Use it by injecting the skill into `worker` for test-focused implementation.
 
 ## Programmatic tool usage
 
@@ -635,21 +628,21 @@ These are the parameters the LLM passes when it calls the `subagent` tool. Most 
 ```ts
 // Single agent
 { agent: "worker", task: "refactor auth" }
-{ agent: "scout", task: "find todos", maxOutput: { lines: 1000 } }
-{ agent: "scout", task: "investigate", output: false }
-{ agent: "scout", task: "write a large report", output: "reports/scout.md", outputMode: "file-only" }
+{ agent: "context-builder", task: "find todos", output: "reports/context.md", outputMode: "file-only" }
+{ agent: "context-builder", task: "investigate", output: false }
+{ agent: "worker", task: "write a large report", output: "reports/worker.md", outputMode: "file-only" }
 
 // Forked context
 { agent: "worker", task: "continue this thread", context: "fork" }
 
 // Parallel
-{ tasks: [{ agent: "scout", task: "a" }, { agent: "reviewer", task: "b" }] }
-{ tasks: [{ agent: "scout", task: "audit auth", count: 3 }] }
-{ tasks: [{ agent: "scout", task: "audit frontend" }, { agent: "reviewer", task: "audit backend" }], context: "fork" }
+{ tasks: [{ agent: "context-builder", task: "a" }, { agent: "reviewer", task: "b" }] }
+{ tasks: [{ agent: "context-builder", task: "audit auth", count: 3 }] }
+{ tasks: [{ agent: "context-builder", task: "audit frontend" }, { agent: "reviewer", task: "audit backend" }], context: "fork" }
 
 // Chain
 { chain: [
-  { agent: "scout", task: "Gather context for auth refactor" },
+  { agent: "context-builder", task: "Gather context for auth refactor" },
   { agent: "planner" },
   { agent: "worker" },
   { agent: "reviewer" }
@@ -660,7 +653,7 @@ These are the parameters the LLM passes when it calls the `subagent` tool. Most 
 
 // Chain with fan-out/fan-in
 { chain: [
-  { agent: "scout", task: "Gather context" },
+  { agent: "context-builder", task: "Gather context" },
   { parallel: [
     { agent: "worker", task: "Implement feature A from {previous}" },
     { agent: "worker", task: "Implement feature B from {previous}" }
@@ -682,16 +675,16 @@ Agent definitions are not loaded into context by default. Management actions let
 ```ts
 { action: "list" }
 { action: "list", agentScope: "project" }
-{ action: "get", agent: "scout" }
-{ action: "get", agent: "code-analysis.scout" }
+{ action: "get", agent: "context-builder" }
+{ action: "get", agent: "code-analysis.helper" }
 { action: "get", chainName: "review-pipeline" }
 
 { action: "create", config: {
-  name: "Code Scout",
+  name: "Code Helper",
   package: "code-analysis",
   description: "Scans codebases for patterns and issues",
   scope: "user",
-  systemPrompt: "You are a code scout...",
+  systemPrompt: "You are a focused codebase helper...",
   systemPromptMode: "replace",
   inheritProjectContext: false,
   inheritSkills: false,
@@ -699,7 +692,7 @@ Agent definitions are not loaded into context by default. Management actions let
   fallbackModels: ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"],
   tools: "read, bash, mcp:github/search_repositories",
   extensions: "",
-  skills: "parallel-scout",
+  skills: "codebase-onboarding",
   thinking: "high",
   output: "context.md",
   reads: "shared-context.md",
@@ -708,17 +701,17 @@ Agent definitions are not loaded into context by default. Management actions let
 
 { action: "create", config: {
   name: "review-pipeline",
-  description: "Scout then review",
+  description: "Context then review",
   scope: "project",
   steps: [
-    { agent: "scout", task: "Scan {task}", output: "context.md" },
+    { agent: "context-builder", task: "Scan {task}", output: "context.md" },
     { agent: "reviewer", task: "Review {previous}", reads: ["context.md"] }
   ]
 }}
 
-{ action: "update", agent: "code-analysis.scout", config: { model: "openai/gpt-4o" } }
+{ action: "update", agent: "code-analysis.helper", config: { model: "openai/gpt-4o" } }
 { action: "update", chainName: "review-pipeline", config: { steps: [...] } }
-{ action: "delete", agent: "scout" }
+{ action: "delete", agent: "helper" }
 { action: "delete", chainName: "review-pipeline" }
 ```
 
@@ -790,7 +783,7 @@ Parallel agents can clobber each other if they edit the same checkout. `worktree
 ], worktree: true }
 
 { chain: [
-  { agent: "scout", task: "Gather context" },
+  { agent: "context-builder", task: "Gather context" },
   { parallel: [
     { agent: "worker", task: "Implement feature A from {previous}" },
     { agent: "worker", task: "Implement feature B from {previous}" }
@@ -870,14 +863,14 @@ Foreground runs show compact live progress for single, chain, and parallel modes
 
 Press `Ctrl+O` to expand the full streaming view with complete output per step.
 
-Sequential chains show a flow line like `done scout → running planner`. Chains with parallel steps show per-step cards instead.
+Sequential chains show a flow line like `done context-builder → running planner`. Chains with parallel steps show per-step cards instead.
 
 ## Session sharing
 
 Pass `share: true` to export a full session to HTML, upload it to a secret GitHub Gist through your `gh` credentials, and return a `https://shittycodingagent.ai/session/?<gistId>` URL.
 
 ```ts
-{ agent: "scout", task: "...", share: true }
+{ agent: "context-builder", task: "...", share: true }
 ```
 
 This is disabled by default. Session data may contain source code, paths, environment variables, credentials, or other sensitive output. You need `gh` installed and authenticated.
@@ -955,7 +948,7 @@ Features:
 - **Config-exposed `inlineReadMaxBytes`**: The 200KB inline-read cap is now configurable via `inlineReadMaxBytes` in extension config, with a `[1024, 8MB]` range guard.
 - **Token-economy footer**: Fresh-context results append `[mode=fresh, in=…, out=…, cache_read=…, cache_write=…]` so savings are observable without digging into JSONL.
 - **Recovery telemetry**: When Fix 1's output-recovery triggers, a structured `subagent_recovery` event (with `runId`, `agent`, `exitCode`, `recoveredChars`, `elapsedMs`) is emitted into the parent's session JSONL (`display: false`).
-- **`oracle-fresh` agent**: A drift-check oracle that reads chain artifacts (`context.md`, `plan.md`, `progress.md`) instead of forking the parent. Cheaper alternative to `oracle` for chain-artifact validation.
+- **Compatibility agents preserved disabled-by-default**: Legacy roles such as `oracle-fresh` remain on disk for explicit opt-in, while the default visible roster stays focused on context-builder, planner, worker, reviewer, oracle, and janitor.
 - **`planner` flipped to `defaultContext: fresh`**: The bundled planner now defaults to fresh context with curated `defaultReads`, routing every existing caller through the cheaper path without code changes.
 - **`--no-context-files` for fresh children**: Fresh-context children now get `--no-context-files` in their spawn args, preventing `AGENTS.md`/`CLAUDE.md` from leaking into the child's system prompt. Forked children keep their normal context loading.
 
@@ -964,12 +957,12 @@ Optimizations:
 - **Cache + deduplicate inline reads**: A process-scoped `Map<string, string>` keyed by `(absPath, mtimeMs, size)` caches `readFileSync` results. Same file across N parallel tasks = 1 read, N-1 cache hits. Automatic invalidation on file change via mtime+size.
 - **Drop redundant `resolveStepBehavior` call**: The single-mode fresh-reads patch resolved output/skills/model/progress just to extract `reads`. Replaced with an inline fallback: `const reads = readsOverride ?? agentConfig.defaultReads ?? false`.
 
-Custom agents:
+Visible cleanup role:
 
-- **`janitor`**: Repository hygiene agent with `contact_supervisor` escalation. Designed for dead code removal, stale docs, orphaned artifact audits, and structural cleanup. `deslopper` remains as a deprecated compatibility alias.
-- **`oracle-fresh`**: See Features above.
+- **`janitor`**: Repository hygiene agent with `contact_supervisor` escalation. Designed for dead code removal, stale docs, orphaned artifact audits, and structural cleanup. The old `deslopper` file remains as a disabled compatibility alias.
+- Compatibility aliases can be re-enabled explicitly through builtin overrides when needed.
 
-All changes verified empirically. 515 unit tests pass, 4 pre-existing integration test failures (infra: missing `typebox` + `.agents/skills` path in CI).
+All current unit and integration tests pass in this checkout; see the latest changelog entry for current counts.
 
 ## Runtime files
 

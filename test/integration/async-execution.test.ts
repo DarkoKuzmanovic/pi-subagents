@@ -117,6 +117,13 @@ function writePackageSkill(packageRoot: string, skillName: string): void {
 	);
 }
 
+
+function writeProjectLaneSettings(cwd: string, value: unknown): void {
+	const settingsPath = path.join(cwd, ".pi", "settings.json");
+	fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+	fs.writeFileSync(settingsPath, JSON.stringify(value, null, 2), "utf-8");
+}
+
 async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Promise<string> {
 	const resultPath = path.join(RESULTS_DIR, `${id}.json`);
 	const deadline = Date.now() + timeoutMs;
@@ -295,6 +302,51 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(taskArg.includes(`Update progress at: ${path.join(tempDir, "progress.md")}`));
 		assert.ok(taskArg.includes(`Write your findings to: ${outputPath}`));
 		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), true);
+	});
+
+	it("top-level async parallel lane keeps inline model while applying lane thinking", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Async lane report" });
+		writeProjectLaneSettings(tempDir, {
+			subagents: {
+				modelLanes: {
+					worker: {
+						easy: { model: "deepseek/deepseek-v4-flash", thinking: "high" },
+					},
+				},
+			},
+		});
+		const executor = createSubagentExecutor!({
+			pi: { events: createEventBus(), getSessionName: () => undefined },
+			state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
+			config: {},
+			asyncByDefault: false,
+			tempArtifactsDir: tempDir,
+			getSubagentSessionRoot: () => tempDir,
+			expandTilde: (p: string) => p,
+			discoverAgents: () => ({ agents: [makeAgent("worker", { model: "agent/default" })] }),
+		});
+
+		const result = await executor.execute(
+			"async-parallel-lane-precedence",
+			{
+				tasks: [{ agent: "worker", task: "Do async work", lane: "easy", model: "override/model" }],
+				async: true,
+				clarify: false,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const asyncId = result.details?.asyncId;
+		assert.ok(asyncId, "expected asyncId");
+		await waitForAsyncResultFile(asyncId, 10_000);
+		const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
+		assert.ok(callFile, "expected a recorded mock pi call");
+		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+		const modelIndex = args.indexOf("--model");
+		assert.notEqual(modelIndex, -1, "expected --model arg");
+		assert.equal(args[modelIndex + 1], "override/model:high");
 	});
 
 	it("top-level async chain suppresses progress for {task} review-only tasks", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {

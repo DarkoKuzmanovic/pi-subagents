@@ -4,9 +4,10 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, type AgentScope } from "../../agents/agents.ts";
+import { resolveModelLaneOverrides } from "../../agents/model-lanes.ts";
 import { getArtifactsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
-import { currentModelFullId, toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
+import { currentModelFullId, toModelInfo, type ModelInfo, type ThinkingLevel } from "../../shared/model-info.ts";
 import { executeChain } from "./chain-execution.ts";
 import { resolveExecutionAgentScope } from "../../agents/agent-scope.ts";
 import { handleManagementAction } from "../../agents/agent-management.ts";
@@ -103,6 +104,7 @@ interface TaskParam {
 	progress?: boolean;
 	model?: string;
 	thinking?: string;
+	lane?: string;
 	skill?: string | string[] | boolean;
 }
 
@@ -131,6 +133,7 @@ export interface SubagentParamsLike {
 	includeProgress?: boolean;
 	model?: string;
 	thinking?: string;
+	lane?: string;
 	skill?: string | string[] | boolean;
 	output?: string | boolean;
 	outputMode?: "inline" | "file-only";
@@ -984,6 +987,70 @@ function toExecutionErrorResult(params: SubagentParamsLike, error: unknown): Age
 		},
 		params.context,
 	);
+}
+
+
+function resolveLaneOverridesForRequest(
+	cwd: string,
+	request: { agent: string; lane?: string; model?: string; thinking?: string },
+): { model?: string; thinking?: string } {
+	return resolveModelLaneOverrides(cwd, {
+		agentName: request.agent,
+		laneName: request.lane,
+		model: request.model,
+		thinking: request.thinking as ThinkingLevel | undefined,
+	});
+}
+
+function applyResolvedLaneToTaskParam(baseCwd: string, task: TaskParam): TaskParam {
+	if (!task.lane) return task;
+	const resolved = resolveLaneOverridesForRequest(resolveChildCwd(baseCwd, task.cwd), task);
+	return {
+		...task,
+		...(resolved.model !== undefined ? { model: resolved.model } : {}),
+		...(resolved.thinking !== undefined ? { thinking: resolved.thinking } : {}),
+	};
+}
+
+function applyResolvedLaneToChainStep(baseCwd: string, step: ChainStep): ChainStep {
+	if (isParallelStep(step)) {
+		if (!step.parallel.some((task) => task.lane)) return step;
+		return {
+			...step,
+			parallel: step.parallel.map((task) => applyResolvedLaneToTaskParam(resolveChildCwd(baseCwd, step.cwd), task)),
+		};
+	}
+
+	const sequential = step as SequentialStep;
+	if (!sequential.lane) return step;
+	const resolved = resolveLaneOverridesForRequest(resolveChildCwd(baseCwd, sequential.cwd), {
+		agent: sequential.agent,
+		lane: sequential.lane,
+		model: sequential.model,
+		thinking: sequential.thinking,
+	});
+	return {
+		...sequential,
+		...(resolved.model !== undefined ? { model: resolved.model } : {}),
+		...(resolved.thinking !== undefined ? { thinking: resolved.thinking } : {}),
+	};
+}
+
+function applyResolvedModelLanes(params: SubagentParamsLike, baseCwd: string): SubagentParamsLike {
+	if (params.tasks) return { ...params, tasks: params.tasks.map((task) => applyResolvedLaneToTaskParam(baseCwd, task)) };
+	if (params.chain) return { ...params, chain: params.chain.map((step) => applyResolvedLaneToChainStep(baseCwd, step)) };
+	if (!params.agent || !params.lane) return params;
+	const resolved = resolveLaneOverridesForRequest(baseCwd, {
+		agent: params.agent,
+		lane: params.lane,
+		model: params.model,
+		thinking: params.thinking,
+	});
+	return {
+		...params,
+		...(resolved.model !== undefined ? { model: resolved.model } : {}),
+		...(resolved.thinking !== undefined ? { thinking: resolved.thinking } : {}),
+	};
 }
 
 function collectChainSessionFiles(
@@ -2384,6 +2451,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			allowClarifyTaskPrompt,
 		);
 		if (validationError) return validationError;
+
+		try {
+			effectiveParams = applyResolvedModelLanes(effectiveParams, resolveChildCwd(ctx.cwd, effectiveParams.cwd));
+		} catch (error) {
+			return toExecutionErrorResult(effectiveParams, error);
+		}
 
 		const lineageUnsupportedError = findLineageUnsupportedReason(effectiveParams);
 		if (lineageUnsupportedError) return buildRequestedModeError(effectiveParams, lineageUnsupportedError);

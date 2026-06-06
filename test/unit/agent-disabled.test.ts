@@ -211,3 +211,68 @@ describe("builtin agent disabling", () => {
 		assert.deepEqual(override, { disabled: false });
 	});
 });
+
+describe("M1 six-role builtin roster", () => {
+	const DURABLE_SIX = ["context-builder", "janitor", "oracle", "planner", "reviewer", "worker"];
+	const DISABLED_COMPAT = ["deslopper", "oracle-fresh", "researcher", "scout", "synthesizer", "test-writer", "worker-heavy", "worker-light"];
+
+	beforeEach(() => {
+		tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-roster-home-"));
+		tempProject = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-roster-project-"));
+		process.env.HOME = tempHome;
+		process.env.USERPROFILE = tempHome;
+	});
+
+	afterEach(() => {
+		if (originalHome === undefined) delete process.env.HOME;
+		else process.env.HOME = originalHome;
+		if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = originalUserProfile;
+		fs.rmSync(tempHome, { recursive: true, force: true });
+		fs.rmSync(tempProject, { recursive: true, force: true });
+	});
+
+	it("exposes exactly the six durable roles in discoverAgents default (no settings)", () => {
+		const { agents } = discoverAgents(tempProject, "both");
+		const builtinNames = agents.filter((a) => a.source === "builtin").map((a) => a.name).sort();
+		assert.deepEqual(builtinNames, DURABLE_SIX);
+	});
+
+	it("hides all eight compat agents from discoverAgents by default", () => {
+		const { agents } = discoverAgents(tempProject, "both");
+		const builtinNames = new Set(agents.filter((a) => a.source === "builtin").map((a) => a.name));
+		for (const name of DISABLED_COMPAT) {
+			assert.equal(builtinNames.has(name), false, `${name} should be hidden by default`);
+		}
+	});
+
+	it("surfaces all disabled compat agents in discoverAgentsAll.builtin", () => {
+		const { builtin } = discoverAgentsAll(tempProject);
+		const disabledNames = builtin.filter((a) => a.disabled === true).map((a) => a.name).sort();
+		assert.deepEqual(disabledNames, DISABLED_COMPAT.slice().sort());
+	});
+
+	it("reports only the six durable roles as executable in list output", () => {
+		const result = handleList(
+			{},
+			{ cwd: tempProject, modelRegistry: { getAvailable: () => [] } },
+		);
+		const text = result.content[0]?.text ?? "";
+		for (const name of DURABLE_SIX) {
+			assert.match(text, new RegExp(`- ${name} \\(builtin`), `${name} should appear in list`);
+		}
+		for (const name of DISABLED_COMPAT) {
+			assert.doesNotMatch(text, new RegExp(`- ${name} \\(builtin`), `${name} should not appear in list`);
+		}
+	});
+
+	it("re-enabling a compat agent via user agentOverrides restores it to discoverAgents", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { scout: { disabled: false } } },
+		});
+		const { agents } = discoverAgents(tempProject, "both");
+		const scout = agents.find((a) => a.name === "scout");
+		assert.ok(scout, "scout should be re-enabled");
+		assert.equal(scout.disabled, false);
+	});
+});

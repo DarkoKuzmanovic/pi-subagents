@@ -140,6 +140,33 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(String(concurrencySchema.description ?? ""), /parallel/i);
 	});
 
+	it("includes lane selectors on single, parallel, and chain execution inputs", () => {
+		const singleLaneSchema = SubagentParams?.properties?.lane as JsonSchemaNode | undefined;
+		assert.ok(singleLaneSchema, "single lane schema should exist");
+		assert.equal(singleLaneSchema?.type, "string");
+		assert.match(String(singleLaneSchema?.description ?? ""), /lane/i);
+
+		const taskLaneSchema = SubagentParams?.properties?.tasks?.items?.properties?.lane as JsonSchemaNode | undefined;
+		assert.ok(taskLaneSchema, "tasks[].lane schema should exist");
+		assert.equal(taskLaneSchema?.type, "string");
+		assert.match(String(taskLaneSchema?.description ?? ""), /lane/i);
+
+		const chainStepLaneSchema = SubagentParams?.properties?.chain?.items?.properties?.lane as JsonSchemaNode | undefined;
+		assert.ok(chainStepLaneSchema, "chain[].lane schema should exist");
+		assert.equal(chainStepLaneSchema?.type, "string");
+		assert.match(String(chainStepLaneSchema?.description ?? ""), /lane/i);
+
+		const parallelLaneSchema = SubagentParams?.properties?.chain?.items?.properties?.parallel as JsonSchemaNode | undefined;
+		const parallelTaskLaneSchema = parallelLaneSchema?.items && typeof parallelLaneSchema.items === "object"
+			? (parallelLaneSchema.items as JsonSchemaNode).properties && typeof (parallelLaneSchema.items as JsonSchemaNode).properties === "object"
+				? ((parallelLaneSchema.items as JsonSchemaNode).properties as Record<string, JsonSchemaNode>).lane
+				: undefined
+			: undefined;
+		assert.ok(parallelTaskLaneSchema, "chain[].parallel[].lane schema should exist");
+		assert.equal(parallelTaskLaneSchema?.type, "string");
+		assert.match(String(parallelTaskLaneSchema?.description ?? ""), /lane/i);
+	});
+
 	it("uses an enum for management and control actions", () => {
 		const actionSchema = SubagentParams?.properties?.action;
 		assert.ok(actionSchema, "action schema should exist");

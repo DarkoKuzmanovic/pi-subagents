@@ -1,5 +1,6 @@
 ---
 name: worker-heavy
+disabled: true
 description: High-complexity implementation agent for difficult, broad, or high-stakes tasks
 systemPromptMode: replace
 inheritProjectContext: true

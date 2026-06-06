@@ -1,5 +1,6 @@
 ---
 name: deslopper
+disabled: true
 description: Deprecated alias for janitor. Prefer janitor for repository hygiene, dead-code cleanup, stale docs, and orphaned artifact audits.
 tools: read, grep, find, ls, bash, edit, write, contact_supervisor, intercom
 thinking: high

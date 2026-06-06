@@ -1,5 +1,6 @@
 ---
 name: scout
+disabled: true
 description: Fast codebase recon that returns compressed context for handoff
 tools: read, grep, find, ls, bash, write, contact_supervisor, intercom
 output: context.md

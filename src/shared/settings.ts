@@ -25,6 +25,9 @@ export interface ResolvedStepBehavior {
 	thinking?: string;
 }
 
+// `lane` is a pre-resolution dispatch hint. Executors resolve it to concrete
+// model/thinking overrides before calling resolveStepBehavior; this module only
+// carries the field through typed step shapes.
 export interface StepOverrides {
 	output?: string | false;
 	outputMode?: OutputMode;
@@ -33,6 +36,7 @@ export interface StepOverrides {
 	skills?: string[] | false;
 	model?: string;
 	thinking?: string;
+	lane?: string;
 }
 
 function normalizeOutputOverride(output: string | false | undefined): string | false | undefined {
@@ -55,6 +59,7 @@ export interface SequentialStep {
 	skill?: string | string[] | false;
 	model?: string;
 	thinking?: string;
+	lane?: string;
 }
 
 /** Parallel task item within a parallel step */
@@ -70,6 +75,7 @@ export interface ParallelTaskItem {
 	skill?: string | string[] | false;
 	model?: string;
 	thinking?: string;
+	lane?: string;
 }
 
 /** Parallel step: multiple agents running concurrently */

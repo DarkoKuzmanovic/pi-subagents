@@ -1,5 +1,6 @@
 ---
 name: synthesizer
+disabled: true
 description: Fuses multiple subagent briefs into one decision-ready synthesis — surfaces conflicts, attributes sources, flags confidence. Use as the fan-in step after parallel scouts/researchers.
 tools: read, write, grep, ls, contact_supervisor, intercom
 output: synthesis.md

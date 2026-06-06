@@ -1,5 +1,6 @@
 ---
 name: researcher
+disabled: true
 description: Autonomous web researcher — searches, evaluates, and synthesizes a focused research brief
 tools: read, write, web_search, web_fetch, fetch_content, get_search_content, contact_supervisor, intercom
 output: research.md

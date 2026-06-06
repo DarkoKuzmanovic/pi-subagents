@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fileURLToPath } from "url";
-import path from "path";
-import { pathToFileURL } from "url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import path from "node:path";
 
 let SubagentHubComponent: new (...args: unknown[]) => any | undefined;
 let available = false;
@@ -47,6 +46,7 @@ function makeAgents(names: string[], models?: string[]): {
 	source: string;
 	filePath: string;
 	model?: string;
+	thinking?: string;
 }[] {
 	return names.map((name, i) => ({
 		name,
@@ -1023,11 +1023,67 @@ test("subagent-hub: seeds existing thinking config so a no-touch exit preserves 
 	assert.equal(component.agentThinkingOverrides.has("b"), false);
 });
 
-test("subagent-hub: cycles thinking even when model metadata reports no reasoning levels", {
+
+test("subagent-hub: separate thinking takes precedence over model suffix on no-touch exit", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a"], ["openai/model-0:low"]);
+	agents[0]!.thinking = "high";
+	const models = makeModels(1);
+	let receivedResult: any = null;
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		(result: any) => {
+			receivedResult = result;
+		},
+		"/tmp",
+	);
+
+	assert.equal(component.agentThinkingOverrides.get("a"), "high");
+	(component as any).done({ overrides: component.agentModelOverrides, thinkingOverrides: component.agentThinkingOverrides });
+	assert.equal(receivedResult.thinkingOverrides.get("a"), "high");
+});
+
+test("subagent-hub: cycles only model-supported thinking levels", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a"], ["deepseek/deepseek-v4-flash"]);
+	const models = [
+		{
+			provider: "deepseek",
+			id: "deepseek-v4-flash",
+			fullId: "deepseek/deepseek-v4-flash",
+			reasoning: true,
+			thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		},
+	];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+		"/tmp",
+	);
+
+	assert.equal(component.agentThinkingOverrides.has("a"), false, "starts unset/off");
+	component.cycleThinkingLevel();
+	assert.equal(component.agentThinkingOverrides.get("a"), "high");
+	component.cycleThinkingLevel();
+	assert.equal(component.agentThinkingOverrides.get("a"), "xhigh");
+	component.cycleThinkingLevel();
+	assert.equal(component.agentThinkingOverrides.get("a"), "off");
+});
+
+test("subagent-hub: leaves off-only models on off when cycling thinking", {
 	skip: !available,
 }, () => {
 	const agents = makeAgents(["a"], ["vendor/no-reasoning"]);
-	// reasoning:false previously collapsed the cycle to ["off"], trapping the user on off.
 	const models = [{ provider: "vendor", id: "no-reasoning", fullId: "vendor/no-reasoning", reasoning: false }];
 	const component = new SubagentHubComponent!(
 		makeMockTui(),
@@ -1039,8 +1095,7 @@ test("subagent-hub: cycles thinking even when model metadata reports no reasonin
 		"/tmp",
 	);
 
-	assert.equal(component.agentThinkingOverrides.has("a"), false, "starts unset");
+	assert.equal(component.agentThinkingOverrides.has("a"), false, "starts unset/off");
 	component.cycleThinkingLevel();
-	const after = component.agentThinkingOverrides.get("a");
-	assert.ok(after && after !== "off", `expected a non-off level after cycling, got ${String(after)}`);
+	assert.equal(component.agentThinkingOverrides.has("a"), false, "off-only cycle stays unset/off");
 });

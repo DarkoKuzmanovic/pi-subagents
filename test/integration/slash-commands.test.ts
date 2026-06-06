@@ -297,10 +297,10 @@ describe("slash command custom message delivery", {
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands
 			.get("run")!
-			.handler("scout", createCommandContext({ sessionManager }));
+			.handler("context-builder", createCommandContext({ sessionManager }));
 
 		assert.deepEqual(requestedParams, {
-			agent: "scout",
+			agent: "context-builder",
 			task: "",
 			clarify: false,
 			agentScope: "both",
@@ -363,7 +363,7 @@ describe("slash command custom message delivery", {
 
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler(
-			"scout inspect this",
+			"context-builder inspect this",
 			createCommandContext({
 				hasUI: true,
 				setStatus: (_key, text) => {
@@ -446,7 +446,7 @@ describe("slash command custom message delivery", {
 
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler(
-			"scout inspect this",
+			"context-builder inspect this",
 			createCommandContext({
 				hasUI: true,
 				setToolsExpanded: (expanded) =>
@@ -498,7 +498,7 @@ describe("slash command custom message delivery", {
 
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler(
-			"scout inspect this",
+			"context-builder inspect this",
 			createCommandContext({
 				hasUI: true,
 				setStatus: (_key, text) => {
@@ -580,20 +580,70 @@ describe("slash command custom message delivery", {
 		await commands
 			.get("parallel")!
 			.handler(
-				"scout[output=x.md,outputMode=file-only,reads=a.md+b.md,progress] -- Review",
+				"context-builder[output=x.md,outputMode=file-only,reads=a.md+b.md,progress] -- Review",
 				createCommandContext(),
 			);
 
 		assert.deepEqual(requestedParams, {
 			tasks: [
 				{
-					agent: "scout",
+					agent: "context-builder",
 					task: "Review",
 					output: "x.md",
 					outputMode: "file-only",
 					reads: ["a.md", "b.md"],
 					progress: true,
 				},
+			],
+			clarify: false,
+			agentScope: "both",
+		});
+	});
+
+	it("/run forwards inline lane config", async () => {
+		const { params } = await captureSlashCommandParams(
+			"run",
+			"worker[lane=easy] Investigate",
+			process.cwd(),
+		);
+
+		assert.deepEqual(params, {
+			agent: "worker",
+			task: "Investigate",
+			lane: "easy",
+			clarify: false,
+			agentScope: "both",
+		});
+	});
+
+	it("/chain forwards inline lane config for sequential steps", async () => {
+		const { params } = await captureSlashCommandParams(
+			"chain",
+			'worker[lane=easy] "Inspect" -> reviewer[lane=hard]',
+			process.cwd(),
+		);
+
+		assert.deepEqual(params, {
+			chain: [
+				{ agent: "worker", task: "Inspect", lane: "easy" },
+				{ agent: "reviewer", lane: "hard" },
+			],
+			task: "Inspect",
+			clarify: false,
+			agentScope: "both",
+		});
+	});
+
+	it("/parallel forwards inline lane config", async () => {
+		const { params } = await captureSlashCommandParams(
+			"parallel",
+			"worker[lane=easy] -- Review",
+			process.cwd(),
+		);
+
+		assert.deepEqual(params, {
+			tasks: [
+				{ agent: "worker", task: "Review", lane: "easy" },
 			],
 			clarify: false,
 			agentScope: "both",
@@ -644,7 +694,7 @@ describe("slash command custom message delivery", {
 		registerSlashCommands!(pi, createState(process.cwd()));
 		const args = Array.from(
 			{ length: 9 },
-			(_, index) => `scout "task ${index + 1}"`,
+			(_, index) => `context-builder "task ${index + 1}"`,
 		).join(" -> ");
 		await commands.get("parallel")!.handler(args, createCommandContext());
 
@@ -920,7 +970,7 @@ Triage
 				) as Array<{ value: string; label: string }>;
 				assert.deepEqual(
 					completions.map((completion) => completion.value).sort(),
-					["release-flow", "researcher", "review-flow", "reviewer"],
+					["release-flow", "review-flow", "reviewer"],
 				);
 				const chainLabels = completions
 					.filter((c) => c.label.includes("(chain)"))
@@ -1116,5 +1166,105 @@ describe("subagents-doctor slash command", {
 			registerSlashCommands!(pi, createState(process.cwd()));
 			assert.equal(commands.has("subagents-status"), false);
 		});
+	});
+});
+
+describe("/subagents config shortcut", {
+	skip: !available ? "slash-commands.ts not importable" : undefined,
+}, () => {
+	beforeEach(() => {
+		clearSlashSnapshots?.();
+	});
+
+	it("/subagents with no args does not trigger config shortcut", async () => {
+		// Capture with a hasUI:false context — should get the TUI error notify, not a config notify.
+		const { params, notifications } = await captureSlashCommandParams(
+			"subagents",
+			"",
+			process.cwd(),
+		);
+		// The hub command emits a slash request event only when hasUI is true (or falls through).
+		// Without UI it notifies. Either way, no subagent params event for the config branch.
+		// The important assertion: no notification containing a settings path.
+		const configNote = notifications.find((n) => n.includes("settings.json"));
+		assert.ok(!configNote, `no settings.json notification expected for empty args, got: ${configNote}`);
+		// params can be undefined (no subagent launched for no-UI run)
+		void params;
+	});
+
+	it("/subagents config seeds settings and notifies the path", async () => {
+		const savedVisual = process.env.VISUAL;
+		const savedEditor = process.env.EDITOR;
+		try {
+			process.env.VISUAL = "/usr/bin/true"; // exits 0 immediately — no terminal needed
+			delete process.env.EDITOR;
+			const { notifications } = await captureSlashCommandParams(
+				"subagents",
+				"config",
+				process.cwd(),
+			);
+			const note = notifications.find((n) => n.includes("settings.json"));
+			assert.ok(note, `expected a notification mentioning settings.json, got: ${JSON.stringify(notifications)}`);
+		} finally {
+			if (savedVisual === undefined) delete process.env.VISUAL;
+			else process.env.VISUAL = savedVisual;
+			if (savedEditor === undefined) delete process.env.EDITOR;
+			else process.env.EDITOR = savedEditor;
+		}
+	});
+
+	it("/subagents json is treated as config shortcut", async () => {
+		const savedVisual = process.env.VISUAL;
+		try {
+			process.env.VISUAL = "/usr/bin/true";
+			const { notifications } = await captureSlashCommandParams(
+				"subagents",
+				"json",
+				process.cwd(),
+			);
+			const note = notifications.find((n) => n.includes("settings.json"));
+			assert.ok(note, `expected a settings.json notification for json arg, got: ${JSON.stringify(notifications)}`);
+		} finally {
+			if (savedVisual === undefined) delete process.env.VISUAL;
+			else process.env.VISUAL = savedVisual;
+		}
+	});
+
+	it("/subagents config with failing editor notifies path and error", async () => {
+		const savedVisual = process.env.VISUAL;
+		const savedEditor = process.env.EDITOR;
+		try {
+			process.env.VISUAL = "/nonexistent-editor-9999-test";
+			delete process.env.EDITOR;
+			const { notifications } = await captureSlashCommandParams(
+				"subagents",
+				"config",
+				process.cwd(),
+			);
+			// Should get a warning notification with the settings path
+			const note = notifications.find((n) => n.includes("settings.json"));
+			assert.ok(note, `expected settings.json in notification, got: ${JSON.stringify(notifications)}`);
+		} finally {
+			if (savedVisual === undefined) delete process.env.VISUAL;
+			else process.env.VISUAL = savedVisual;
+			if (savedEditor === undefined) delete process.env.EDITOR;
+			else process.env.EDITOR = savedEditor;
+		}
+	});
+
+	it("/subagents config does not dispatch a subagent event", async () => {
+		const savedVisual = process.env.VISUAL;
+		try {
+			process.env.VISUAL = "/usr/bin/true";
+			const { params } = await captureSlashCommandParams(
+				"subagents",
+				"config",
+				process.cwd(),
+			);
+			assert.equal(params, undefined, "config shortcut should not dispatch a subagent event");
+		} finally {
+			if (savedVisual === undefined) delete process.env.VISUAL;
+			else process.env.VISUAL = savedVisual;
+		}
 	});
 });

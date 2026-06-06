@@ -89,12 +89,31 @@ Plan work
 	it("loads oracle-fresh with fresh defaultContext and curated defaultReads", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-oracle-fresh-"));
 		tempDirs.push(dir);
-		const agents = discoverAgents(dir, "both").agents;
+		const agents = discoverAgentsAll(dir).builtin;
 		const oracleFresh = agents.find((a) => a.name === "oracle-fresh" && a.source === "builtin");
 		assert.ok(oracleFresh, "oracle-fresh agent should be bundled");
 		assert.equal(oracleFresh?.defaultContext, "fresh", "oracle-fresh should default to fresh context");
 		assert.ok(Array.isArray(oracleFresh?.defaultReads), "oracle-fresh should have defaultReads");
 		assert.ok(oracleFresh!.defaultReads!.length > 0, "oracle-fresh defaultReads should be non-empty");
+	});
+});
+
+describe("agent frontmatter disabled", () => {
+	it("serializes disabled into agent frontmatter", () => {
+		const agent: AgentConfig = {
+			name: "compat-helper",
+			description: "Compatibility helper",
+			systemPrompt: "Help with compatibility",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			inheritSkills: false,
+			source: "project",
+			filePath: "/tmp/compat-helper.md",
+			disabled: true,
+		};
+
+		const serialized = serializeAgent(agent);
+		assert.match(serialized, /disabled: true/);
 	});
 });
 
@@ -284,10 +303,10 @@ Do work
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
 
-			const result = discoverAgents(dir, "both");
-			const scout = result.agents.find((agent) => agent.name === "scout");
-			const reviewer = result.agents.find((agent) => agent.name === "reviewer");
-			const testWriter = result.agents.find((agent) => agent.name === "test-writer");
+			const allBuiltins = discoverAgentsAll(dir).builtin;
+			const scout = allBuiltins.find((agent) => agent.name === "scout");
+			const reviewer = allBuiltins.find((agent) => agent.name === "reviewer");
+			const testWriter = allBuiltins.find((agent) => agent.name === "test-writer");
 			assert.equal(scout?.inheritProjectContext, true);
 			assert.equal(reviewer?.inheritProjectContext, true);
 			assert.equal(testWriter?.inheritProjectContext, true);

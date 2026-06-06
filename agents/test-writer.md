@@ -1,5 +1,6 @@
 ---
 name: test-writer
+disabled: true
 description: Writes focused tests for completed changes using the project's existing test infrastructure
 thinking: high
 systemPromptMode: replace

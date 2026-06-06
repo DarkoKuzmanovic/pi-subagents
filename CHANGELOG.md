@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.36.0] - 2026-06-06
+
+### Added
+
+- **Model lanes** (`subagents.modelLanes` settings key): route an agent through named model configurations (`easy`, `medium`, `hard`) with explicit `model`/`thinking` values. Lane is specified per-dispatch via the new `lane` parameter on single, chain, parallel, and async execution paths.
+- **`/subagents config`** slash shortcut (also `/subagents json` and `/subagents edit`): ensures user settings exist, seeds a `subagents.modelLanes` skeleton when absent, and opens the JSON file in `$VISUAL`, `$EDITOR`, or `nano`. Existing settings and `agentOverrides` are preserved.
+- **Six-role visible roster**: the builtin agent list is consolidated to six durable roles — `context-builder`, `planner`, `worker`, `reviewer`, `oracle`, `janitor`. Eight compatibility agents are disabled by default (files preserved for opt-in re-enable via `agentOverrides`).
+- Disabled agent frontmatter support: `disabled: true` in an agent's YAML frontmatter now hides it from runtime discovery without deleting the file.
+- Updated `go` chain: now runs `context-builder → planner → worker → reviewer` using only the six-role roster.
+- Updated README and bundled skill documentation with six-role roster, compatibility agent migration paths, lane dispatch examples, and `/subagents config` usage. Root `AGENTS.md` already carried the six-role project guidance from earlier M1 setup.
+
+### Changed
+
+- `worker-light` and `worker-heavy` are now disabled by default. Use `worker` with `lane: "easy"` or `lane: "hard"` dispatch overrides instead.
+- `scout`, `researcher`, and `synthesizer` are now disabled by default. Use `context-builder` (with appropriate prompts) and `reviewer` respectively.
+- `test-writer` is now disabled by default. Use `worker` with a test-writing prompt or skill.
+- `oracle-fresh` is now disabled by default. Use `oracle` with `context: "fresh"` and explicit `reads`.
+- `deslopper` is now disabled by default. Use `janitor`.
+
+## [0.35.4] - 2026-06-04
+
+### Fixed
+
+- `/subagents` thinking cycling now respects the selected model's supported thinking levels, so DeepSeek V4 Flash cycles `off` → `high` → `xhigh` instead of exposing unsupported `minimal`/`low`/`medium` levels.
+- `/subagents` no-touch saves preserve an explicit separate `thinking` override over any inline model suffix, matching runtime thinking precedence.
+- Updated active project guidance to use the renamed `worker-light` and `worker-heavy` builtins.
+
 ## [0.35.3] - 2026-06-03
 
 ### Fixed
@@ -11,7 +38,8 @@
 
 ### Changed
 
-- `worker`, `worker-low`, and `worker-high` now expose the context-mode execution tools and share a unified child-facing tool set.
+- `worker`, `worker-light`, and `worker-heavy` now expose the context-mode execution tools and share a unified child-facing tool set.
+- Renamed builtin `worker-low`/`worker-high` to `worker-light`/`worker-heavy` to avoid confusing role names with model thinking levels.
 - Cleaned duplicated agent frontmatter (`scout`, `researcher`, `synthesizer`) and removed the unused `maxTurns` field from `janitor`/`deslopper`.
 
 ### Removed

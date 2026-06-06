@@ -149,6 +149,13 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		return JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
 	}
 
+
+	function writeProjectLaneSettings(cwd: string, value: unknown): void {
+		const settingsPath = path.join(cwd, ".pi", "settings.json");
+		fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+		fs.writeFileSync(settingsPath, JSON.stringify(value, null, 2), "utf-8");
+	}
+
 	it("runs multiple agents concurrently via mapConcurrent + runSync", async () => {
 		mockPi.onCall({ output: "Done" });
 		const agents = makeAgentConfigs(["agent-a", "agent-b", "agent-c"]);
@@ -339,5 +346,50 @@ Inspect`);
 		const taskArg = readLastCallArgs().at(-1) ?? "";
 		assert.doesNotMatch(taskArg, /progress\.md/);
 		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
+	});
+
+
+	it("top-level parallel lane uses inline model over lane model while keeping lane thinking", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Lane done" });
+		writeProjectLaneSettings(tempDir, {
+			subagents: {
+				modelLanes: {
+					worker: {
+						easy: { model: "deepseek/deepseek-v4-flash", thinking: "high" },
+					},
+				},
+			},
+		});
+		const executor = makeExecutor([makeAgent("worker", { model: "agent/default" })]);
+
+		const result = await executor.execute(
+			"parallel-lane-precedence",
+			{ tasks: [{ agent: "worker", task: "Review", lane: "easy", model: "override/model" }] },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined);
+		const args = readLastCallArgs();
+		const modelIndex = args.indexOf("--model");
+		assert.notEqual(modelIndex, -1, "expected --model arg");
+		assert.equal(args[modelIndex + 1], "override/model:high");
+	});
+
+	it("top-level parallel rejects unknown lanes before spawning child runs", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("worker", { model: "agent/default" })]);
+
+		const result = await executor.execute(
+			"parallel-lane-missing",
+			{ tasks: [{ agent: "worker", task: "Review", lane: "missing" }] },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /Unknown model lane 'missing' for agent 'worker'\./);
+		assert.equal(mockPi.callCount(), 0);
 	});
 });
