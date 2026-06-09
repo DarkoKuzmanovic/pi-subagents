@@ -81,6 +81,8 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/connection refused/i,
 	/fetch failed/i,
 	/network error/i,
+	/web\s?socket/i,
+	/ws\s+(?:error|closed|disconnect)/i,
 	/socket hang up/i,
 	/(?:connection|stream|socket|request|response)\s+terminated/i,
 	/terminated unexpectedly/i,
@@ -95,6 +97,28 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 export function isRetryableModelFailure(error: string | undefined): boolean {
 	if (!error) return false;
 	return RETRYABLE_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
+}
+
+/**
+ * Tight transport/connection failure matcher (a strict subset of the retryable
+ * patterns). Used for output-aware finalization: a transport error that struck
+ * *after* an agent produced its declared output should not fail the run. We keep
+ * this narrow so genuine config/auth/quota errors are never downgraded.
+ */
+const TRANSPORT_FAILURE_PATTERNS = [
+	/web\s?socket/i,
+	/ws\s+(?:error|closed|disconnect)/i,
+	/socket hang up/i,
+	/(?:connection|stream|socket|request|response)\s+terminated/i,
+	/terminated unexpectedly/i,
+	/network error/i,
+	/econnreset/i,
+	/epipe/i,
+];
+
+export function isTransportFailure(error: string | undefined): boolean {
+	if (!error) return false;
+	return TRANSPORT_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
 }
 
 export function formatModelAttemptNote(attempt: ModelAttemptSummary, nextModel?: string): string {

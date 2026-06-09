@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, type AgentScope } from "../../agents/agents.ts";
+import { formatUnknownAgentError } from "../../agents/agent-selection.ts";
 import { resolveModelLaneOverrides } from "../../agents/model-lanes.ts";
 import { getArtifactsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
@@ -784,7 +785,7 @@ function validateExecutionInput(
 
 	if (hasSingle && params.agent && !agents.find((agent) => agent.name === params.agent)) {
 		return {
-			content: [{ type: "text", text: `Unknown agent: ${params.agent}` }],
+			content: [{ type: "text", text: formatUnknownAgentError(params.agent, agents) }],
 			isError: true,
 			details: { mode: "single" as const, results: [] },
 		};
@@ -795,7 +796,7 @@ function validateExecutionInput(
 			const task = params.tasks[i]!;
 			if (!agents.find((agent) => agent.name === task.agent)) {
 				return {
-					content: [{ type: "text", text: `Unknown agent: ${task.agent} (task ${i + 1})` }],
+					content: [{ type: "text", text: formatUnknownAgentError(task.agent, agents, `task ${i + 1}`) }],
 					isError: true,
 					details: { mode: "parallel" as const, results: [] },
 				};
@@ -834,7 +835,7 @@ function validateExecutionInput(
 			for (const agentName of stepAgents) {
 				if (!agents.find((a) => a.name === agentName)) {
 					return {
-						content: [{ type: "text", text: `Unknown agent: ${agentName} (step ${i + 1})` }],
+						content: [{ type: "text", text: formatUnknownAgentError(agentName, agents, `step ${i + 1}`) }],
 						isError: true,
 						details: { mode: "chain" as const, results: [] },
 					};

@@ -1,5 +1,8 @@
 export type SubagentExecutionContext = "fresh" | "fork" | "lineage";
 
+import * as fs from "node:fs";
+import { sanitizeSessionJsonl } from "./tool-name-sanitizer.ts";
+
 interface SubagentSessionManagerStatic {
 	open(path: string): { createBranchedSession(leafId: string): string | undefined };
 	create(cwd: string, sessionDir?: string, options?: { parentSession?: string }): { getSessionFile(): string | undefined };
@@ -63,6 +66,7 @@ export function createSubagentContextResolver(
 					if (!sessionFile) {
 						throw new Error("Session manager did not return a session file.");
 					}
+					sanitizeForkedSessionFile(sessionFile);
 					cachedSessionFiles.set(index, sessionFile);
 					return sessionFile;
 				} catch (error) {
@@ -99,6 +103,23 @@ export function createSubagentContextResolver(
 			}
 		},
 	};
+}
+
+/**
+ * Rewrite over-long / malformed tool-call names in a freshly branched fork
+ * session so a downstream provider (e.g. Anthropic, which caps tool_use.name at
+ * 200 chars) does not reject the replayed transcript with a 400. Best-effort:
+ * any IO or parse failure is swallowed so it can never break an otherwise-valid
+ * fork.
+ */
+function sanitizeForkedSessionFile(sessionFile: string): void {
+	try {
+		const original = fs.readFileSync(sessionFile, "utf8");
+		const { text, changed } = sanitizeSessionJsonl(original);
+		if (changed > 0) fs.writeFileSync(sessionFile, text);
+	} catch {
+		// Sanitization is a safety net, never a hard dependency.
+	}
 }
 
 export const createForkContextResolver = createSubagentContextResolver;

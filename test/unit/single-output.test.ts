@@ -11,6 +11,7 @@ import {
 	resolveSingleOutput,
 	resolveSingleOutputPath,
 	validateFileOnlyOutputMode,
+	singleOutputWasProduced,
 } from "../../src/runs/shared/single-output.ts";
 
 const tempDirs: string[] = [];
@@ -160,5 +161,42 @@ describe("finalizeSingleOutput", () => {
 		});
 
 		assert.equal(result.displayOutput, "truncated output");
+	});
+});
+
+describe("singleOutputWasProduced", () => {
+	function tmp(): string {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-produced-"));
+		tempDirs.push(dir);
+		return dir;
+	}
+
+	it("returns false when no output path is declared", () => {
+		assert.equal(singleOutputWasProduced(undefined, undefined), false);
+	});
+
+	it("returns false when the file does not exist", () => {
+		const file = path.join(tmp(), "plan.md");
+		assert.equal(singleOutputWasProduced(file, { exists: false }), false);
+	});
+
+	it("returns false when the file exists but is empty", () => {
+		const file = path.join(tmp(), "plan.md");
+		fs.writeFileSync(file, "");
+		assert.equal(singleOutputWasProduced(file, { exists: false }), false);
+	});
+
+	it("returns true when a non-empty file is newly created during the run", () => {
+		const file = path.join(tmp(), "plan.md");
+		const before = captureSingleOutputSnapshot(file);
+		fs.writeFileSync(file, "# Plan\n\nbody");
+		assert.equal(singleOutputWasProduced(file, before), true);
+	});
+
+	it("returns false when an existing file is unchanged", () => {
+		const file = path.join(tmp(), "plan.md");
+		fs.writeFileSync(file, "stable");
+		const before = captureSingleOutputSnapshot(file);
+		assert.equal(singleOutputWasProduced(file, before), false);
 	});
 });

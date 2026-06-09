@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../../agents/agents.ts";
+import { formatUnknownAgentError } from "../../agents/agent-selection.ts";
 import { applyEffectiveThinkingSuffix } from "../shared/pi-args.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildChainInstructions, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
@@ -294,7 +295,7 @@ export function executeAsyncChain(
 		for (const agentName of stepAgents) {
 			if (!agents.find((x) => x.name === agentName)) {
 				return {
-					content: [{ type: "text", text: `Unknown agent: ${agentName}` }],
+					content: [{ type: "text", text: formatUnknownAgentError(agentName, agents) }],
 					isError: true,
 					details: { mode: resultMode, results: [] },
 				};

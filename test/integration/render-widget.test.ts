@@ -162,6 +162,47 @@ describe("subagent async widget rendering", () => {
 		assert.match(text, /Press app\.tools\.expand for live detail/);
 		assert.match(text, /Agent 3\/3: reviewer · complete · 1\.5k token/);
 	});
+	it("shows the resolved model in the widget title for single-mode async jobs", () => {
+		const job = {
+			asyncId: "run-1",
+			asyncDir: "/tmp/1",
+			status: "running" as const,
+			mode: "single" as const,
+			agents: ["worker"],
+			stepsTotal: 1,
+			steps: [
+				{ index: 0, agent: "worker", status: "running" as const, model: "umans/umans-kimi-k2.6:high" },
+			],
+		};
+		const lines = buildWidgetLines([job], theme, 200);
+
+		assert.equal(lines[0], "async subagent worker · umans/umans-kimi-k2.6:high · background");
+	});
+
+	it("shows the dispatched model next to each parallel agent", () => {
+		const now = Date.now();
+		const lines = buildWidgetLines([
+			{
+				asyncId: "run-1",
+				asyncDir: "/tmp/1",
+				status: "running",
+				mode: "parallel",
+				agents: ["scout", "context-builder"],
+				activeParallelGroup: true,
+				runningSteps: 1,
+				completedSteps: 1,
+				stepsTotal: 2,
+				steps: [
+					{ agent: "scout", status: "complete", model: "deepseek/deepseek-v4-pro:high", tokens: { input: 30_000, output: 10_000, cache: 4_000, total: 49_000 } },
+					{ agent: "context-builder", status: "running", model: "zai/glm-5.1", lastActivityAt: now, turnCount: 3, toolCount: 7 },
+				],
+			},
+		], theme, 200);
+
+		const text = lines.join("\n");
+		assert.match(text, /Agent 1\/2: scout \(deepseek\/deepseek-v4-pro:high\)/);
+		assert.match(text, /Agent 2\/2: context-builder \(zai\/glm-5\.1\)/);
+	});
 
 	it("shows inline live detail for expanded async parallel widget rows", () => {
 		const now = Date.now();

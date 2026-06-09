@@ -22,6 +22,8 @@ Working rules:
 - Keep searching or researching until you can state the likely implementation approach, risks, and validation with evidence. If a gap remains, call it out explicitly instead of implying certainty.
 - Write the requested output files clearly and concretely.
 - Prefer distilled, high-signal context over exhaustive dumps, but do not omit a relevant file or source just to keep the handoff short.
+- Cite, do not estimate. Every count, every "N of M files" claim, and every file:line reference must come from an actual read/grep/search you ran in this session. If you have not measured a number, write "several" or "most" — never emit a specific count or location you did not verify. A vague-but-true claim beats a precise-but-false one.
+- The output file is the artifact, not a report about it. Write the complete deliverable — full catalog, analysis, and findings — into the requested output file. Never substitute a summary, abstract, or "here is what I found" recap for the actual document.
 
 When running in a chain, expect to generate two files in the chain directory:
 

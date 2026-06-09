@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.37.0] - 2026-06-08
+
+### Added
+
+- **Dispatched model is now visible per agent.** Every agent row shows the resolved model id (with thinking suffix, exactly as dispatched) immediately after the agent name — e.g. `Agent 1/2: scout (deepseek/deepseek-v4-pro:high) · complete · …`. This appears on both the live background/parallel widget and the final tool-result rows (single, parallel, and chain), so lane/model overrides are auditable at a glance. The model is read from data already plumbed end-to-end (`AsyncJobStep.model`, `SingleResult.model`); only the four render row builders in `src/tui/render.ts` changed (new `renderModelTag` helper). Rows without a known model render unchanged.
+
+## [0.36.1] - 2026-06-06
+
+### Fixed
+
+- **Forked subagents no longer 400 on strict providers.** When a parent orchestrator emits a malformed tool call (the model's JSON arguments or stray `<tool_call>` fragments land in the tool *name* field), that record was replayed verbatim by `fork`-context children. Providers that cap tool-call name length — e.g. Anthropic, where `tool_use.name` must be ≤ 200 chars — rejected the whole request with `400 invalid_request_error` before the child did any work. Forked session transcripts are now sanitized at the fork boundary: over-long or malformed tool-call names are rewritten to a safe, deterministic token (new `src/shared/tool-name-sanitizer.ts`, best-effort and non-fatal).
+- **A transport error after a deliverable no longer hard-fails a run.** A single-step run whose agent produced its declared `output` (e.g. `planner` → `plan.md`) but then hit a transient transport error (`WebSocket error`, `socket hang up`, stream/connection terminated) was reported as `✗ failed` with its output discarded. Such runs are now finalized as complete with a `[transport-warning]` note and the produced output is resolved. Gated on a tight transport-only error match **and** the declared output file existing and having changed during the run, so genuine failures are never masked.
+- Added WebSocket/transport patterns (`web socket`, `ws error|closed|disconnect`) to the retryable model-failure list so transient connection drops trigger model fallback instead of an immediate hard failure.
+
+### Changed
+
+- **Actionable `Unknown agent` errors.** Dispatch validation (single, parallel, chain, and async paths) now lists the available agent roles and, when the offending value looks like a model id (`openai/gpt-5.5`, `opus`, `claude-opus-4-8`), shows the correct `subagent({ agent: "worker", model: "..." })` shape instead of a bare `Unknown agent: X`. New helpers `looksLikeModelId` / `formatUnknownAgentError` in `agent-selection.ts`.
+
 ## [0.36.0] - 2026-06-06
 
 ### Added

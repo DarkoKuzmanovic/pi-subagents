@@ -4,6 +4,8 @@
 
 `pi-subagents` lets Pi delegate work to focused child agents. Use it for code review, context building, implementation, parallel audits, saved workflows, background jobs, and anything else that benefits from a second or third set of model eyes.
 
+> **Contributing / hacking on this?** Start with [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the request lifecycle and a "where do I change X?" file map.
+
 ## Features
 
 - **Six default builtin roles** — context-builder, planner, worker, reviewer, oracle, and janitor. Compatibility agents remain on disk but are disabled by default.
@@ -734,7 +736,7 @@ Agent definitions are not loaded into context by default. Management actions let
 | `concurrency`     | number                        | config or `4`            | Top-level parallel concurrency.                                                                                                        |
 | `worktree`        | boolean                       | false                    | Create isolated git worktrees for parallel tasks.                                                                                      |
 | `chain`           | array                         | -                        | Sequential and parallel chain steps.                                                                                                   |
-| `context`         | `fresh \| lineage \| fork`     | agent default or `fresh` | `fresh` starts a clean independent child session; `lineage` starts clean but links the child session under the parent tree; `fork` creates a branched child session with the inherited parent transcript. Packaged `planner`, `worker`, and `oracle` default to `fork`. |
+| `context`         | `fresh \| lineage \| fork`     | agent default or `fresh` | `fresh` starts a clean independent child session; `lineage` starts clean but links the child session under the parent tree; `fork` creates a branched child session with the inherited parent transcript. Packaged `worker` and `oracle` default to `fork`; `planner` and other planning roles default to `fresh`. |
 | `chainDir`        | string                        | temp chain dir           | Persistent directory for chain artifacts.                                                                                              |
 | `clarify`         | boolean                       | true for chains          | Show TUI preview/edit flow.                                                                                                            |
 | `agentScope`      | `user \| project \| both`     | `both`                   | Agent discovery scope. Project wins on collisions.                                                                                     |

@@ -358,7 +358,7 @@ function widgetParallelAgentDetails(job: AsyncJobState, theme: Theme): string[] 
 		const marker = index === job.steps!.length - 1 ? "└" : "├";
 		const activity = widgetStepActivity(step);
 		const itemTitle = job.mode === "parallel" || job.activeParallelGroup ? "Agent" : "Step";
-		return `  ${theme.fg("dim", `${marker} ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index + 1}/${total}: ${step.agent} · ${widgetStepStatus(step.status, theme)}${activity ? ` · ${activity}` : ""}`)}`;
+		return `  ${theme.fg("dim", `${marker} ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index + 1}/${total}: ${step.agent}${step.model ? ` (${step.model})` : ""} · ${widgetStepStatus(step.status, theme)}${activity ? ` · ${activity}` : ""}`)}`;
 	});
 }
 
@@ -603,7 +603,7 @@ function foregroundStyleWidgetStepLines(
 ): string[] {
 	const status = widgetStepStatus(step.status, theme);
 	const stats = widgetStepStats(theme, step);
-	const lines = [`  ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index}/${total}: ${themeBold(theme, step.agent)} ${theme.fg("dim", "·")} ${status}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`];
+	const lines = [`  ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index}/${total}: ${themeBold(theme, step.agent)}${renderModelTag(step.model, theme)} ${theme.fg("dim", "·")} ${status}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`];
 	const activity = widgetStepActivityLine(step, width, expanded);
 	if (activity) lines.push(`    ${theme.fg("dim", `⎿  ${activity}`)}`);
 	if (step.status === "running") {
@@ -644,8 +644,11 @@ function buildSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number,
 	const count = job.mode === "chain" ? job.chainStepCount : job.stepsTotal ?? job.agents?.length ?? job.steps?.length;
 	const mode = widgetJobName(job);
 	const title = `async subagent ${mode}${count && count > 1 ? ` (${count})` : ""}`;
+	const modelTag = job.mode === "single" && job.steps?.[0]?.model
+		? ` ${theme.fg("dim", `· ${job.steps[0].model}`)}`
+		: "";
 	return [
-		`${theme.fg("toolTitle", themeBold(theme, title))} ${theme.fg("dim", "· background")}`,
+		`${theme.fg("toolTitle", themeBold(theme, title))}${modelTag} ${theme.fg("dim", "· background")}`,
 		`${widgetStatusGlyph(job, theme)} ${themeBold(theme, mode)}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`,
 		...foregroundStyleWidgetDetails(job, theme, expanded, width),
 	].map((line) => truncLine(line, width));
@@ -866,6 +869,11 @@ function renderContextBadge(
 	return opts?.prefix ? `${badge} ` : ` ${badge}`;
 }
 
+function renderModelTag(model: string | undefined, theme: Theme): string {
+	if (!model) return "";
+	return ` ${theme.fg("dim", `(${model})`)}`;
+}
+
 function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme): Component {
 	const output = r.truncation?.text || getSingleResultOutput(r);
 	const progress = r.progress || r.progressSummary;
@@ -877,7 +885,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 	]);
 	const c = new Container();
 	const width = getTermWidth() - 4;
-	c.addChild(new Text(truncLine(`${resultGlyph(r, output, theme, isRunning)} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
+	c.addChild(new Text(truncLine(`${resultGlyph(r, output, theme, isRunning)} ${theme.fg("toolTitle", theme.bold(r.agent))}${renderModelTag(r.model, theme)}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
 
 	if (isRunning && r.progress) {
 		const activity = compactCurrentActivity(r.progress);
@@ -956,7 +964,7 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 		const glyph = rPending ? theme.fg("dim", "◦") : resultGlyph(r, output, theme, rRunning);
 		const pendingLabel = rPending ? ` ${theme.fg("dim", "· pending")}` : "";
 		const stepLabel = resultRowLabel(d, multiLabel, i, stepNumber);
-		const line = `${glyph} ${stepLabel}: ${themeBold(theme, agentName)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
+		const line = `${glyph} ${stepLabel}: ${themeBold(theme, agentName)}${renderModelTag(r?.model, theme)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${pendingLabel}`;
 		c.addChild(new Text(truncLine(`  ${line}`, width), 0, 0));
 		if (rRunning && rProg && "status" in rProg) {
 			const activity = compactCurrentActivity(rProg);
@@ -1016,7 +1024,7 @@ export function renderSubagentResult(
 		const fit = (text: string) => expanded ? text : truncLine(text, w);
 		const toolCallLines = getToolCallLines(r, expanded);
 		const c = new Container();
-		c.addChild(new Text(fit(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${progressInfo}`), 0, 0));
+		c.addChild(new Text(fit(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${renderModelTag(r.model, theme)}${contextBadge}${progressInfo}`), 0, 0));
 		c.addChild(new Spacer(1));
 		const taskMaxLen = Math.max(20, w - 8);
 		const taskPreview = expanded || r.task.length <= taskMaxLen

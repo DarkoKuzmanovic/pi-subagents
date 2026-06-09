@@ -84,6 +84,26 @@ export function captureSingleOutputSnapshot(outputPath: string | undefined): Sin
 	}
 }
 
+/**
+ * Did the agent actually produce its declared output during the run? True when
+ * the output file now exists, is non-empty, and changed since the pre-run
+ * snapshot. Used by output-aware finalization to decide whether a late transport
+ * error can be safely downgraded from a hard failure.
+ */
+export function singleOutputWasProduced(
+	outputPath: string | undefined,
+	beforeRun: SingleOutputSnapshot | undefined,
+): boolean {
+	if (!outputPath) return false;
+	try {
+		const stat = fs.statSync(outputPath);
+		if (stat.size <= 0) return false;
+		return !beforeRun?.exists || stat.mtimeMs !== beforeRun.mtimeMs || stat.size !== beforeRun.size;
+	} catch {
+		return false;
+	}
+}
+
 function persistSingleOutput(
 	outputPath: string | undefined,
 	fullOutput: string,

@@ -7,7 +7,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { appendJsonl, getArtifactPaths } from "../../shared/artifacts.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
-import { captureSingleOutputSnapshot, finalizeSingleOutput, formatSavedOutputReference, resolveSingleOutput, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, finalizeSingleOutput, formatSavedOutputReference, resolveSingleOutput, singleOutputWasProduced, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	type ActivityState,
 	type ArtifactConfig,
@@ -41,7 +41,7 @@ import {
 	aggregateParallelOutputs,
 } from "../shared/parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
-import { formatModelAttemptNote, isRetryableModelFailure } from "../shared/model-fallback.ts";
+import { formatModelAttemptNote, isRetryableModelFailure, isTransportFailure } from "../shared/model-fallback.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput, findLatestSessionFile } from "../../shared/utils.ts";
 import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
@@ -674,6 +674,22 @@ async function runSingleStep(
 		attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
 	}
 
+	// Output-aware finalization: if a transient transport error struck *after* the
+	// agent already produced its declared output (e.g. the planner's plan.md), the
+	// deliverable exists and the run should not be reported as a hard failure.
+	// Downgrade to success and surface the transport error as a warning note.
+	if (
+		finalResult
+		&& finalResult.exitCode !== 0
+		&& !completionGuardTriggeredFinal
+		&& isTransportFailure(finalResult.error)
+		&& singleOutputWasProduced(step.outputPath, finalOutputSnapshot)
+	) {
+		attemptNotes.push(
+			`[transport-warning] ${step.agent} produced its output (${step.outputPath}) but the model connection then failed (${finalResult.error}). Treating the run as complete.`,
+		);
+		finalResult = { ...finalResult, exitCode: 0, error: undefined };
+	}
 	const rawOutput = finalResult?.finalOutput ?? "";
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
 		? resolveSingleOutput(step.outputPath, rawOutput, finalOutputSnapshot)

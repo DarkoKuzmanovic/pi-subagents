@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
 	buildModelCandidates,
 	isRetryableModelFailure,
+	isTransportFailure,
 	resolveModelCandidate,
 } from "../../src/runs/shared/model-fallback.ts";
 
@@ -76,5 +77,24 @@ describe("model fallback helpers", () => {
 		assert.equal(isRetryableModelFailure("bash failed (exit 143): process terminated by signal"), false);
 		assert.equal(isRetryableModelFailure("the build was terminated"), false);
 		assert.equal(isRetryableModelFailure(undefined), false);
+	});
+});
+
+describe("isTransportFailure", () => {
+	it("matches transport/connection drops", () => {
+		assert.equal(isTransportFailure("WebSocket error"), true);
+		assert.equal(isTransportFailure("websocket closed unexpectedly"), true);
+		assert.equal(isTransportFailure("socket hang up"), true);
+		assert.equal(isTransportFailure("stream terminated"), true);
+		assert.equal(isTransportFailure("ECONNRESET"), true);
+		assert.equal(isTransportFailure("network error"), true);
+	});
+
+	it("does not match config/auth/quota failures", () => {
+		assert.equal(isTransportFailure("401 unauthorized"), false);
+		assert.equal(isTransportFailure("insufficient credit"), false);
+		assert.equal(isTransportFailure("model not found"), false);
+		assert.equal(isTransportFailure("400 invalid_request_error"), false);
+		assert.equal(isTransportFailure(undefined), false);
 	});
 });
