@@ -85,7 +85,7 @@ function truncLine(text: string, maxWidth: number): string {
 	return result + activeStyles.join("") + "…";
 }
 
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER = ["·  ", "· ·", " · ", "  ·", " · ", "· ·"];
 const WIDGET_ANIMATION_MS = 80;
 
 let widgetTimer: ReturnType<typeof setInterval> | undefined;
@@ -291,7 +291,7 @@ function widgetActivity(job: AsyncJobState): string {
 
 function widgetStatusGlyph(job: AsyncJobState, theme: Theme): string {
 	if (job.status === "running") return theme.fg("accent", spinnerFrame());
-	if (job.status === "queued") return theme.fg("muted", "◦");
+	if (job.status === "queued") return theme.fg("muted", "▪");
 	if (job.status === "complete") return theme.fg("success", "✓");
 	if (job.status === "paused") return theme.fg("warning", "■");
 	return theme.fg("error", "✗");
@@ -302,7 +302,7 @@ function widgetStepGlyph(status: AsyncJobStep["status"], theme: Theme): string {
 	if (status === "complete" || status === "completed") return theme.fg("success", "✓");
 	if (status === "failed") return theme.fg("error", "✗");
 	if (status === "paused") return theme.fg("warning", "■");
-	return theme.fg("muted", "◦");
+	return theme.fg("muted", "▪");
 }
 
 function widgetStepStatus(status: AsyncJobStep["status"], theme: Theme): string {
@@ -326,25 +326,27 @@ function widgetStepActivity(step: NonNullable<AsyncJobState["steps"]>[number]): 
 	if (activity) return activity;
 	return facts.join(" · ");
 }
-
-
-function widgetChainDetails(job: AsyncJobState, theme: Theme, expanded = false, width = getTermWidth()): string[] {
-	if (!job.steps?.length) return [];
-	const total = job.chainStepCount ?? job.steps.length;
+function widgetChainDetails(job: AsyncJobState, theme: Theme, expanded: boolean, width: number): string[] {
+	const total = job.chainStepCount ?? job.steps?.length ?? 1;
 	const lines: string[] = [];
-	for (const span of buildAsyncChainStepSpans(total, job.steps.length, job.parallelGroups)) {
+	const spans = buildAsyncChainStepSpans(total, job.steps?.length ?? 0, job.parallelGroups)!;
+	for (let i = 0; i < spans.length; i++) {
+		const span = spans[i]!;
 		const steps = job.steps.slice(span.start, span.start + span.count);
 		if (span.isParallel) {
 			const status = aggregateStepStatus(steps);
 			lines.push(`  ${widgetStepGlyph(status, theme)} Step ${span.stepIndex + 1}/${total}: ${themeBold(theme, "parallel group")} ${theme.fg("dim", "·")} ${theme.fg("dim", formatParallelOutcome(steps, span.count))}`);
-			continue;
+		} else {
+			const step = steps[0];
+			if (!step) {
+				lines.push(`  ${theme.fg("dim", `▪ Step ${span.stepIndex + 1}/${total}: pending`)}`);
+			} else {
+				lines.push(...foregroundStyleWidgetStepLines(job, theme, step, "Step", span.stepIndex + 1, total, expanded, width));
+			}
 		}
-		const step = steps[0];
-		if (!step) {
-			lines.push(`  ${theme.fg("dim", `◦ Step ${span.stepIndex + 1}/${total}: pending`)}`);
-			continue;
+		if (i < spans.length - 1) {
+			lines.push(`    ${theme.fg("dim", "│")}`);
 		}
-		lines.push(...foregroundStyleWidgetStepLines(job, theme, step, "Step", span.stepIndex + 1, total, expanded, width));
 	}
 	return lines;
 }
@@ -358,7 +360,7 @@ function widgetParallelAgentDetails(job: AsyncJobState, theme: Theme): string[] 
 		const marker = index === job.steps!.length - 1 ? "└" : "├";
 		const activity = widgetStepActivity(step);
 		const itemTitle = job.mode === "parallel" || job.activeParallelGroup ? "Agent" : "Step";
-		return `  ${theme.fg("dim", `${marker} ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index + 1}/${total}: ${step.agent}${step.model ? ` (${step.model})` : ""} · ${widgetStepStatus(step.status, theme)}${activity ? ` · ${activity}` : ""}`)}`;
+		return `  ${theme.fg("dim", `${marker} ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index + 1}/${total}: ${step.agent}${renderModelTag(step.model, theme)} · ${widgetStepStatus(step.status, theme)}${activity ? ` · ${activity}` : ""}`)}`;
 	});
 }
 
@@ -569,12 +571,17 @@ function widgetStats(job: AsyncJobState, theme: Theme): string {
 }
 
 function widgetStepStats(theme: Theme, step: NonNullable<AsyncJobState["steps"]>[number]): string {
-	return statJoin(theme, [
+	const base = statJoin(theme, [
 		step.turnCount !== undefined ? `${step.turnCount} turns` : "",
 		step.toolCount !== undefined ? formatToolUseStat(step.toolCount) : "",
 		step.tokens?.total ? formatTokenStat(step.tokens.total) : "",
 		step.durationMs !== undefined ? formatDuration(step.durationMs) : "",
 	]);
+	if (step.attemptedModels && step.attemptedModels.length > 1) {
+		const fallbackBadge = `${theme.fg("dim", "·")} ${theme.fg("warning", "↺ fallback")}`;
+		return base ? `${base} ${fallbackBadge}` : fallbackBadge;
+	}
+	return base;
 }
 
 function widgetStepActivityLine(step: NonNullable<AsyncJobState["steps"]>[number], width: number, expanded: boolean): string {
@@ -644,11 +651,10 @@ function buildSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number,
 	const count = job.mode === "chain" ? job.chainStepCount : job.stepsTotal ?? job.agents?.length ?? job.steps?.length;
 	const mode = widgetJobName(job);
 	const title = `async subagent ${mode}${count && count > 1 ? ` (${count})` : ""}`;
-	const modelTag = job.mode === "single" && job.steps?.[0]?.model
-		? ` ${theme.fg("dim", `· ${job.steps[0].model}`)}`
-		: "";
+	const modelTag = job.mode === "single" ? renderModelTag(job.steps?.[0]?.model, theme) : "";
+	const bgColor = job.status === "failed" ? "error" : job.status === "paused" ? "warning" : job.status === "complete" ? "success" : "dim";
 	return [
-		`${theme.fg("toolTitle", themeBold(theme, title))}${modelTag} ${theme.fg("dim", "· background")}`,
+		`${theme.fg("toolTitle", themeBold(theme, title))}${modelTag} ${theme.fg(bgColor, "· background")}`,
 		`${widgetStatusGlyph(job, theme)} ${themeBold(theme, mode)}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`,
 		...foregroundStyleWidgetDetails(job, theme, expanded, width),
 	].map((line) => truncLine(line, width));
@@ -871,7 +877,7 @@ function renderContextBadge(
 
 function renderModelTag(model: string | undefined, theme: Theme): string {
 	if (!model) return "";
-	return ` ${theme.fg("dim", `(${model})`)}`;
+	return ` ${theme.fg("dim", `[${model}]`)}`;
 }
 
 function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme): Component {
@@ -1214,7 +1220,7 @@ export function renderSubagentResult(
 					? theme.fg("warning", "warning")
 					: theme.fg("success", "done");
 		const stats = rProg ? ` | ${rProg.toolCount} tools, ${formatDuration(rProg.durationMs)}` : "";
-		const modelDisplay = r.model ? theme.fg("dim", ` (${r.model})`) : "";
+		const modelDisplay = renderModelTag(r.model, theme);
 		const stepLabel = resultRowLabel(d, multiLabel, i, stepNumber);
 		const stepHeader = rRunning
 			? `${statusIcon} ${stepLabel}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats}`

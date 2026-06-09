@@ -178,6 +178,56 @@ describe("subagent async widget rendering", () => {
 
 		assert.equal(lines[0], "async subagent worker · umans/umans-kimi-k2.6:high · background");
 	});
+	it("shows fallback badge when a step retried models", () => {
+		const lines = buildWidgetLines([
+			{
+				asyncId: "run-1",
+				asyncDir: "/tmp/1",
+				status: "running" as const,
+				mode: "single" as const,
+				agents: ["worker"],
+				stepsTotal: 1,
+				steps: [
+					{ index: 0, agent: "worker", status: "running" as const, model: "zai/glm-5.1", attemptedModels: ["anthropic/claude-opus-4-7", "zai/glm-5.1"], turnCount: 2, toolCount: 3 },
+			],
+			lastActivityAt: 1,
+		}, {
+			asyncId: "run-2",
+			asyncDir: "/tmp/2",
+			status: "running" as const,
+			mode: "single" as const,
+			agents: ["reviewer"],
+			stepsTotal: 1,
+			steps: [
+				{ index: 0, agent: "reviewer", status: "running" as const, model: "zai/glm-5.1", attemptedModels: ["zai/glm-5.1"], turnCount: 1, toolCount: 0 },
+			],
+			lastActivityAt: 1,
+		}], theme, 200);
+		const text = lines.join("\n");
+		assert.ok(text.includes("↺ fallback"), "should show fallback badge when multiple models were tried");
+	});
+
+	it("adds pipeline connectors between chain steps", () => {
+		const lines = buildWidgetLines([
+			{
+				asyncId: "run-chain",
+				asyncDir: "/tmp/chain",
+				status: "running" as const,
+				mode: "single" as const,
+				agents: ["chain"],
+				stepsTotal: 3,
+				steps: [
+					{ index: 0, agent: "scout", status: "complete" as const, durationMs: 15_000 },
+					{ index: 1, agent: "worker", status: "running" as const },
+					{ index: 2, agent: "reviewer", status: "pending" as const },
+				],
+			},
+		], theme, 200);
+		const text = lines.join("\n");
+		assert.ok(text.includes("│"), "should show pipeline connector between steps");
+		// Verify at least one connector sits between a complete step and a running/pending one
+		assert.match(text, /complete.*\n.*│\n.*running|pending/);
+	});
 
 	it("shows the dispatched model next to each parallel agent", () => {
 		const now = Date.now();
