@@ -111,9 +111,9 @@ describe("subagent async widget rendering", () => {
 				completedSteps: 0,
 				stepsTotal: 3,
 				steps: [
-					{ index: 0, agent: "reviewer", status: "running", lastActivityAt: now, turnCount: 5, toolCount: 18, tokens: { input: 30_000, output: 10_000, cache: 4_000, total: 44_000 } },
-					{ index: 1, agent: "reviewer", status: "running", lastActivityAt: now - 2000, turnCount: 4, toolCount: 13, tokens: { input: 16_000, output: 4_000, cache: 2_000, total: 22_000 } },
-					{ index: 2, agent: "reviewer", status: "running", currentTool: "grep", currentToolStartedAt: now - 1000, turnCount: 3, toolCount: 11, tokens: { input: 14_000, output: 3_000, cache: 2_000, total: 19_000 } },
+					{ index: 0, agent: "reviewer", status: "running", model: "openai-codex/gpt-5.5:high", lastActivityAt: now, turnCount: 5, toolCount: 18, tokens: { input: 30_000, output: 10_000, cache: 4_000, total: 44_000 } },
+					{ index: 1, agent: "reviewer", status: "running", model: "opus-4-7:high", lastActivityAt: now - 2000, turnCount: 4, toolCount: 13, tokens: { input: 16_000, output: 4_000, cache: 2_000, total: 22_000 } },
+					{ index: 2, agent: "reviewer", status: "running", model: "zai/glm-5.1", currentTool: "grep", currentToolStartedAt: now - 1000, turnCount: 3, toolCount: 11, tokens: { input: 14_000, output: 3_000, cache: 2_000, total: 19_000 } },
 				],
 			}]);
 			const widget = ui.widgets.at(-1);
@@ -121,9 +121,9 @@ describe("subagent async widget rendering", () => {
 			const lines = (widget as (_tui: unknown, widgetTheme: typeof theme) => { render(width: number): string[] })(undefined, theme).render(180).map((line) => line.trimEnd());
 			const text = lines.join("\n");
 			assert.match(text, /async subagent parallel \(3\) · background/);
-			assert.match(text, /Agent 1\/3: reviewer · running · active now · 5 turns · 18 tool uses · 44k token/);
-			assert.match(text, /Agent 2\/3: reviewer · running · active 2s ago · 4 turns · 13 tool uses · 22k token/);
-			assert.match(text, /Agent 3\/3: reviewer · running · grep \| 1\.0s · 3 turns · 11 tool uses · 19k token/);
+			assert.match(text, /Agent 1\/3: reviewer \[openai-codex\/gpt-5\.5:high\] · running · active now · 5 turns · 18 tool uses · 44k token/);
+			assert.match(text, /Agent 2\/3: reviewer \[opus-4-7:high\] · running · active 2s ago · 4 turns · 13 tool uses · 22k token/);
+			assert.match(text, /Agent 3\/3: reviewer \[zai\/glm-5\.1\] · running · grep \| 1\.0s · 3 turns · 11 tool uses · 19k token/);
 			assert.match(text, /Press app\.tools\.expand for live detail/);
 			assert.doesNotMatch(text, /widget truncated/);
 			assert.ok(lines.length <= 10, "collapsed component should stay under Pi's string-widget cap even though it bypasses it");
@@ -205,7 +205,6 @@ describe("subagent async widget rendering", () => {
 				status: "running" as const,
 				mode: "chain" as const,
 				agents: ["scout", "worker", "reviewer"],
-				parallelGroups: [],
 				stepsTotal: 3,
 				chainStepCount: 2,
 				parallelGroups: [{ start: 0, count: 2, stepIndex: 0 }],
@@ -218,8 +217,10 @@ describe("subagent async widget rendering", () => {
 		], theme, 200);
 		const text = lines.join("\n");
 		assert.ok(text.includes("│"), "should show pipeline connector between steps");
-		// Verify at least one connector sits between a complete step and a running/pending one
-		assert.match(text, /complete.*\n.*│\n.*running|pending/);
+		const connectorIndex = lines.findIndex((line) => line.includes("│"));
+		assert.ok(connectorIndex > 0, "connector should not be the first rendered line");
+		assert.match(lines[connectorIndex - 1] ?? "", /parallel group.*1\/2 done/);
+		assert.match(lines[connectorIndex + 1] ?? "", /pending/);
 	});
 
 	it("shows the dispatched model next to each parallel agent", () => {

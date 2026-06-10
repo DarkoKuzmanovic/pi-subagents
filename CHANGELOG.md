@@ -1,10 +1,17 @@
 # Changelog
 
+## [0.38.0] - 2026-06-10
+
+### Added
+
+- **Subagent TUI rows get a broader aesthetic refresh.** Live widgets and final result rows now use bracketed model tags (`[provider/model:thinking]`), clearer status/agent glyphs, pipeline connectors between chain spans, a `↺ fallback` badge for retried model attempts, and a status-colored `· background` suffix so active background work is easier to scan.
+- **ANSI-styled widget truncation now preserves escape sequences without regex control-character lint exceptions.** The renderer uses a small SGR scanner so styled rows can be truncated while keeping color resets balanced.
+
 ## [0.37.0] - 2026-06-08
 
 ### Added
 
-- **Dispatched model is now visible per agent.** Every agent row shows the resolved model id (with thinking suffix, exactly as dispatched) immediately after the agent name — e.g. `Agent 1/2: scout [deepseek/deepseek-v4-pro:high] · complete · …`. This appears on both the live background/parallel widget and the final tool-result rows (single, parallel, and chain), so lane/model overrides are auditable at a glance. The model is read from data already plumbed end-to-end (`AsyncJobStep.model`, `SingleResult.model`); only the four render row builders in `src/tui/render.ts` changed (new `renderModelTag` helper). Rows without a known model render unchanged.
+- **Dispatched model is now visible per agent.** Every agent row shows the resolved model id (with thinking suffix, exactly as dispatched) immediately after the agent name — e.g. `Agent 1/2: scout (deepseek/deepseek-v4-pro:high) · complete · …`. This appears on both the live background/parallel widget and the final tool-result rows (single, parallel, and chain), so lane/model overrides are auditable at a glance. The model is read from data already plumbed end-to-end (`AsyncJobStep.model`, `SingleResult.model`); only the four render row builders in `src/tui/render.ts` changed (new `renderModelTag` helper). Rows without a known model render unchanged.
 
 ## [0.36.1] - 2026-06-06
 
