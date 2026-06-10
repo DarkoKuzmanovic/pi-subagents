@@ -408,7 +408,7 @@ function interruptAsyncRun(state: SubagentState, runId: string | undefined): Age
 	const target = getAsyncInterruptTarget(state, runId);
 	if (!target) return null;
 	const status = readStatus(target.asyncDir);
-	if (!status || status.state !== "running" || typeof status.pid !== "number") {
+	if (status?.state !== "running" || typeof status.pid !== "number") {
 		return {
 			content: [{ type: "text", text: `No running async run with an interrupt-capable pid was found for '${runId ?? "current"}'.` }],
 			isError: true,
@@ -520,7 +520,7 @@ function directNestedAsyncInterrupt(target: ResolvedSubagentRunId & { kind: "nes
 	if (!asyncDir) return undefined;
 	const status = readStatus(asyncDir);
 	const pid = typeof status?.pid === "number" && status.pid > 0 ? status.pid : run.pid;
-	if (!status || status.state !== "running" || typeof pid !== "number" || pid <= 0) return undefined;
+	if (status?.state !== "running" || typeof pid !== "number" || pid <= 0) return undefined;
 	try {
 		process.kill(pid, ASYNC_INTERRUPT_SIGNAL);
 		return { content: [{ type: "text", text: `Interrupt requested for nested async run ${run.id}.` }], details: { mode: "management", results: [] } };
@@ -1003,14 +1003,14 @@ function resolveLaneOverridesForRequest(
 	});
 }
 
-function applyResolvedLaneToTaskParam(baseCwd: string, task: TaskParam): TaskParam {
-	if (!task.lane) return task;
-	const resolved = resolveLaneOverridesForRequest(resolveChildCwd(baseCwd, task.cwd), task);
+function applyResolvedLaneToRequest<T extends { agent: string; cwd?: string; lane?: string; model?: string; thinking?: string }>(baseCwd: string, request: T): T {
+	if (!request.lane) return request;
+	const resolved = resolveLaneOverridesForRequest(resolveChildCwd(baseCwd, request.cwd), request);
 	return {
-		...task,
+		...request,
 		...(resolved.model !== undefined ? { model: resolved.model } : {}),
 		...(resolved.thinking !== undefined ? { thinking: resolved.thinking } : {}),
-	};
+	} as T;
 }
 
 function applyResolvedLaneToChainStep(baseCwd: string, step: ChainStep): ChainStep {
@@ -1018,7 +1018,7 @@ function applyResolvedLaneToChainStep(baseCwd: string, step: ChainStep): ChainSt
 		if (!step.parallel.some((task) => task.lane)) return step;
 		return {
 			...step,
-			parallel: step.parallel.map((task) => applyResolvedLaneToTaskParam(resolveChildCwd(baseCwd, step.cwd), task)),
+			parallel: step.parallel.map((task) => applyResolvedLaneToRequest(resolveChildCwd(baseCwd, step.cwd), task)),
 		};
 	}
 
@@ -1038,7 +1038,7 @@ function applyResolvedLaneToChainStep(baseCwd: string, step: ChainStep): ChainSt
 }
 
 function applyResolvedModelLanes(params: SubagentParamsLike, baseCwd: string): SubagentParamsLike {
-	if (params.tasks) return { ...params, tasks: params.tasks.map((task) => applyResolvedLaneToTaskParam(baseCwd, task)) };
+	if (params.tasks) return { ...params, tasks: params.tasks.map((task) => applyResolvedLaneToRequest(baseCwd, task)) };
 	if (params.chain) return { ...params, chain: params.chain.map((step) => applyResolvedLaneToChainStep(baseCwd, step)) };
 	if (!params.agent || !params.lane) return params;
 	const resolved = resolveLaneOverridesForRequest(baseCwd, {
@@ -1730,7 +1730,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			{ overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
 		);
 
-		if (!result || !result.confirmed) {
+		if (!result?.confirmed) {
 			return { content: [{ type: "text", text: "Cancelled" }], details: { mode: "parallel", results: [] } };
 		}
 
@@ -2030,7 +2030,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			{ overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
 		);
 
-		if (!result || !result.confirmed) {
+		if (!result?.confirmed) {
 			return { content: [{ type: "text", text: "Cancelled" }], details: { mode: "single", results: [] } };
 		}
 

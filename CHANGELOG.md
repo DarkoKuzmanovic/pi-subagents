@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.38.0] - 2026-06-10
+
+### Added
+
+- **Subagent TUI rows get a broader aesthetic refresh.** Live widgets and final result rows now use bracketed model tags (`[provider/model:thinking]`), clearer status/agent glyphs, pipeline connectors between chain spans, a `↺ fallback` badge for retried model attempts, and a status-colored `· background` suffix so active background work is easier to scan.
+- **ANSI-styled widget truncation now preserves escape sequences without regex control-character lint exceptions.** The renderer uses a small SGR scanner so styled rows can be truncated while keeping color resets balanced.
+
 ## [0.37.0] - 2026-06-08
 
 ### Added

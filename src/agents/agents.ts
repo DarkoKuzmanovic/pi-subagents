@@ -696,7 +696,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			output: frontmatter.output,
 			defaultReads: defaultReads && defaultReads.length > 0 ? defaultReads : undefined,
 			defaultProgress: frontmatter.defaultProgress === "true",
-			disabled: frontmatter.disabled === "true" || frontmatter.disabled === true ? true : undefined,
+			disabled: frontmatter.disabled === "true" ? true : undefined,
 			interactive: frontmatter.interactive === "true",
 			maxSubagentDepth:
 				Number.isInteger(parsedMaxSubagentDepth) && parsedMaxSubagentDepth >= 0
@@ -722,9 +722,7 @@ function loadChainsFromDir(dir: string, source: AgentSource): ChainConfig[] {
 
 		try {
 			chains.push(parseChain(content, source as Exclude<AgentSource, "builtin">, filePath));
-		} catch {
-			continue;
-		}
+		} catch {}
 	}
 
 	return chains;
