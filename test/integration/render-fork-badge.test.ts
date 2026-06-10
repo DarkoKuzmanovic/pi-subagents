@@ -531,8 +531,8 @@ describe("renderSubagentResult fork indicator", () => {
 		}, { expanded: false }, theme);
 
 		const text = widget.render(160).join("\n");
-		assert.match(text, /scout \(deepseek\/deepseek-v4-pro:high\)/);
-		assert.match(text, /context-builder \(zai\/glm-5\.1\)/);
+		assert.match(text, /scout \[deepseek\/deepseek-v4-pro:high\]/);
+		assert.match(text, /context-builder \[zai\/glm-5\.1\]/);
 	});
 
 	it("keeps serial chain wording for non-parallel steps", () => {

@@ -43,23 +43,25 @@ function parseModelLaneDefinition(filePath: string, agentName: string, laneName:
 		throw new Error(`Model lane '${laneName}' for agent '${agentName}' in '${filePath}' must be an object.`);
 	}
 
-	const model = value.model;
-	if (model !== undefined && typeof model !== "string") {
+	const rawModel = value.model;
+	if (rawModel !== undefined && typeof rawModel !== "string") {
 		throw new Error(`Model lane '${laneName}' for agent '${agentName}' in '${filePath}' has invalid 'model'; expected a string.`);
 	}
+	const model = rawModel as string | undefined;
 
-	const thinking = value.thinking;
-	if (thinking !== undefined) {
-		if (typeof thinking !== "string" || !THINKING_LEVELS.includes(thinking as ThinkingLevel)) {
+	const rawThinking = value.thinking;
+	if (rawThinking !== undefined) {
+		if (typeof rawThinking !== "string" || !THINKING_LEVELS.includes(rawThinking as ThinkingLevel)) {
 			throw new Error(
 				`Model lane '${laneName}' for agent '${agentName}' in '${filePath}' has invalid 'thinking'; expected one of: ${THINKING_LEVELS.join(", ")}.`,
 			);
 		}
 	}
+	const thinking = rawThinking as ThinkingLevel | undefined;
 
 	return {
 		...(model !== undefined ? { model } : {}),
-		...(thinking !== undefined ? { thinking: thinking as ThinkingLevel } : {}),
+		...(thinking !== undefined ? { thinking } : {}),
 	};
 }
 

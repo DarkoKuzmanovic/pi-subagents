@@ -28,6 +28,22 @@ function getTermWidth(): number {
 }
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const ANSI_ESCAPE_PREFIX = `${String.fromCharCode(27)}[`;
+
+function findAnsiStyleEnd(text: string, start: number): number {
+	if (!text.startsWith(ANSI_ESCAPE_PREFIX, start)) return -1;
+	let i = start + ANSI_ESCAPE_PREFIX.length;
+	while (i < text.length) {
+		const charCode = text.charCodeAt(i);
+		if (charCode === 109) return i + 1;
+		if ((charCode >= 48 && charCode <= 57) || charCode === 59) {
+			i++;
+			continue;
+		}
+		return -1;
+	}
+	return -1;
+}
 
 /**
  * Truncate a line to maxWidth, preserving ANSI styling through the ellipsis.
@@ -48,22 +64,22 @@ function truncLine(text: string, maxWidth: number): string {
 	let i = 0;
 
 	while (i < text.length) {
-		const ansiMatch = text.slice(i).match(/^\x1b\[[0-9;]*m/);
-		if (ansiMatch) {
-			const code = ansiMatch[0];
+		const ansiEnd = findAnsiStyleEnd(text, i);
+		if (ansiEnd !== -1) {
+			const code = text.slice(i, ansiEnd);
 			result += code;
 
-			if (code === "\x1b[0m" || code === "\x1b[m") {
+			if (code === `${ANSI_ESCAPE_PREFIX}0m` || code === `${ANSI_ESCAPE_PREFIX}m`) {
 				activeStyles = [];
 			} else {
 				activeStyles.push(code);
 			}
-			i += code.length;
+			i = ansiEnd;
 			continue;
 		}
 
 		let end = i;
-		while (end < text.length && !text.slice(end).match(/^\x1b\[[0-9;]*m/)) {
+		while (end < text.length && findAnsiStyleEnd(text, end) === -1) {
 			end++;
 		}
 
@@ -351,10 +367,10 @@ function widgetChainDetails(job: AsyncJobState, theme: Theme, expanded: boolean,
 	return lines;
 }
 
-function widgetParallelAgentDetails(job: AsyncJobState, theme: Theme): string[] {
+function widgetParallelAgentDetails(job: AsyncJobState, theme: Theme, expanded: boolean, width: number): string[] {
 	if (!job.steps?.length) return [];
 	if (job.mode !== "parallel" && job.mode !== "chain") return [];
-	if (job.mode === "chain" && !job.activeParallelGroup && job.parallelGroups?.length) return widgetChainDetails(job, theme);
+	if (job.mode === "chain" && !job.activeParallelGroup && job.parallelGroups?.length) return widgetChainDetails(job, theme, expanded, width);
 	const total = job.stepsTotal ?? job.steps.length;
 	return job.steps.map((step, index) => {
 		const marker = index === job.steps!.length - 1 ? "└" : "├";
@@ -365,7 +381,7 @@ function widgetParallelAgentDetails(job: AsyncJobState, theme: Theme): string[] 
 }
 
 function parseParallelGroupAgentCount(label: string | undefined): number | undefined {
-	if (!label || !label.startsWith("[") || !label.endsWith("]")) return undefined;
+	if (!label?.startsWith("[") || !label.endsWith("]")) return undefined;
 	const inner = label.slice(1, -1).trim();
 	if (!inner) return 0;
 	return inner.split("+").map((part) => part.trim()).filter(Boolean).length;
@@ -756,7 +772,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 		items.push([
 			`${widgetStatusGlyph(job, theme)} ${themeBold(theme, widgetJobName(job))}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`,
 			`  ${theme.fg("dim", `⎿  ${widgetActivity(job)}`)}`,
-			...widgetParallelAgentDetails(job, theme),
+			...widgetParallelAgentDetails(job, theme, expanded, width),
 		]);
 		slots--;
 	}
@@ -773,7 +789,7 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 		items.push([
 			`${widgetStatusGlyph(job, theme)} ${themeBold(theme, widgetJobName(job))}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`,
 			`  ${theme.fg("dim", `⎿  ${widgetActivity(job)}`)}`,
-			...widgetParallelAgentDetails(job, theme),
+			...widgetParallelAgentDetails(job, theme, expanded, width),
 		]);
 		slots--;
 	}
@@ -996,7 +1012,7 @@ export function renderSubagentResult(
 	theme: Theme,
 ): Component {
 	const d = result.details;
-	if (!d || !d.results.length) {
+	if (!d?.results.length) {
 		const t = result.content[0];
 		const text = t?.type === "text" ? t.text : "(no output)";
 		const contextPrefix = renderContextBadge(d?.context, theme, { prefix: true });
