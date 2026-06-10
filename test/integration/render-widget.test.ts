@@ -176,7 +176,7 @@ describe("subagent async widget rendering", () => {
 		};
 		const lines = buildWidgetLines([job], theme, 200);
 
-		assert.equal(lines[0], "async subagent worker · umans/umans-kimi-k2.6:high · background");
+		assert.equal(lines[0], "async subagent worker [umans/umans-kimi-k2.6:high] · background");
 	});
 	it("shows fallback badge when a step retried models", () => {
 		const lines = buildWidgetLines([
@@ -184,25 +184,15 @@ describe("subagent async widget rendering", () => {
 				asyncId: "run-1",
 				asyncDir: "/tmp/1",
 				status: "running" as const,
-				mode: "single" as const,
+				mode: "parallel" as const,
 				agents: ["worker"],
+				activeParallelGroup: true,
 				stepsTotal: 1,
 				steps: [
 					{ index: 0, agent: "worker", status: "running" as const, model: "zai/glm-5.1", attemptedModels: ["anthropic/claude-opus-4-7", "zai/glm-5.1"], turnCount: 2, toolCount: 3 },
 			],
-			lastActivityAt: 1,
-		}, {
-			asyncId: "run-2",
-			asyncDir: "/tmp/2",
-			status: "running" as const,
-			mode: "single" as const,
-			agents: ["reviewer"],
-			stepsTotal: 1,
-			steps: [
-				{ index: 0, agent: "reviewer", status: "running" as const, model: "zai/glm-5.1", attemptedModels: ["zai/glm-5.1"], turnCount: 1, toolCount: 0 },
-			],
-			lastActivityAt: 1,
-		}], theme, 200);
+				lastActivityAt: 1,
+			}], theme, 200);
 		const text = lines.join("\n");
 		assert.ok(text.includes("↺ fallback"), "should show fallback badge when multiple models were tried");
 	});
@@ -213,9 +203,12 @@ describe("subagent async widget rendering", () => {
 				asyncId: "run-chain",
 				asyncDir: "/tmp/chain",
 				status: "running" as const,
-				mode: "single" as const,
-				agents: ["chain"],
+				mode: "chain" as const,
+				agents: ["scout", "worker", "reviewer"],
+				parallelGroups: [],
 				stepsTotal: 3,
+				chainStepCount: 2,
+				parallelGroups: [{ start: 0, count: 2, stepIndex: 0 }],
 				steps: [
 					{ index: 0, agent: "scout", status: "complete" as const, durationMs: 15_000 },
 					{ index: 1, agent: "worker", status: "running" as const },
@@ -250,8 +243,8 @@ describe("subagent async widget rendering", () => {
 		], theme, 200);
 
 		const text = lines.join("\n");
-		assert.match(text, /Agent 1\/2: scout \(deepseek\/deepseek-v4-pro:high\)/);
-		assert.match(text, /Agent 2\/2: context-builder \(zai\/glm-5\.1\)/);
+		assert.match(text, /Agent 1\/2: scout \[deepseek\/deepseek-v4-pro:high\]/);
+		assert.match(text, /Agent 2\/2: context-builder \[zai\/glm-5\.1\]/);
 	});
 
 	it("shows inline live detail for expanded async parallel widget rows", () => {
