@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Refreshed `/mesh-review` with the multi-model review contract.** The prompt now uses only enabled roles (`reviewer` for both review lanes and synthesis), requires evidence-backed reviewer sections, dedupes findings into BLOCKER/SHOULD FIX/NOTE/DISAGREEMENT/IGNORED buckets, and preserves explicit model disagreement handling without turning mesh review into a GitHub PR-posting workflow.
+
 ## [0.38.0] - 2026-06-10
 
 ### Added
