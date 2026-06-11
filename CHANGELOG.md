@@ -1,6 +1,7 @@
 # Changelog
 
-## [Unreleased]
+## [0.38.1] - 2026-06-12
+
 ### Fixed
 
 - **Transient child errors no longer fail recovered runs.** A mid-session provider blip (e.g. pi-ai's bare `terminated` errorMessage on an assistant message) used to stick in the run's `error` field even after the agent recovered, completed its task, and delivered output — reporting a fully successful run as failed (success-dressed-as-failure; reproduced in production with a parallel context-builder dispatch). Both runners (foreground `execution.ts`, background `subagent-runner.ts`) now clear a message-sourced error when a later clean assistant message supersedes it. Regression test proven against the old code.
