@@ -86,6 +86,10 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/socket hang up/i,
 	/(?:connection|stream|socket|request|response)\s+terminated/i,
 	/terminated unexpectedly/i,
+	// pi-ai reports a terminated streaming request as the bare errorMessage
+	// "terminated" (seen in production). Anchored so prose like "process
+	// terminated after inactivity timeout" never matches.
+	/^\s*terminated\s*\.?\s*$/i,
 	/upstream/i,
 	/timed? out/i,
 	/timeout/i,
@@ -111,6 +115,10 @@ const TRANSPORT_FAILURE_PATTERNS = [
 	/socket hang up/i,
 	/(?:connection|stream|socket|request|response)\s+terminated/i,
 	/terminated unexpectedly/i,
+	// Bare "terminated" is pi-ai's errorMessage for a terminated streaming
+	// request — a transport failure. Anchored to the full string so control
+	// kills ("process terminated after inactivity timeout") never match.
+	/^\s*terminated\s*\.?\s*$/i,
 	/network error/i,
 	/econnreset/i,
 	/epipe/i,

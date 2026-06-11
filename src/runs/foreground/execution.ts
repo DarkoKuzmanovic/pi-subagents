@@ -242,6 +242,7 @@ async function runSingleAttempt(
 		let childExited = false;
 		let forcedTerminationSignal = false;
 		let cleanTerminalAssistantStopReceived = false;
+		let errorFromChildMessage = false;
 		let finalDrainTimer: NodeJS.Timeout | undefined;
 		let finalHardKillTimer: NodeJS.Timeout | undefined;
 		const clearFinalDrainTimers = () => {
@@ -531,7 +532,16 @@ async function runSingleAttempt(
 							progress.tokens = result.usage.input + result.usage.output;
 						}
 						if (!result.model && evt.message.model) result.model = evt.message.model;
-						if (evt.message.errorMessage) result.error = evt.message.errorMessage;
+						if (evt.message.errorMessage) {
+							result.error = evt.message.errorMessage;
+							errorFromChildMessage = true;
+						} else if (errorFromChildMessage) {
+							// A later clean assistant message supersedes a transient child
+							// error (e.g. a terminated stream the agent recovered from), so
+							// a recovered run is not reported as failed.
+							result.error = undefined;
+							errorFromChildMessage = false;
+						}
 						appendRecentOutput(extractTextFromContent(evt.message.content).split("\n").slice(-10));
 						// Final assistant message: start the exit drain window.
 						const stopReason = (evt.message as { stopReason?: string }).stopReason;

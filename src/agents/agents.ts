@@ -722,7 +722,12 @@ function loadChainsFromDir(dir: string, source: AgentSource): ChainConfig[] {
 
 		try {
 			chains.push(parseChain(content, source as Exclude<AgentSource, "builtin">, filePath));
-		} catch {}
+		} catch (error) {
+			// A malformed chain file silently vanishing means the user's chain
+			// "doesn't exist" with zero feedback. Surface the parse failure.
+			const message = error instanceof Error ? error.message : String(error);
+			console.warn(`[pi-subagents] Skipping malformed chain file '${filePath}': ${message}`);
+		}
 	}
 
 	return chains;

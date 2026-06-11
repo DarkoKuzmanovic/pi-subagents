@@ -1094,4 +1094,70 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.exitCode, 0);
 	});
 
+	it("does not fail a run when a transient child error is superseded by a clean final message", async () => {
+		// Regression: a mid-session provider blip (pi-ai errorMessage "terminated")
+		// used to stick in `result.error` even after the agent recovered and
+		// delivered its final answer, reporting a fully successful run as failed.
+		mockPi.onCall({
+			jsonl: [
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "partial work before the blip" }],
+						errorMessage: "terminated",
+						usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+					},
+				},
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "Recovered and completed the task." }],
+						stopReason: "stop",
+						usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+					},
+				},
+			],
+			exitCode: 0,
+		});
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {});
+
+		assert.equal(result.error, undefined);
+		assert.equal(result.exitCode, 0);
+	});
+
+	it("still fails a run whose final assistant message carries an error", async () => {
+		mockPi.onCall({
+			jsonl: [
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "started fine" }],
+						usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+					},
+				},
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "died at the end" }],
+						errorMessage: "upstream 500",
+						usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+					},
+				},
+			],
+			exitCode: 1,
+		});
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {});
+
+		assert.equal(result.error, "upstream 500");
+		assert.notEqual(result.exitCode, 0);
+	});
+
 });

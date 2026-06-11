@@ -235,7 +235,8 @@ export function resolveStepBehavior(
 
 export function resolveTaskTextForFileUpdatePolicy(task: string | undefined, originalTask?: string): string | undefined {
 	if (!task) return originalTask;
-	return originalTask ? task.replaceAll("{task}", originalTask) : task;
+	// Replacer function: a string replacement would interpret `$&` etc. in the task text.
+	return originalTask ? task.replaceAll("{task}", () => originalTask) : task;
 }
 
 export function taskDisallowsFileUpdates(task: string | undefined): boolean {

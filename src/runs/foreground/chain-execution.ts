@@ -33,7 +33,7 @@ import { discoverAvailableSkills, normalizeSkillInput } from "../../agents/skill
 import { INTERCOM_BRIDGE_MARKER } from "../../intercom/intercom-bridge.ts";
 import { runSync } from "./execution.ts";
 import { buildChainSummary } from "../../shared/formatters.ts";
-import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd } from "../../shared/utils.ts";
+import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd, substituteTemplateVars } from "../../shared/utils.ts";
 import { recordRun } from "../shared/run-history.ts";
 import {
 	cleanupWorktrees,
@@ -211,9 +211,11 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				input.inlineReads,
 			);
 			let taskStr = taskTemplate;
-			taskStr = taskStr.replace(/\{task\}/g, input.originalTask);
-			taskStr = taskStr.replace(/\{previous\}/g, input.prev);
-			taskStr = taskStr.replace(/\{chain_dir\}/g, input.chainDir);
+			taskStr = substituteTemplateVars(taskStr, {
+				task: input.originalTask,
+				previous: input.prev,
+				chain_dir: input.chainDir,
+			});
 			const cleanTask = taskStr;
 			taskStr = prefix + taskStr + suffix;
 
@@ -791,9 +793,11 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			params.inlineReads,
 			);
 			let stepTask = stepTemplate;
-			stepTask = stepTask.replace(/\{task\}/g, originalTask);
-			stepTask = stepTask.replace(/\{previous\}/g, prev);
-			stepTask = stepTask.replace(/\{chain_dir\}/g, chainDir);
+			stepTask = substituteTemplateVars(stepTask, {
+				task: originalTask,
+				previous: prev,
+				chain_dir: chainDir,
+			});
 			const cleanTask = stepTask;
 			stepTask = prefix + stepTask + suffix;
 

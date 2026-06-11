@@ -90,6 +90,17 @@ describe("isTransportFailure", () => {
 		assert.equal(isTransportFailure("network error"), true);
 	});
 
+	it("matches pi-ai's bare 'terminated' errorMessage (seen in production)", () => {
+		assert.equal(isTransportFailure("terminated"), true);
+		assert.equal(isTransportFailure(" Terminated. "), true);
+		assert.equal(isRetryableModelFailure("terminated"), true);
+	});
+
+	it("does not match control-kill prose containing 'terminated'", () => {
+		assert.equal(isTransportFailure("Process terminated after inactivity timeout."), false);
+		assert.equal(isTransportFailure("the run was terminated by the user"), false);
+	});
+
 	it("does not match config/auth/quota failures", () => {
 		assert.equal(isTransportFailure("401 unauthorized"), false);
 		assert.equal(isTransportFailure("insufficient credit"), false);

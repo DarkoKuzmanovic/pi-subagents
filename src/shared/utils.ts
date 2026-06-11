@@ -20,7 +20,25 @@ export function getAgentDir(): string {
 	return configured || path.join(os.homedir(), ".pi", "agent");
 }
 
-const statusCache = new Map<string, { mtime: number; status: AsyncStatus }>();
+/**
+ * Substitute `{name}` template variables with literal values.
+ *
+ * A plain `String.replace`/`replaceAll` with a string replacement interprets
+ * `$&`, `$'`, "$`", `$$`, and `$<name>` inside the replacement value as regex
+ * replacement patterns. Template values here are arbitrary model output or
+ * user task text (shell snippets, regexes, awk…), so a previous step's output
+ * containing `$&` would silently corrupt the next step's task. The function
+ * replacement form treats the value as literal text.
+ */
+export function substituteTemplateVars(template: string, vars: Record<string, string>): string {
+	let out = template;
+	for (const [name, value] of Object.entries(vars)) {
+		out = out.replace(new RegExp(`\\{${name}\\}`, "g"), () => value);
+	}
+	return out;
+}
+
+const statusCache = new Map<string, { mtime: number; size: number; status: AsyncStatus }>();
 
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -55,7 +73,7 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 	}
 
 	const cached = statusCache.get(statusPath);
-	if (cached && cached.mtime === stat.mtimeMs) {
+	if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
 		return cached.status;
 	}
 
@@ -78,7 +96,7 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 		});
 	}
 
-	statusCache.set(statusPath, { mtime: stat.mtimeMs, status });
+	statusCache.set(statusPath, { mtime: stat.mtimeMs, size: stat.size, status });
 	if (statusCache.size > 50) {
 		const oldestKey = [...statusCache.entries()]
 			.sort(([, a], [, b]) => (a.mtime ?? 0) - (b.mtime ?? 0))[0]?.[0];

@@ -211,6 +211,7 @@ function runPiStreaming(
 		const usage = emptyUsage();
 		let model: string | undefined;
 		let error: string | undefined;
+		let errorFromChildMessage = false;
 		let interrupted = false;
 		let observedMutationAttempt = false;
 		const rawStdoutLines: string[] = [];
@@ -262,7 +263,17 @@ function runPiStreaming(
 
 					if (event.type !== "message_end" || event.message.role !== "assistant") return;
 					if (event.message.model) model = event.message.model;
-					if (event.message.errorMessage) error = event.message.errorMessage;
+					if (event.message.errorMessage) {
+						error = event.message.errorMessage;
+						errorFromChildMessage = true;
+					} else if (errorFromChildMessage) {
+						// A later clean assistant message supersedes a transient child
+						// error (e.g. a terminated stream the agent recovered from).
+						// Without this, one mid-session blip permanently poisons the
+						// step and a fully delivered run is reported as failed.
+						error = undefined;
+						errorFromChildMessage = false;
+					}
 					const eventUsage = event.message.usage;
 					if (eventUsage) {
 						usage.turns++;

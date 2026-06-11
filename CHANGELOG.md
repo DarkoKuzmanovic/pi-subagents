@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- **Transient child errors no longer fail recovered runs.** A mid-session provider blip (e.g. pi-ai's bare `terminated` errorMessage on an assistant message) used to stick in the run's `error` field even after the agent recovered, completed its task, and delivered output — reporting a fully successful run as failed (success-dressed-as-failure; reproduced in production with a parallel context-builder dispatch). Both runners (foreground `execution.ts`, background `subagent-runner.ts`) now clear a message-sourced error when a later clean assistant message supersedes it. Regression test proven against the old code.
+- **`isTransportFailure`/`isRetryableModelFailure` now match pi-ai's bare `terminated` errorMessage** (anchored to the full string so control-kill prose like "process terminated after inactivity timeout" never matches). This lets output-aware finalization rescue runs whose declared output was produced before a terminated stream, and enables model-fallback retry on that failure.
+- **Chain template substitution no longer corrupts tasks containing `$` patterns.** `{task}`/`{previous}`/`{chain_dir}` were substituted with plain string `String.replace`, which interprets `$&`, `` $` ``, `$'`, `$$` in the replacement value — so a previous step's output containing shell/awk/regex `$` constructs silently corrupted the next step's task. New `substituteTemplateVars` helper uses function replacements (literal semantics) everywhere.
+- **`readStatus` cache now validates file size alongside mtime**, preventing stale status reads when a status file is replaced without an observable mtime change (coarse-timestamp filesystems).
+- **Malformed `.chain.md` files are no longer silently dropped.** Chain definition parse failures now emit a warning naming the file and error instead of making the chain invisibly "not exist".
 
 ### Changed
 
