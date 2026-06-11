@@ -35,6 +35,7 @@ import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDet
 import { inspectSubagentStatus } from "../runs/background/run-status.ts";
 import registerSubagentNotify, { type SubagentNotifyDetails } from "../runs/background/notify.ts";
 import { SUBAGENT_CHILD_ENV } from "../runs/shared/pi-args.ts";
+import { sweepOrphanedWorktrees } from "../runs/shared/worktree.ts";
 import { formatDuration, shortenPath } from "../shared/formatters.ts";
 import {
 	type Details,
@@ -534,6 +535,19 @@ DIAGNOSTICS:
 
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionState(ctx);
+		// Deferred, best-effort sweep of worktree residue from SIGKILL'd runs
+		// (orphaned pi-parallel-* branches + dangling .git/worktrees records).
+		// Conservative: only touches branches whose tmp dir is gone or >24h old.
+		setTimeout(() => {
+			try {
+				const swept = sweepOrphanedWorktrees(ctx.cwd);
+				if (swept.prunedBranches.length > 0) {
+					console.warn(`[pi-subagents] Swept ${swept.prunedBranches.length} orphaned pi-parallel worktree branch(es): ${swept.prunedBranches.join(", ")}`);
+				}
+			} catch {
+				// Housekeeping must never affect the session.
+			}
+		}, 3000).unref?.();
 	});
 
 	pi.on("session_shutdown", () => {

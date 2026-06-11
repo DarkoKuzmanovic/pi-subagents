@@ -215,6 +215,8 @@ export interface SingleResult {
 	sessionFile?: string;
 	skills?: string[];
 	skillsWarning?: string;
+	/** Non-fatal note: the child was drain-killed after its clean final message and had stderr output (preserved tail). */
+	drainWarning?: string;
 	progress?: AgentProgress;
 	progressSummary?: ProgressSummary;
 	toolCalls?: ToolCallSummary[];

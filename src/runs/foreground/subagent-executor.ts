@@ -38,7 +38,7 @@ import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "../../intercom/intercom-bridge.ts";
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "../shared/subagent-control.ts";
 import { finalizeSingleOutput, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd } from "../../shared/utils.ts";
+import { coerceJsonArrayParam, compactForegroundDetails, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd } from "../../shared/utils.ts";
 import {
 	attachNestedChildrenToResultChildren,
 	buildSubagentResultIntercomPayload,
@@ -926,6 +926,42 @@ function expandChainParallelCounts(chain: ChainStep[]): { chain?: ChainStep[]; e
 	return { chain: expandedChain };
 }
 
+/**
+ * Cheap drivers JSON-stringify nested tool params at arbitrary depth (seen in
+ * production with roux_record and ask_user on 2026-06-11). Coerce stringified
+ * `chain`, `tasks`, and per-step `parallel` arrays back to literal arrays
+ * before any downstream code touches them. Exported for tests.
+ */
+export function coerceEnvelopeArrays(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: string } {
+	const raw = params as Record<string, unknown>;
+	let next: SubagentParamsLike = params;
+
+	const chainResult = coerceJsonArrayParam(raw.chain, "chain");
+	if (chainResult.error) return { error: chainResult.error };
+	if (chainResult.value) next = { ...next, chain: chainResult.value as ChainStep[] };
+
+	const tasksResult = coerceJsonArrayParam(raw.tasks, "tasks");
+	if (tasksResult.error) return { error: tasksResult.error };
+	if (tasksResult.value) next = { ...next, tasks: tasksResult.value as TaskParam[] };
+
+	if (next.chain) {
+		const steps: ChainStep[] = [];
+		for (let index = 0; index < next.chain.length; index++) {
+			const step = next.chain[index] as ChainStep;
+			const stepRaw = step as unknown as Record<string, unknown>;
+			if (stepRaw.parallel === undefined || stepRaw.parallel === null || Array.isArray(stepRaw.parallel)) {
+				steps.push(step);
+				continue;
+			}
+			const parallelResult = coerceJsonArrayParam(stepRaw.parallel, `chain[${index}].parallel`);
+			if (parallelResult.error) return { error: parallelResult.error };
+			steps.push({ ...step, parallel: parallelResult.value } as ChainStep);
+		}
+		next = { ...next, chain: steps };
+	}
+
+	return { params: next };
+}
 function normalizeRepeatedParallelCounts(params: SubagentParamsLike): { params?: SubagentParamsLike; error?: AgentToolResult<Details> } {
 	if (params.tasks) {
 		const expandedTasks = expandTopLevelTaskCounts(params.tasks);
@@ -2274,6 +2310,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		deps.state.foregroundRuns ??= new Map();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
+		const envelope = coerceEnvelopeArrays(params);
+		if (envelope.error) return buildRequestedModeError(params, envelope.error);
+		if (envelope.params) params = envelope.params;
 		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);
 		const paramsWithResolvedCwd = params.cwd === undefined ? params : { ...params, cwd: requestCwd };
 		if (params.action) {

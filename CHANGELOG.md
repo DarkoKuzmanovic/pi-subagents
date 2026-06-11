@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.38.2] - 2026-06-12
+
+### Added
+
+- **`chain`/`tasks` params now tolerate JSON-stringified arrays (cheap-driver envelope defect).** Cheap drivers (Qwen Flash, Kimi-class) JSON-stringify nested tool arguments at arbitrary depth — the exact defect that hit `roux_record` and `ask_user` in production. The `subagent` tool's `chain`, `tasks`, and per-step `parallel` params are now schema-widened to accept strings, and a coercion seam (`coerceEnvelopeArrays` + `coerceJsonArrayParam`) parses stringified arrays (and stringified items inside them) back to literal form before execution, or refuses with a driver-readable corrective message naming the offending param/index.
+- **Orphaned worktree residue from SIGKILL'd runs is now swept at session start.** `try/finally` cleanup never fires on SIGKILL, leaving `pi-parallel-*` branches and dangling `.git/worktrees/` records in the repo forever. A deferred, best-effort `sweepOrphanedWorktrees` now runs `git worktree prune` and deletes `pi-parallel-*` branches whose tmp worktree dir is gone (a live run always has its dir) or older than 24h. Fresh dirs and non-pi branches are never touched.
+
+### Fixed
+
+- **A result whose first delivery failed is no longer permanently dropped.** The result watcher marked a completion key as seen *before* emitting; if a subscriber threw, the retained result file hit the dedupe branch on retry and was unlinked without ever re-emitting. The key is now unmarked on delivery failure so retries actually re-deliver. Regression test proven failing against the old code.
+- **Drain-kill stderr is preserved instead of silently dropped.** When a child delivered its clean final message but needed SIGTERM to exit (drain timeout), any stderr it produced was discarded. A bounded tail now surfaces as a non-fatal `drainWarning` on the result (rendered as a warning row), with routine pi idle chatter (`Done after N turn(s). Ready for input.`) filtered so normal drain-kills stay quiet. The run still completes successfully — stderr never becomes an error on this path.
+
 ## [0.38.1] - 2026-06-12
 
 ### Fixed

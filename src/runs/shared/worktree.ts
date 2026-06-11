@@ -556,6 +556,64 @@ export function cleanupWorktrees(setup: WorktreeSetup): void {
 	}
 }
 
+const STALE_WORKTREE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Best-effort cleanup of worktree residue left by SIGKILL'd runs: the
+ * try/finally cleanup in the runners never fires on SIGKILL, leaving
+ * `pi-parallel-<runId>-<index>` branches and `.git/worktrees/` records in the
+ * repo forever (the /tmp dirs are eventually OS-cleaned; the repo records are
+ * not). Conservative by construction:
+ *  - `git worktree prune` only drops records whose dirs are already gone
+ *  - branches are deleted only when their tmp worktree dir is gone (a live
+ *    run always has its dir present) or older than `staleAfterMs` (runs are
+ *    bounded to minutes; default 24h)
+ * Never throws.
+ */
+export function sweepOrphanedWorktrees(cwd: string, options?: { staleAfterMs?: number; now?: number }): { prunedBranches: string[] } {
+	const prunedBranches: string[] = [];
+	try {
+		const toplevelResult = runGit(cwd, ["rev-parse", "--show-toplevel"]);
+		if (toplevelResult.status !== 0) return { prunedBranches };
+		const toplevel = toplevelResult.stdout.trim();
+		if (!toplevel) return { prunedBranches };
+		runGit(toplevel, ["worktree", "prune"]);
+		const branchResult = runGit(toplevel, ["branch", "--list", "pi-parallel-*", "--format=%(refname:short)"]);
+		if (branchResult.status !== 0) return { prunedBranches };
+		const branches = branchResult.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+		if (branches.length === 0) return { prunedBranches };
+		const staleAfterMs = options?.staleAfterMs ?? STALE_WORKTREE_MS;
+		const now = options?.now ?? Date.now();
+		for (const branch of branches) {
+			const match = /^pi-parallel-(.+)-(\d+)$/.exec(branch);
+			if (!match) continue;
+			const dirPath = buildWorktreePath(match[1] as string, Number(match[2]));
+			let dirExists = false;
+			let dirStale = false;
+			try {
+				const stat = fs.statSync(dirPath);
+				dirExists = true;
+				dirStale = now - stat.mtimeMs > staleAfterMs;
+			} catch {
+				// Dir gone — the branch is orphaned.
+			}
+			if (dirExists && !dirStale) continue; // possibly a live run — leave it alone
+			if (dirExists && dirStale) {
+				try {
+					runGitChecked(toplevel, ["worktree", "remove", "--force", dirPath]);
+				} catch {
+					try { fs.rmSync(dirPath, { recursive: true, force: true }); } catch {}
+					try { runGit(toplevel, ["worktree", "prune"]); } catch {}
+				}
+			}
+			const del = runGit(toplevel, ["branch", "-D", branch]);
+			if (del.status === 0) prunedBranches.push(branch);
+		}
+	} catch {
+		// Sweep is best-effort housekeeping; never break the caller.
+	}
+	return { prunedBranches };
+}
 export function formatWorktreeDiffSummary(diffs: WorktreeDiff[]): string {
 	const changed = diffs.filter(hasWorktreeChanges);
 	if (changed.length === 0) return "";

@@ -62,6 +62,8 @@ export function createResultWatcher(
 	const handleResult = async (file: string) => {
 		const resultPath = path.join(resultsDir, file);
 		if (!fsApi.existsSync(resultPath)) return;
+		let completionKey: string | undefined;
+		let completionMarkedNow = false;
 		try {
 			const data = JSON.parse(fsApi.readFileSync(resultPath, "utf-8")) as {
 				id?: string;
@@ -90,11 +92,12 @@ export function createResultWatcher(
 			if (!data.sessionId && data.cwd && data.cwd !== state.baseCwd) return;
 
 			const now = Date.now();
-			const completionKey = buildCompletionKey(data, `result:${file}`);
+			completionKey = buildCompletionKey(data, `result:${file}`);
 			if (markSeenWithTtl(state.completionSeen, completionKey, now, completionTtlMs)) {
 				fsApi.unlinkSync(resultPath);
 				return;
 			}
+			completionMarkedNow = true;
 
 			const intercomTarget = data.intercomTarget?.trim();
 			if (intercomTarget) {
@@ -148,6 +151,11 @@ export function createResultWatcher(
 			fsApi.unlinkSync(resultPath);
 		} catch (error) {
 			if (isNotFoundError(error)) return;
+			// Delivery failed after the completion key was marked seen. Unmark it,
+			// otherwise the retained result file would hit the dedupe branch on
+			// retry and be unlinked WITHOUT ever emitting — permanently dropping
+			// the result (mark-seen-before-delivery hazard).
+			if (completionMarkedNow && completionKey) state.completionSeen.delete(completionKey);
 			console.error(`Failed to process subagent result file '${resultPath}':`, error);
 		}
 	};

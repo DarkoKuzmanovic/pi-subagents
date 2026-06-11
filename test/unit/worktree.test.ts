@@ -11,6 +11,7 @@ import {
 	findWorktreeTaskCwdConflict,
 	formatWorktreeDiffSummary,
 	resolveExpectedWorktreeAgentCwd,
+	sweepOrphanedWorktrees,
 	type WorktreeSetup,
 } from "../../src/runs/shared/worktree.ts";
 
@@ -439,5 +440,90 @@ setTimeout(() => {
 		} finally {
 			cleanupRepo(repoDir);
 		}
+	});
+
+	describe("sweepOrphanedWorktrees", () => {
+		it("deletes a pi-parallel branch whose worktree dir is gone (SIGKILL residue)", () => {
+			const repoDir = createRepo("pi-worktree-sweep-orphan-");
+			try {
+				const runId = `sweep-${Date.now().toString(36)}`;
+				const setup = createWorktrees(repoDir, runId, 1);
+				const worktreePath = setup.worktrees[0]!.path;
+				const branch = setup.worktrees[0]!.branch;
+				// Simulate SIGKILL: the tmp dir vanishes (OS tmp cleaning) but the
+				// branch and .git/worktrees record stay because finally never ran.
+				fs.rmSync(worktreePath, { recursive: true, force: true });
+				assert.ok(git(repoDir, ["branch", "--list", branch]).includes(branch.replace(/^.*\//, "")), "branch exists before sweep");
+
+				const swept = sweepOrphanedWorktrees(repoDir);
+
+				assert.deepEqual(swept.prunedBranches, [branch]);
+				assert.equal(git(repoDir, ["branch", "--list", branch]), "", "branch removed by sweep");
+			} finally {
+				cleanupRepo(repoDir);
+			}
+		});
+
+		it("leaves a fresh worktree (possibly live run) untouched", () => {
+			const repoDir = createRepo("pi-worktree-sweep-live-");
+			let setup: WorktreeSetup | undefined;
+			try {
+				const runId = `live-${Date.now().toString(36)}`;
+				setup = createWorktrees(repoDir, runId, 1);
+				const branch = setup.worktrees[0]!.branch;
+
+				const swept = sweepOrphanedWorktrees(repoDir);
+
+				assert.deepEqual(swept.prunedBranches, []);
+				assert.ok(git(repoDir, ["branch", "--list", branch]).length > 0, "live branch must survive the sweep");
+				assert.ok(fs.existsSync(setup.worktrees[0]!.path), "live worktree dir must survive the sweep");
+			} finally {
+				if (setup) cleanupWorktrees(setup);
+				cleanupRepo(repoDir);
+			}
+		});
+
+		it("removes a stale worktree (dir older than staleAfterMs) and its branch", () => {
+			const repoDir = createRepo("pi-worktree-sweep-stale-");
+			try {
+				const runId = `stale-${Date.now().toString(36)}`;
+				const setup = createWorktrees(repoDir, runId, 1);
+				const worktreePath = setup.worktrees[0]!.path;
+				const branch = setup.worktrees[0]!.branch;
+
+				// Everything younger than staleAfterMs=0 is stale; pass a future `now`.
+				const swept = sweepOrphanedWorktrees(repoDir, { staleAfterMs: 0, now: Date.now() + 60_000 });
+
+				assert.deepEqual(swept.prunedBranches, [branch]);
+				assert.equal(fs.existsSync(worktreePath), false, "stale worktree dir removed");
+				assert.equal(git(repoDir, ["branch", "--list", branch]), "", "stale branch removed");
+			} finally {
+				cleanupRepo(repoDir);
+			}
+		});
+
+		it("is a no-op outside a git repo", () => {
+			const plainDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sweep-nogit-"));
+			try {
+				const swept = sweepOrphanedWorktrees(plainDir);
+				assert.deepEqual(swept.prunedBranches, []);
+			} finally {
+				fs.rmSync(plainDir, { recursive: true, force: true });
+			}
+		});
+
+		it("ignores non-pi-parallel branches entirely", () => {
+			const repoDir = createRepo("pi-worktree-sweep-other-");
+			try {
+				git(repoDir, ["branch", "feature/my-work"]);
+
+				const swept = sweepOrphanedWorktrees(repoDir, { staleAfterMs: 0, now: Date.now() + 60_000 });
+
+				assert.deepEqual(swept.prunedBranches, []);
+				assert.ok(git(repoDir, ["branch", "--list", "feature/my-work"]).length > 0);
+			} finally {
+				cleanupRepo(repoDir);
+			}
+		});
 	});
 });

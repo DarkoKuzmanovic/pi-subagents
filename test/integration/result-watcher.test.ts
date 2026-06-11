@@ -505,4 +505,53 @@ describe("result watcher", () => {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 		}
 	});
+
+	it("re-delivers a result whose first delivery failed (mark-seen-before-delivery regression)", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-redeliver-"));
+		try {
+			const emitted: Array<{ event: string; data: unknown }> = [];
+			let failNextEmit = true;
+			const pi = {
+				events: {
+					on: () => () => {},
+					emit(event: string, data: unknown) {
+						if (event === "subagent:async-complete" && failNextEmit) {
+							failNextEmit = false;
+							throw new Error("subscriber exploded");
+						}
+						emitted.push({ event, data });
+					},
+				},
+			};
+			const state = createState();
+			const resultPath = path.join(resultsDir, "redeliver-run.json");
+			fs.writeFileSync(resultPath, JSON.stringify({
+				id: "redeliver-run",
+				success: true,
+				summary: "done",
+				cwd: "/repo",
+			}), "utf-8");
+
+			const watcher = createResultWatcher(pi, state, resultsDir, 60_000);
+			try {
+				// First delivery: subscriber throws. The file must be retained AND
+				// the completion key unmarked so a retry can actually re-deliver.
+				watcher.primeExistingResults();
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				assert.equal(emitted.some((entry) => entry.event === "subagent:async-complete"), false);
+				assert.equal(fs.existsSync(resultPath), true, "result file must be retained after failed delivery");
+
+				// Retry: without the unmark fix this hits the dedupe branch and
+				// unlinks WITHOUT emitting — permanently dropping the result.
+				watcher.primeExistingResults();
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				assert.equal(emitted.filter((entry) => entry.event === "subagent:async-complete").length, 1, "retry must re-deliver the result");
+				assert.equal(fs.existsSync(resultPath), false, "result file is consumed after successful delivery");
+			} finally {
+				watcher.stopResultWatcher();
+			}
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
 });

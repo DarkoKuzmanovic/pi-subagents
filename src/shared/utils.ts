@@ -38,6 +38,48 @@ export function substituteTemplateVars(template: string, vars: Record<string, st
 	return out;
 }
 
+/**
+ * Tolerate a JSON-stringified array param from cheap drivers that serialize
+ * nested tool arguments (the envelope defect seen in production with
+ * roux_record and ask_user: `{"chain": "[{\"agent\": ...}]"}`).
+ *
+ * - `undefined`/`null` pass through untouched (`{}`).
+ * - A string is JSON-parsed; the result must be an array.
+ * - Stringified items inside the array are also parsed (drivers stringify at
+ *   arbitrary depth) and must parse to objects.
+ * - Anything else returns a driver-readable corrective error.
+ */
+export function coerceJsonArrayParam(raw: unknown, name: string): { value?: unknown[]; error?: string } {
+	if (raw === undefined || raw === null) return {};
+	let val: unknown = raw;
+	if (typeof val === "string") {
+		try {
+			val = JSON.parse(val);
+		} catch (error) {
+			return { error: `${name} must be a JSON array, got an unparseable string (${getErrorMessage(error)}). Pass a literal JSON array, not a string.` };
+		}
+	}
+	if (!Array.isArray(val)) {
+		return { error: `${name} must be an array (got ${typeof val}). Pass a literal JSON array, not a string or object.` };
+	}
+	const items: unknown[] = [];
+	for (let index = 0; index < val.length; index++) {
+		let item: unknown = val[index];
+		if (typeof item === "string") {
+			try {
+				item = JSON.parse(item);
+			} catch {
+				return { error: `${name}[${index}] must be an object, got an unparseable string. Pass literal JSON objects inside ${name}.` };
+			}
+			if (!item || typeof item !== "object" || Array.isArray(item)) {
+				return { error: `${name}[${index}] must be an object. Pass literal JSON objects inside ${name}.` };
+			}
+		}
+		items.push(item);
+	}
+	return { value: items };
+}
+
 const statusCache = new Map<string, { mtime: number; size: number; status: AsyncStatus }>();
 
 function getErrorMessage(error: unknown): string {

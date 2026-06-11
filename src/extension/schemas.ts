@@ -81,7 +81,7 @@ const ChainItem = Type.Object({
 	model: Type.Optional(Type.String({ description: "Override model for this step" })),
 	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this chain step." })),
 	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for this chain step" })),
-	parallel: Type.Optional(Type.Array(ParallelTaskSchema, { minItems: 1, description: "Tasks to run in parallel" })),
+	parallel: Type.Optional(Type.Union([Type.Array(ParallelTaskSchema, { minItems: 1 }), Type.String()], { description: "Tasks to run in parallel. Prefer a literal JSON array; a JSON-stringified array is tolerated and parsed." })),
 	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: 4)" })),
 	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure (default: false)" })),
 	worktree: Type.Optional(Type.Boolean({
@@ -139,14 +139,14 @@ export const SubagentParams = Type.Object({
 		],
 		description: "Agent or chain config for create/update. Agent: name, package (optional namespace; runtime name becomes package.name), description, scope ('user'|'project', default 'user'), systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, defaultContext ('fresh'|'fork'|'lineage'), model, tools (comma-separated), extensions (comma-separated), skills (comma-separated), thinking, output, reads, progress, maxSubagentDepth. Chain: name, package, description, scope, steps (array of {agent, task?, output?, outputMode?, reads?, model?, thinking?, skill?, progress?}). Presence of 'steps' creates a chain instead of an agent. String values must be valid JSON."
 	})),
-	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{agent, task, count?, output?, outputMode?, reads?, thinking?, progress?}, ...]" })),
+	tasks: Type.Optional(Type.Union([Type.Array(TaskItem), Type.String()], { description: "PARALLEL mode: [{agent, task, count?, output?, outputMode?, reads?, thinking?, progress?}, ...]. Prefer a literal JSON array; a JSON-stringified array is tolerated and parsed." })),
 	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Top-level PARALLEL mode only: max concurrent tasks. Defaults to config.parallel.concurrency or 4." })),
 	worktree: Type.Optional(Type.Boolean({
 		description: "Create isolated git worktrees for each parallel task. " +
 			"Prevents filesystem conflicts. Requires clean git state. " +
 			"Per-worktree diffs included in output."
 	})),
-	chain: Type.Optional(Type.Array(ChainItem, { description: "CHAIN mode: sequential pipeline where each step's response becomes {previous} for the next. Use {task}, {previous}, {chain_dir} in task templates." })),
+	chain: Type.Optional(Type.Union([Type.Array(ChainItem), Type.String()], { description: "CHAIN mode: sequential pipeline where each step's response becomes {previous} for the next. Use {task}, {previous}, {chain_dir} in task templates. Prefer a literal JSON array; a JSON-stringified array is tolerated and parsed." })),
 	context: Type.Optional(Type.String({
 		enum: ["fresh", "fork", "lineage"],
 		description: "'fresh', 'fork', or 'lineage'. lineage creates a clean child session linked to the parent session without inheriting transcript context. If omitted, any requested agent with defaultContext: 'fork' makes the whole invocation forked; otherwise any requested agent with defaultContext: 'lineage' makes it lineage; otherwise the default is 'fresh'.",

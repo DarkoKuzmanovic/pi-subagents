@@ -10,16 +10,7 @@ interface SubagentParamsSchema {
 			enum?: string[];
 			description?: string;
 		};
-		tasks?: {
-			items?: {
-				properties?: {
-					count?: {
-						minimum?: number;
-						description?: string;
-					};
-				};
-			};
-		};
+		tasks?: JsonSchemaNode;
 		concurrency?: {
 			minimum?: number;
 			description?: string;
@@ -55,11 +46,7 @@ interface SubagentParamsSchema {
 		skill?: JsonSchemaNode;
 		output?: JsonSchemaNode;
 		config?: JsonSchemaNode;
-		chain?: {
-			items?: JsonSchemaNode & {
-				properties?: Record<string, JsonSchemaNode>;
-			};
-		};
+		chain?: JsonSchemaNode;
 	};
 }
 
@@ -84,6 +71,21 @@ function hasAnyOfArrayWithStringItems(schema: JsonSchemaNode | undefined): boole
 		const items = branch.items;
 		return !!items && typeof items === "object" && (items as JsonSchemaNode).type === "string";
 	});
+}
+
+/** Returns the array branch of an anyOf-widened array|string schema (or the schema itself when it is a plain array). */
+function arrayBranch(schema: JsonSchemaNode | undefined): JsonSchemaNode | undefined {
+	if (!schema) return undefined;
+	if (schema.type === "array") return schema;
+	return anyOfBranches(schema).find((branch) => branch.type === "array");
+}
+
+/** Item `properties` of an array schema, tolerating the anyOf array|string widening. */
+function arrayItemProperties(schema: JsonSchemaNode | undefined): Record<string, JsonSchemaNode> | undefined {
+	const items = arrayBranch(schema)?.items;
+	if (!items || typeof items !== "object") return undefined;
+	const properties = (items as JsonSchemaNode).properties;
+	return properties && typeof properties === "object" ? (properties as Record<string, JsonSchemaNode>) : undefined;
 }
 
 let schemas: Record<string, JsonSchemaNode> = {};
@@ -119,8 +121,8 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 	});
 
 	it("includes count and concurrency on top-level parallel mode", () => {
-		const taskSchema = SubagentParams?.properties?.tasks?.items?.properties;
-		const taskCountSchema = taskSchema?.count;
+		const taskSchema = arrayItemProperties(SubagentParams?.properties?.tasks);
+		const taskCountSchema = taskSchema?.count as (JsonSchemaNode & { minimum?: number; description?: string }) | undefined;
 		assert.ok(taskCountSchema, "tasks[].count schema should exist");
 		assert.equal(taskCountSchema.minimum, 1);
 		assert.match(String(taskCountSchema.description ?? ""), /repeat/i);
@@ -132,7 +134,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(readsSchema?.type, undefined);
 		assert.equal(hasAnyOfArrayWithStringItems(readsSchema), true);
 		assert.equal(hasAnyOfType(readsSchema, "boolean"), true);
-		assert.equal(taskSchema?.progress?.type, "boolean");
+		assert.equal((taskSchema?.progress as JsonSchemaNode | undefined)?.type, "boolean");
 
 		const concurrencySchema = SubagentParams?.properties?.concurrency;
 		assert.ok(concurrencySchema, "concurrency schema should exist");
@@ -146,22 +148,18 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(singleLaneSchema?.type, "string");
 		assert.match(String(singleLaneSchema?.description ?? ""), /lane/i);
 
-		const taskLaneSchema = SubagentParams?.properties?.tasks?.items?.properties?.lane as JsonSchemaNode | undefined;
+		const taskLaneSchema = arrayItemProperties(SubagentParams?.properties?.tasks)?.lane as JsonSchemaNode | undefined;
 		assert.ok(taskLaneSchema, "tasks[].lane schema should exist");
 		assert.equal(taskLaneSchema?.type, "string");
 		assert.match(String(taskLaneSchema?.description ?? ""), /lane/i);
 
-		const chainStepLaneSchema = SubagentParams?.properties?.chain?.items?.properties?.lane as JsonSchemaNode | undefined;
+		const chainStepLaneSchema = arrayItemProperties(SubagentParams?.properties?.chain)?.lane as JsonSchemaNode | undefined;
 		assert.ok(chainStepLaneSchema, "chain[].lane schema should exist");
 		assert.equal(chainStepLaneSchema?.type, "string");
 		assert.match(String(chainStepLaneSchema?.description ?? ""), /lane/i);
 
-		const parallelLaneSchema = SubagentParams?.properties?.chain?.items?.properties?.parallel as JsonSchemaNode | undefined;
-		const parallelTaskLaneSchema = parallelLaneSchema?.items && typeof parallelLaneSchema.items === "object"
-			? (parallelLaneSchema.items as JsonSchemaNode).properties && typeof (parallelLaneSchema.items as JsonSchemaNode).properties === "object"
-				? ((parallelLaneSchema.items as JsonSchemaNode).properties as Record<string, JsonSchemaNode>).lane
-				: undefined
-			: undefined;
+		const parallelLaneSchema = arrayItemProperties(SubagentParams?.properties?.chain)?.parallel as JsonSchemaNode | undefined;
+		const parallelTaskLaneSchema = arrayItemProperties(parallelLaneSchema)?.lane;
 		assert.ok(parallelTaskLaneSchema, "chain[].parallel[].lane schema should exist");
 		assert.equal(parallelTaskLaneSchema?.type, "string");
 		assert.match(String(parallelTaskLaneSchema?.description ?? ""), /lane/i);
@@ -313,14 +311,20 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(anyOfBranches(configSchema).some((branch) => branch.type === "object" && branch.additionalProperties === true), true);
 		assert.equal(hasAnyOfType(configSchema, "string"), true);
 
-		const chainItem = SubagentParams?.properties?.chain?.items;
+		// chain itself is anyOf [array-of-objects, string] (stringified-envelope
+		// tolerance for cheap drivers); the chain ITEM stays a flat object.
+		const chainSchema = SubagentParams?.properties?.chain;
+		assert.equal(hasAnyOfType(chainSchema, "string"), true, "chain accepts a JSON-stringified array");
+		const chainItem = arrayBranch(chainSchema)?.items as (JsonSchemaNode & { properties?: Record<string, JsonSchemaNode> }) | undefined;
 		assert.ok(chainItem, "chain item schema should exist");
 		assert.equal(chainItem.type, "object");
 		assert.equal(chainItem.anyOf, undefined);
 		assert.equal(chainItem.oneOf, undefined);
 		assert.equal(chainItem.properties?.agent?.type, "string");
-		assert.equal(chainItem.properties?.parallel?.type, "array");
-		const chainParallelTask = (chainItem.properties?.parallel?.items as { properties?: Record<string, JsonSchemaNode> } | undefined)?.properties;
+		const chainParallelSchema = chainItem.properties?.parallel;
+		assert.equal(hasAnyOfType(chainParallelSchema, "string"), true, "chain[].parallel accepts a JSON-stringified array");
+		assert.equal(arrayBranch(chainParallelSchema)?.type, "array");
+		const chainParallelTask = arrayItemProperties(chainParallelSchema);
 		assert.equal(chainParallelTask?.agent?.type, "string");
 		const chainParallelOutputSchema = chainParallelTask?.output;
 		assert.equal(chainParallelOutputSchema?.type, undefined);

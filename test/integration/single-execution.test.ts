@@ -891,6 +891,40 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.ok(!(result.progress?.recentOutput ?? []).some((line) => line.includes("Forcing termination")));
 	});
 
+	it("filters routine idle chatter from drain stderr (no warning)", async () => {
+		mockPi.onCall({
+			jsonl: [events.assistantMessage("done-quiet-drain")],
+			stderr: "Done after 3 turn(s). Ready for input.\n",
+			keepAliveAfterFinalMessageMs: 10000,
+		});
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.error, undefined);
+		assert.equal(result.drainWarning, undefined);
+	});
+
+	it("preserves meaningful drain stderr as a non-fatal drainWarning", async () => {
+		mockPi.onCall({
+			jsonl: [events.assistantMessage("done-noisy-drain")],
+			stderr: "Done after 1 turn(s). Ready for input.\nDeprecationWarning: something is off\n",
+			keepAliveAfterFinalMessageMs: 10000,
+		});
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.error, undefined, "drain stderr must never become an error");
+		assert.equal(result.finalOutput, "done-noisy-drain");
+		assert.ok(result.drainWarning, "meaningful stderr should surface as drainWarning");
+		assert.match(result.drainWarning ?? "", /\[drain-kill\]/);
+		assert.match(result.drainWarning ?? "", /DeprecationWarning: something is off/);
+		assert.ok(!(result.drainWarning ?? "").includes("Ready for input"), "idle chatter must be filtered from the tail");
+	});
+
 	it("treats forced drain after empty terminal assistant output as cleanup success", async () => {
 		mockPi.onCall({
 			jsonl: [{

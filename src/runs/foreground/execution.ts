@@ -637,6 +637,21 @@ async function runSingleAttempt(
 			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && cleanTerminalAssistantStopReceived && !result.error;
 			if (code !== 0 && stderrBuf.trim() && !result.error && !forcedDrainAfterFinalSuccess) {
 				result.error = stderrBuf.trim();
+			} else if (forcedDrainAfterFinalSuccess && stderrBuf.trim()) {
+				// Our own drain-kill after a clean final message is success, but the
+				// child's stderr may carry useful diagnostics — preserve a bounded
+				// tail as a non-fatal note instead of silently dropping it. Routine
+				// pi idle chatter ("Done after N turn(s). Ready for input.") is not
+				// diagnostic and would make every drain-kill warn, so it is filtered.
+				const meaningful = stderrBuf
+					.split("\n")
+					.map((line) => line.trim())
+					.filter((line) => line && !/^Done after \d+ turn\(s\)\.?(\s*Ready for input\.?)?$/.test(line) && !/^Ready for input\.?$/.test(line));
+				if (meaningful.length > 0) {
+					const tailLines = meaningful.slice(-10).join("\n");
+					const tail = tailLines.length > 800 ? tailLines.slice(-800) : tailLines;
+					result.drainWarning = `[drain-kill] child required SIGTERM after its final message; stderr tail preserved: ${tail}`;
+				}
 			}
 			const finalCode = forcedDrainAfterFinalSuccess ? 0 : forcedTerminationSignal || signal ? (code ?? 1) : (code ?? 0);
 			finish(finalCode);
