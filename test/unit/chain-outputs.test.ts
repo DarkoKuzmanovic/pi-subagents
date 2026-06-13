@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
 	ChainOutputValidationError,
+	isStorableStepResult,
 	outputEntryFromAsyncResult,
 	outputEntryFromResult,
 	resolveOutputReferences,
@@ -126,5 +127,21 @@ describe("outputEntryFromAsyncResult (async chain loop)", () => {
 		assert.strictEqual(entry.text, "plain async output");
 		assert.strictEqual(entry.structured, undefined);
 		assert.strictEqual(entry.agent, "worker");
+	});
+});
+
+describe("isStorableStepResult (SF-1)", () => {
+	it("is true for a clean success (exit 0, no error)", () => {
+		assert.strictEqual(isStorableStepResult({ exitCode: 0 }), true);
+		assert.strictEqual(isStorableStepResult({ exitCode: 0, error: undefined }), true);
+	});
+	it("is false for a non-zero exit code", () => {
+		assert.strictEqual(isStorableStepResult({ exitCode: 1 }), false);
+	});
+	it("is false when an error is present even with exit 0", () => {
+		assert.strictEqual(isStorableStepResult({ exitCode: 0, error: "boom" }), false);
+	});
+	it("is false for a failed step (non-zero exit and error)", () => {
+		assert.strictEqual(isStorableStepResult({ exitCode: 1, error: "boom" }), false);
 	});
 });

@@ -240,8 +240,6 @@ export interface SingleResult {
 	outputSaveError?: string;
 	/** Validated structured output value, present when the step declared an outputSchema and the child called structured_output. */
 	structuredOutput?: unknown;
-	structuredOutputPath?: string;
-	structuredOutputSchemaPath?: string;
 }
 
 export interface Details {

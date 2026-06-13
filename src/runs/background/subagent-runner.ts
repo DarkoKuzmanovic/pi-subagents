@@ -42,7 +42,7 @@ import {
 } from "../shared/parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput, resetStructuredOutputCapture, type StructuredOutputRuntime } from "../shared/structured-output.ts";
-import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
+import { isStorableStepResult, outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
 import type { ChainOutputMap } from "../../shared/types.ts";
 import { formatModelAttemptNote, isRetryableModelFailure, isTransportFailure } from "../shared/model-fallback.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
@@ -1492,7 +1492,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						const taskSessionDir = config.sessionDir
 							? path.join(config.sessionDir, `parallel-${taskIdx}`)
 							: undefined;
-											const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
+						const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
 						const taskForRunResolved = { ...taskForRun, task: resolveOutputReferences(taskForRun.task, outputs) };
 
 						const singleResult = await runSingleStep(taskForRunResolved, {
@@ -1514,7 +1514,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
 						}
-						if (task.as) {
+						if (task.as && isStorableStepResult(singleResult)) {
 							outputs[task.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
 						}
 
@@ -1678,7 +1678,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			previousOutput = singleResult.output;
-			if (seqStep.as) {
+			if (seqStep.as && isStorableStepResult(singleResult)) {
 				outputs[seqStep.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
 			}
 			results.push({

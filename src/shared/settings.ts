@@ -51,7 +51,6 @@ function normalizeOutputOverride(output: string | false | undefined): string | f
 export interface SequentialStep {
 	agent: string;
 	task?: string;
-	phase?: string;
 	label?: string;
 	as?: string;
 	outputSchema?: JsonSchemaObject;
@@ -70,7 +69,6 @@ export interface SequentialStep {
 export interface ParallelTaskItem {
 	agent: string;
 	task?: string;
-	phase?: string;
 	label?: string;
 	as?: string;
 	outputSchema?: JsonSchemaObject;
@@ -121,7 +119,6 @@ export interface DynamicParallelStep {
 	collect: DynamicCollectSpec;
 	concurrency?: number;
 	failFast?: boolean;
-	phase?: string;
 	label?: string;
 }
 

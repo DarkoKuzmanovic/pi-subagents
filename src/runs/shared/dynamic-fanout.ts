@@ -7,7 +7,6 @@ export class DynamicFanoutError extends Error {}
 
 export interface DynamicFanoutConfig {
 	maxItems?: number;
-	allowRunnerFields?: boolean;
 }
 
 export interface DynamicMaterializedItem {
@@ -40,17 +39,10 @@ const SAFE_OUTPUT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ITEM_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ITEM_REF_PATTERN = /\{([A-Za-z_][A-Za-z0-9_]*)(?:\.([^{}]+))?\}/g;
 const RESERVED_TEMPLATE_NAMES = new Set(["task", "previous", "chain_dir", "outputs"]);
-const DYNAMIC_STEP_KEYS = new Set(["expand", "parallel", "collect", "concurrency", "failFast", "phase", "label"]);
-const RUNNER_DYNAMIC_STEP_KEYS = new Set([...DYNAMIC_STEP_KEYS]);
+const DYNAMIC_STEP_KEYS = new Set(["expand", "parallel", "collect", "concurrency", "failFast", "label"]);
 const DYNAMIC_EXPAND_KEYS = new Set(["from", "item", "key", "maxItems", "onEmpty"]);
 const DYNAMIC_EXPAND_FROM_KEYS = new Set(["output", "path"]);
-const DYNAMIC_PARALLEL_KEYS = new Set(["agent", "task", "phase", "label", "outputSchema", "cwd", "output", "outputMode", "reads", "progress", "skill", "model", "lane", "thinking"]);
-const RUNNER_DYNAMIC_PARALLEL_KEYS = new Set([
-	...DYNAMIC_PARALLEL_KEYS,
-	"outputName", "structured", "inheritProjectContext", "inheritSkills", "skills", "outputPath", "maxSubagentDepth",
-	"structuredOutput", "structuredOutputSchema", "tools", "extensions", "mcpDirectTools", "completionGuard", "systemPrompt",
-	"systemPromptMode", "modelCandidates", "sessionFile",
-]);
+const DYNAMIC_PARALLEL_KEYS = new Set(["agent", "task", "label", "outputSchema", "cwd", "output", "outputMode", "reads", "progress", "skill", "model", "lane", "thinking"]);
 const DYNAMIC_COLLECT_KEYS = new Set(["as", "outputSchema"]);
 
 export function isSafeOutputName(name: string): boolean {
@@ -180,7 +172,7 @@ export function hasDynamicFanoutFields(step: unknown): boolean {
 
 export function validateDynamicStepShape(step: DynamicParallelStep, stepIndex: number, config: DynamicFanoutConfig = {}): void {
 	const prefix = `Dynamic chain step ${stepIndex + 1}`;
-	assertOnlyKeys(step, config.allowRunnerFields ? RUNNER_DYNAMIC_STEP_KEYS : DYNAMIC_STEP_KEYS, prefix);
+	assertOnlyKeys(step, DYNAMIC_STEP_KEYS, prefix);
 	if (!step.expand || !step.expand.from) throw new DynamicFanoutError(`${prefix} requires expand.from.`);
 	assertOnlyKeys(step.expand, DYNAMIC_EXPAND_KEYS, `${prefix} expand`);
 	assertOnlyKeys(step.expand.from, DYNAMIC_EXPAND_FROM_KEYS, `${prefix} expand.from`);
@@ -190,16 +182,16 @@ export function validateDynamicStepShape(step: DynamicParallelStep, stepIndex: n
 	const itemName = step.expand.item ?? "item";
 	if (!ITEM_NAME_PATTERN.test(itemName)) throw new DynamicFanoutError(`${prefix} has invalid expand.item '${itemName}'.`);
 	if (step.expand.maxItems === undefined && config.maxItems === undefined) {
-		throw new DynamicFanoutError(`${prefix} requires expand.maxItems or config.chain.dynamicFanout.maxItems.`);
+		throw new DynamicFanoutError(`${prefix} requires expand.maxItems or the dynamicFanoutMaxItems config setting.`);
 	}
 	if (step.expand.maxItems !== undefined && (!Number.isInteger(step.expand.maxItems) || step.expand.maxItems < 0)) {
 		throw new DynamicFanoutError(`${prefix} expand.maxItems must be an integer >= 0.`);
 	}
 	if (config.maxItems !== undefined && (!Number.isInteger(config.maxItems) || config.maxItems < 0)) {
-		throw new DynamicFanoutError("config.chain.dynamicFanout.maxItems must be an integer >= 0.");
+		throw new DynamicFanoutError("dynamicFanoutMaxItems config setting must be an integer >= 0.");
 	}
 	if (!step.parallel || Array.isArray(step.parallel)) throw new DynamicFanoutError(`${prefix} requires a single parallel template object and cannot mix dynamic expand/collect with static parallel arrays.`);
-	assertOnlyKeys(step.parallel, config.allowRunnerFields ? RUNNER_DYNAMIC_PARALLEL_KEYS : DYNAMIC_PARALLEL_KEYS, `${prefix} parallel`);
+	assertOnlyKeys(step.parallel, DYNAMIC_PARALLEL_KEYS, `${prefix} parallel`);
 	if ("expand" in (step.parallel as object)) throw new DynamicFanoutError(`${prefix} does not support nested dynamic fanout.`);
 	if (!step.parallel.agent) throw new DynamicFanoutError(`${prefix} parallel.agent is required.`);
 	if (!step.collect?.as || !isSafeOutputName(step.collect.as)) throw new DynamicFanoutError(`${prefix} requires collect.as with a safe output name.`);

@@ -581,7 +581,7 @@ Expose a step's result with `as`, then reference it from a later step with `{out
 {
   chain: [
     {
-      agent: "scout",
+      agent: "context-builder",
       task: "List the changed source files as JSON.",
       as: "changed",
       outputSchema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] },
@@ -601,7 +601,7 @@ A chain step can expand an array from a prior step's structured output into N pa
 {
   chain: [
     {
-      agent: "scout",
+      agent: "context-builder",
       task: "Return JSON: a list of files to refactor.",
       as: "plan",
       outputSchema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] },

@@ -108,3 +108,12 @@ export function outputEntryFromAsyncResult(result: { agent: string; output: stri
 		stepIndex,
 	};
 }
+
+/**
+ * A chain step's output is published under its `as` name only when the step actually
+ * succeeded. Foreground and async paths share this predicate so a failed step can never
+ * expose partial/garbage output to downstream `{outputs.name}` references (SF-1).
+ */
+export function isStorableStepResult(result: { exitCode: number; error?: string }): boolean {
+	return result.exitCode === 0 && !result.error;
+}

@@ -7,6 +7,9 @@ import type { JsonSchemaObject } from "../../shared/types.ts";
 export const STRUCTURED_OUTPUT_SCHEMA_ENV = "PI_SUBAGENT_STRUCTURED_OUTPUT_SCHEMA";
 export const STRUCTURED_OUTPUT_CAPTURE_ENV = "PI_SUBAGENT_STRUCTURED_OUTPUT_CAPTURE";
 
+/** Upper bound on a captured structured-output file the parent will read into memory (heap-pin guard). */
+export const MAX_STRUCTURED_OUTPUT_BYTES = 5 * 1024 * 1024;
+
 export interface StructuredOutputRuntime {
 	schema: JsonSchemaObject;
 	schemaPath: string;
@@ -71,6 +74,10 @@ export function readStructuredOutput(runtime: StructuredOutputRuntime): { value?
 	}
 	let value: unknown;
 	try {
+		const stat = fs.statSync(runtime.outputPath);
+		if (stat.size > MAX_STRUCTURED_OUTPUT_BYTES) {
+			return { error: `Structured output is too large (${stat.size} bytes; limit ${MAX_STRUCTURED_OUTPUT_BYTES}).` };
+		}
 		value = JSON.parse(fs.readFileSync(runtime.outputPath, "utf-8"));
 	} catch (error) {
 		return { error: `Failed to read structured output: ${error instanceof Error ? error.message : String(error)}` };
