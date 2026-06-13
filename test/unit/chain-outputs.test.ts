@@ -154,3 +154,24 @@ describe("isStorableStepResult (SF-1)", () => {
 		assert.strictEqual(isStorableStepResult({ exitCode: 1, error: "boom" }), false);
 	});
 });
+
+
+describe("sequential outputSchema + as threading (TC-2)", () => {
+	it("threads a sequential step's structured output into a later {outputs.name} reference", () => {
+		const producer = { agent: "worker", exitCode: 0, structuredOutput: { files: ["a.ts", "b.ts"] } };
+		const outputs: ChainOutputMap = {};
+		if (isStorableStepResult(producer)) {
+			outputs.plan = outputEntryFromResult(producer as never, 0);
+		}
+		assert.strictEqual(resolveOutputReferences("apply {outputs.plan}", outputs), 'apply {"files":["a.ts","b.ts"]}');
+	});
+
+	it("does not thread a failed sequential producer's output (SF-1 parity)", () => {
+		const failed = { agent: "worker", exitCode: 1, error: "boom", structuredOutput: { files: ["x"] } };
+		const outputs: ChainOutputMap = {};
+		if (isStorableStepResult(failed)) {
+			outputs.plan = outputEntryFromResult(failed as never, 0);
+		}
+		assert.strictEqual(resolveOutputReferences("apply {outputs.plan}", outputs), "apply {outputs.plan}");
+	});
+});

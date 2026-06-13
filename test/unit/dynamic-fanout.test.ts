@@ -145,4 +145,25 @@ describe("collectDynamicResults + validateDynamicCollection", () => {
 		assert.doesNotThrow(() => validateDynamicCollection(undefined, [{ key: "a" }] as never));
 		assert.throws(() => validateDynamicCollection({ type: "array", items: { type: "string" } }, [{ key: "a" }] as never), DynamicFanoutError);
 	});
+
+	it("validates a realistic collected-results array against a structural collect.outputSchema (TC-1)", () => {
+		const items = resolveDynamicFanoutItems(step(), outputsWith({ files: ["a.ts", "b.ts"] }), 0);
+		const collected = collectDynamicResults(step(), items, [
+			{ agent: "worker", exitCode: 0, finalOutput: "did a", structuredOutput: { ok: true } },
+			{ agent: "worker", exitCode: 0, finalOutput: "did b" },
+		] as never);
+		const structuralSchema = {
+			type: "array",
+			items: {
+				type: "object",
+				required: ["key", "index", "item", "agent", "text"],
+				properties: { key: { type: "string" }, index: { type: "number" }, agent: { type: "string" }, text: { type: "string" } },
+			},
+		};
+		assert.doesNotThrow(() => validateDynamicCollection(structuralSchema, collected));
+		assert.throws(
+			() => validateDynamicCollection({ type: "array", items: { type: "object", required: ["nonexistent"] } }, collected),
+			DynamicFanoutError,
+		);
+	});
 });
