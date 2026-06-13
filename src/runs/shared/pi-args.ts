@@ -152,6 +152,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 			if (input.mcpDirectTools?.length) {
 				builtinTools.push(...resolveMcpDirectToolNames(input.mcpDirectTools, input.cwd));
 			}
+			if (input.structuredOutput && !builtinTools.includes("structured_output")) {
+				builtinTools.push("structured_output");
+			}
 			args.push("--tools", builtinTools.join(","));
 		}
 	}
