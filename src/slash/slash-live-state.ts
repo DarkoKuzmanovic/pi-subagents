@@ -23,7 +23,12 @@ interface ParallelChainStepLike {
 	parallel: Array<{ agent: string; task?: string }>;
 }
 
-type ChainStepLike = SequentialChainStepLike | ParallelChainStepLike;
+interface DynamicChainStepLike {
+	parallel: { agent: string; task?: string };
+	collect: { as: string };
+}
+
+type ChainStepLike = SequentialChainStepLike | ParallelChainStepLike | DynamicChainStepLike;
 
 const liveSnapshots = new Map<string, SlashSnapshot>();
 const finalSnapshots = new Map<string, SlashSnapshot>();
@@ -96,11 +101,18 @@ function buildParallelInitialResult(params: SubagentParamsLike): AgentToolResult
 	};
 }
 
+function isDynamicChainStep(step: ChainStepLike): step is DynamicChainStepLike {
+	return "parallel" in step && !Array.isArray(step.parallel) && "collect" in step;
+}
+
 function isParallelChainStep(step: ChainStepLike): step is ParallelChainStepLike {
 	return "parallel" in step && Array.isArray(step.parallel);
 }
 
 function chainStepLabel(step: ChainStepLike): string {
+	if (isDynamicChainStep(step)) {
+		return `fanout[${step.collect.as}]`;
+	}
 	if (isParallelChainStep(step)) {
 		return `[${step.parallel.map((entry) => entry.agent).join("+")}]`;
 	}
@@ -111,6 +123,11 @@ function flattenChainResults(chain: ChainStepLike[], fallbackTask: string | unde
 	const results: SingleResult[] = [];
 	let flatIndex = 0;
 	for (const step of chain) {
+		if (isDynamicChainStep(step)) {
+			results.push(createPlaceholderResult(`fanout[${step.collect.as}]`, step.parallel.task ?? fallbackTask ?? "", results.length === 0 ? "running" : "pending", flatIndex));
+			flatIndex++;
+			continue;
+		}
 		if (isParallelChainStep(step)) {
 			for (const task of step.parallel) {
 				results.push(createPlaceholderResult(task.agent, task.task ?? fallbackTask ?? "", results.length === 0 ? "running" : "pending", flatIndex));

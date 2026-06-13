@@ -44,6 +44,7 @@ describe("validateChainOutputBindings", () => {
 	it("rejects a reference to an entirely unknown output", () => {
 		const steps: ChainStep[] = [seq("planner", { task: "use {outputs.nope}" })];
 		assert.throws(() => validateChainOutputBindings(steps), /Unknown chain output reference/);
+		assert.throws(() => validateChainOutputBindings([seq("planner", { task: "use {outputs.nope}" })]), ChainOutputValidationError);
 	});
 
 	it("supports parallel task as names becoming available to later steps", () => {
@@ -68,8 +69,24 @@ describe("resolveOutputReferences", () => {
 		assert.strictEqual(resolveOutputReferences("keep {previous} here", outputs), "keep {previous} here");
 	});
 
-	it("throws on an unknown reference at resolve time", () => {
-		assert.throws(() => resolveOutputReferences("use {outputs.missing}", outputs), ChainOutputValidationError);
+	it("leaves an unknown output reference literal at resolve time (BLK-1 degrade)", () => {
+		assert.strictEqual(resolveOutputReferences("use {outputs.missing}", outputs), "use {outputs.missing}");
+	});
+
+	it("leaves an invalid-name output token literal at resolve time", () => {
+		assert.strictEqual(resolveOutputReferences("use {outputs.1bad}", outputs), "use {outputs.1bad}");
+	});
+
+	it("substitutes known refs while leaving unknown ones literal (mixed)", () => {
+		assert.strictEqual(
+			resolveOutputReferences("{outputs.ctx} then {outputs.missing}", outputs),
+			"CONTEXT-TEXT then {outputs.missing}",
+		);
+	});
+
+	it("never throws on a literal outputs token in injected/free text (crash vector BLK-1)", () => {
+		assert.doesNotThrow(() => resolveOutputReferences("explain the {outputs.name} syntax", outputs));
+		assert.strictEqual(resolveOutputReferences("explain the {outputs.name} syntax", outputs), "explain the {outputs.name} syntax");
 	});
 });
 

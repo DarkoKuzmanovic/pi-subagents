@@ -10,6 +10,7 @@
 ### Changed
 
 - **Async chains containing a dynamic-fanout step are rejected with a clear, actionable error** ("... not yet supported in async mode. Run this chain in the foreground ...") instead of failing obscurely. The async runner pre-bakes per-task scaffolding (session files, status slots, intercom targets, flat indices) from the static chain shape, which is incompatible with fanout's runtime-determined task count; full async dynamic fanout is tracked as a dedicated follow-up. Structured output is fully supported in async.
+- **Type change (`ChainStep`):** the `ChainStep` union now includes `DynamicParallelStep` (`{ expand, parallel, collect }`). Consumers that exhaustively switch on `ChainStep`, or that cast a non-parallel step straight to `SequentialStep`, should adopt the `isDynamicParallelStep` guard to avoid mislabeling dynamic steps.
 
 ## [0.38.2] - 2026-06-12
 

@@ -617,10 +617,12 @@ A chain step can expand an array from a prior step's structured output into N pa
 ```
 
 - `expand.from` addresses the source array by a prior `as` name + a JSON Pointer `path`.
-- `item` names the per-item template variable (`{item}`, `{item.field}`); `maxItems` caps the fanout (a `dynamicFanoutMaxItems` config knob sets the default); per-item keys are de-duplicated.
-- `collect.as` stores the per-item results array (optionally validated with `collect.outputSchema`), referenceable as `{outputs.<as>}`.
+- `item` names the per-item template variable (`{item}`, `{item.field}`); `maxItems` caps the fanout (the `dynamicFanoutMaxItems` config knob sets the default); per-item keys are de-duplicated.
+- `onEmpty` controls an empty source array: `skip` (default) stores an empty result array and continues the chain; `fail` aborts the step.
+- `concurrency` and `failFast` mirror the static-parallel semantics for the materialized tasks.
+- `collect.as` stores the per-item results (optionally validated with `collect.outputSchema`), referenceable as `{outputs.<as>}`. The substituted value is a **JSON array of per-item result objects** — each carries the expanded `item`, the `agent`, and that item's `text`/`structured` output — not a single scalar, so its size grows with the item count. Per-item `as` is **not** supported on a dynamic template; aggregate via `collect.as`.
 
-Dynamic fanout is available through direct `subagent({ chain: [...] })` JSON and saved `.chain.js` files. It is **foreground only**: an async chain containing a dynamic-fanout step is rejected with a clear error (run it in the foreground). Full async support is a tracked follow-up.
+Dynamic fanout **requires a prior step that produced a structured array** (via `as` + `outputSchema`) — structured output (above) is a hard prerequisite. It is available through direct `subagent({ chain: [...] })` JSON and saved `.chain.js` files, and is **foreground only**: an async chain containing a dynamic-fanout step is rejected with a clear error (run it in the foreground). Full async support is a tracked follow-up.
 
 ## Skills
 

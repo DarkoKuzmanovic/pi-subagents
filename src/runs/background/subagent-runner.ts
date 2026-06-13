@@ -605,120 +605,125 @@ async function runSingleStep(
 	const structuredRuntime: StructuredOutputRuntime | undefined = step.outputSchema ? createStructuredOutputRuntime(step.outputSchema) : undefined;
 	let structuredOutputValue: unknown;
 
-	for (let index = 0; index < candidates.length; index++) {
-		const candidate = candidates[index];
-		// Clear any capture written by a prior failed attempt so the final attempt must write its own.
-		resetStructuredOutputCapture(structuredRuntime);
-		const outputSnapshot = captureSingleOutputSnapshot(step.outputPath);
-		const { args, env, tempDir } = buildPiArgs({
-			baseArgs: ["--mode", "json", "-p"],
-			task,
-			sessionEnabled,
-			sessionDir,
-			sessionFile: step.sessionFile,
-			model: candidate,
-			inheritProjectContext: step.inheritProjectContext,
-			inheritSkills: step.inheritSkills,
-			tools: step.tools,
-			extensions: step.extensions,
-			systemPrompt: step.systemPrompt,
-			systemPromptMode: step.systemPromptMode,
-			mcpDirectTools: step.mcpDirectTools,
-			cwd: step.cwd ?? ctx.cwd,
-			promptFileStem: step.agent,
-			intercomSessionName: ctx.childIntercomTarget,
-			orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
-			runId: ctx.id,
-			childAgentName: step.agent,
-			childIndex: ctx.flatIndex,
-			parentEventSink: ctx.nestedRoute?.eventSink,
-			parentControlInbox: ctx.nestedRoute?.controlInbox,
-			parentRootRunId: ctx.nestedRoute?.rootRunId,
-			parentCapabilityToken: ctx.nestedRoute?.capabilityToken,
-			structuredOutput: structuredRuntime ? { schemaPath: structuredRuntime.schemaPath, outputPath: structuredRuntime.outputPath } : undefined,
-		});
-		const run = await runPiStreaming(
-			args,
-			step.cwd ?? ctx.cwd,
-			ctx.outputFile,
-			env,
-			ctx.piPackageRoot,
-			ctx.piArgv1,
-			step.maxSubagentDepth,
-			{ eventsPath, runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
-			ctx.registerInterrupt,
-			ctx.onChildEvent,
-		);
-		cleanupTempDir(tempDir);
-
-		const hiddenError = run.exitCode === 0 && !run.error ? detectSubagentError(run.messages) : null;
-		const completionGuard = run.exitCode === 0 && !run.error && !hiddenError?.hasError
-			? evaluateCompletionMutationGuard({
-				agent: step.agent,
-				tools: step.tools,
+	// Single try/finally so the structured-output temp dir is always cleaned up, even if the
+	// model-candidate loop throws (SF-2). readStructuredOutput itself never throws.
+	try {
+		for (let index = 0; index < candidates.length; index++) {
+			const candidate = candidates[index];
+			// Clear any capture written by a prior failed attempt so the final attempt must write its own.
+			resetStructuredOutputCapture(structuredRuntime);
+			const outputSnapshot = captureSingleOutputSnapshot(step.outputPath);
+			const { args, env, tempDir } = buildPiArgs({
+				baseArgs: ["--mode", "json", "-p"],
 				task,
-				messages: run.messages,
-			})
-			: undefined;
-		const completionGuardTriggered = completionGuard?.triggered === true && !run.observedMutationAttempt;
-		const completionGuardError = completionGuardTriggered
-			? "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes."
-			: undefined;
-		const effectiveExitCode = completionGuardTriggered
-			? 1
-			: hiddenError?.hasError
-				? (hiddenError.exitCode ?? 1)
-				: run.error && run.exitCode === 0
-					? 1
-					: run.exitCode;
-		const error = completionGuardError
-			?? (hiddenError?.hasError
-				? hiddenError.details
-					? `${hiddenError.errorType} failed (exit ${effectiveExitCode}): ${hiddenError.details}`
-					: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
-				: run.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined));
-		const attempt: ModelAttempt = {
-			model: candidate ?? run.model ?? step.model ?? "default",
-			success: effectiveExitCode === 0 && !error,
-			exitCode: effectiveExitCode,
-			error,
-			usage: run.usage,
-		};
-		modelAttempts.push(attempt);
-		if (candidate) attemptedModels.push(candidate);
-		completionGuardTriggeredFinal = completionGuardTriggered;
-		finalOutputSnapshot = outputSnapshot;
-		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error };
-		if (attempt.success || completionGuardTriggered) break;
-		if (!isRetryableModelFailure(error) || index === candidates.length - 1) break;
-		attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
-	}
+				sessionEnabled,
+				sessionDir,
+				sessionFile: step.sessionFile,
+				model: candidate,
+				inheritProjectContext: step.inheritProjectContext,
+				inheritSkills: step.inheritSkills,
+				tools: step.tools,
+				extensions: step.extensions,
+				systemPrompt: step.systemPrompt,
+				systemPromptMode: step.systemPromptMode,
+				mcpDirectTools: step.mcpDirectTools,
+				cwd: step.cwd ?? ctx.cwd,
+				promptFileStem: step.agent,
+				intercomSessionName: ctx.childIntercomTarget,
+				orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
+				runId: ctx.id,
+				childAgentName: step.agent,
+				childIndex: ctx.flatIndex,
+				parentEventSink: ctx.nestedRoute?.eventSink,
+				parentControlInbox: ctx.nestedRoute?.controlInbox,
+				parentRootRunId: ctx.nestedRoute?.rootRunId,
+				parentCapabilityToken: ctx.nestedRoute?.capabilityToken,
+				structuredOutput: structuredRuntime ? { schemaPath: structuredRuntime.schemaPath, outputPath: structuredRuntime.outputPath } : undefined,
+			});
+			const run = await runPiStreaming(
+				args,
+				step.cwd ?? ctx.cwd,
+				ctx.outputFile,
+				env,
+				ctx.piPackageRoot,
+				ctx.piArgv1,
+				step.maxSubagentDepth,
+				{ eventsPath, runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
+				ctx.registerInterrupt,
+				ctx.onChildEvent,
+			);
+			cleanupTempDir(tempDir);
 
-	// Output-aware finalization: if a transient transport error struck *after* the
-	// agent already produced its declared output (e.g. the planner's plan.md), the
-	// deliverable exists and the run should not be reported as a hard failure.
-	// Downgrade to success and surface the transport error as a warning note.
-	if (
-		finalResult
-		&& finalResult.exitCode !== 0
-		&& !completionGuardTriggeredFinal
-		&& isTransportFailure(finalResult.error)
-		&& singleOutputWasProduced(step.outputPath, finalOutputSnapshot)
-	) {
-		attemptNotes.push(
-			`[transport-warning] ${step.agent} produced its output (${step.outputPath}) but the model connection then failed (${finalResult.error}). Treating the run as complete.`,
-		);
-		finalResult = { ...finalResult, exitCode: 0, error: undefined };
-	}
-	if (structuredRuntime && finalResult && finalResult.exitCode === 0 && !finalResult.error) {
-		const structured = readStructuredOutput(structuredRuntime);
-		if (structured.error) {
-			finalResult = { ...finalResult, exitCode: 1, error: structured.error };
-		} else {
-			structuredOutputValue = structured.value;
+			const hiddenError = run.exitCode === 0 && !run.error ? detectSubagentError(run.messages) : null;
+			const completionGuard = run.exitCode === 0 && !run.error && !hiddenError?.hasError
+				? evaluateCompletionMutationGuard({
+					agent: step.agent,
+					tools: step.tools,
+					task,
+					messages: run.messages,
+				})
+				: undefined;
+			const completionGuardTriggered = completionGuard?.triggered === true && !run.observedMutationAttempt;
+			const completionGuardError = completionGuardTriggered
+				? "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes."
+				: undefined;
+			const effectiveExitCode = completionGuardTriggered
+				? 1
+				: hiddenError?.hasError
+					? (hiddenError.exitCode ?? 1)
+					: run.error && run.exitCode === 0
+						? 1
+						: run.exitCode;
+			const error = completionGuardError
+				?? (hiddenError?.hasError
+					? hiddenError.details
+						? `${hiddenError.errorType} failed (exit ${effectiveExitCode}): ${hiddenError.details}`
+						: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
+					: run.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined));
+			const attempt: ModelAttempt = {
+				model: candidate ?? run.model ?? step.model ?? "default",
+				success: effectiveExitCode === 0 && !error,
+				exitCode: effectiveExitCode,
+				error,
+				usage: run.usage,
+			};
+			modelAttempts.push(attempt);
+			if (candidate) attemptedModels.push(candidate);
+			completionGuardTriggeredFinal = completionGuardTriggered;
+			finalOutputSnapshot = outputSnapshot;
+			finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error };
+			if (attempt.success || completionGuardTriggered) break;
+			if (!isRetryableModelFailure(error) || index === candidates.length - 1) break;
+			attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
 		}
+
+		// Output-aware finalization: if a transient transport error struck *after* the
+		// agent already produced its declared output (e.g. the planner's plan.md), the
+		// deliverable exists and the run should not be reported as a hard failure.
+		// Downgrade to success and surface the transport error as a warning note.
+		if (
+			finalResult
+			&& finalResult.exitCode !== 0
+			&& !completionGuardTriggeredFinal
+			&& isTransportFailure(finalResult.error)
+			&& singleOutputWasProduced(step.outputPath, finalOutputSnapshot)
+		) {
+			attemptNotes.push(
+				`[transport-warning] ${step.agent} produced its output (${step.outputPath}) but the model connection then failed (${finalResult.error}). Treating the run as complete.`,
+			);
+			finalResult = { ...finalResult, exitCode: 0, error: undefined };
+		}
+		if (structuredRuntime && finalResult && finalResult.exitCode === 0 && !finalResult.error) {
+			const structured = readStructuredOutput(structuredRuntime);
+			if (structured.error) {
+				finalResult = { ...finalResult, exitCode: 1, error: structured.error };
+			} else {
+				structuredOutputValue = structured.value;
+			}
+		}
+	} finally {
+		cleanupStructuredOutputRuntime(structuredRuntime);
 	}
-	cleanupStructuredOutputRuntime(structuredRuntime);
 	const rawOutput = finalResult?.finalOutput ?? "";
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
 		? resolveSingleOutput(step.outputPath, rawOutput, finalOutputSnapshot)

@@ -67,13 +67,22 @@ export function validateChainOutputBindings(steps: ChainStep[], dynamicFanoutCon
 	}
 }
 
+/**
+ * Runtime substitution of {outputs.name} tokens. Best-effort and total: it never throws.
+ *
+ * `validateChainOutputBindings` is the authoritative authoring-time gate for output references.
+ * At runtime we must NOT throw on an unrecognized or invalid token, because the input here can be
+ * post-substitution text (it runs after {previous} / {item} expansion) and may legitimately contain
+ * a literal `{outputs.X}` substring, or reference a producer that failed at runtime. Throwing here
+ * previously crashed the whole foreground chain and, in the detached async runner, killed the entire
+ * process via the top-level handler (BLK-1). Unknown/invalid tokens are left literal, mirroring how
+ * unmatched {previous}/{item} tokens are already passed through untouched.
+ */
 export function resolveOutputReferences(template: string, outputs: ChainOutputMap): string {
 	return template.replace(OUTPUT_REF_PATTERN, (rawReference, name: string) => {
-		if (!SAFE_OUTPUT_NAME_PATTERN.test(name)) {
-			throw new ChainOutputValidationError(`Invalid chain output reference '${rawReference}'. Use {outputs.name} with /^[A-Za-z_][A-Za-z0-9_]*$/ names.`);
-		}
+		if (!SAFE_OUTPUT_NAME_PATTERN.test(name)) return rawReference;
 		const entry = outputs[name];
-		if (!entry) throw new ChainOutputValidationError(`Unknown chain output reference '${rawReference}'.`);
+		if (!entry) return rawReference;
 		return entry.text;
 	});
 }
