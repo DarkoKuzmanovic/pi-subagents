@@ -22,6 +22,7 @@ import {
 	buildChainInstructions,
 	writeInitialProgressFile,
 	getStepAgents,
+	isDynamicParallelStep,
 	isParallelStep,
 	resolveStepBehavior,
 	suppressProgressForReadOnlyTask,
@@ -953,6 +954,22 @@ export function coerceEnvelopeArrays(params: SubagentParamsLike): { params?: Sub
 				steps.push(step);
 				continue;
 			}
+			// Dynamic fanout uses a SINGLE parallel template object (not an array); skip array coercion.
+			if (stepRaw.expand !== undefined || stepRaw.collect !== undefined) {
+				let templateVal: unknown = stepRaw.parallel;
+				if (typeof templateVal === "string") {
+					try {
+						templateVal = JSON.parse(templateVal);
+					} catch (error) {
+						return { error: `chain[${index}].parallel must be a JSON object for dynamic fanout, got an unparseable string (${error instanceof Error ? error.message : String(error)}).` };
+					}
+				}
+				if (typeof templateVal !== "object" || templateVal === null || Array.isArray(templateVal)) {
+					return { error: `chain[${index}].parallel must be a single template object when used with expand/collect (got ${Array.isArray(templateVal) ? "array" : typeof templateVal}).` };
+				}
+				steps.push({ ...step, parallel: templateVal } as ChainStep);
+				continue;
+			}
 			const parallelResult = coerceJsonArrayParam(stepRaw.parallel, `chain[${index}].parallel`);
 			if (parallelResult.error) return { error: parallelResult.error };
 			steps.push({ ...step, parallel: parallelResult.value } as ChainStep);
@@ -989,6 +1006,10 @@ function findLineageUnsupportedReason(params: SubagentParamsLike): string | unde
 		if (task.cwd) return 'context: "lineage" does not support task cwd overrides yet.';
 	}
 	for (const step of params.chain ?? []) {
+		if (isDynamicParallelStep(step)) {
+			if (step.parallel.cwd) return 'context: "lineage" does not support dynamic fanout task cwd overrides yet.';
+			continue;
+		}
 		if (step.cwd) return 'context: "lineage" does not support chain step cwd overrides yet.';
 		if (isParallelStep(step)) {
 			if (step.worktree) return 'context: "lineage" does not support chain parallel worktree yet.';
@@ -1120,6 +1141,12 @@ function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["
 					...task,
 					task: wrapForkTask(task.task ?? "{previous}"),
 				})),
+			};
+		}
+		if (isDynamicParallelStep(step)) {
+			return {
+				...step,
+				parallel: { ...step.parallel, task: wrapForkTask(step.parallel.task ?? "{previous}") },
 			};
 		}
 		const sequential = step as SequentialStep;
@@ -1368,6 +1395,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		maxSubagentDepth: currentMaxSubagentDepth,
 		worktreeSetupHook: deps.config.worktreeSetupHook,
 		worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
+		dynamicFanoutMaxItems: deps.config.dynamicFanoutMaxItems,
 	});
 
 	if (chainResult.requestedAsync) {

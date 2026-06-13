@@ -41,6 +41,9 @@ import {
 	aggregateParallelOutputs,
 } from "../shared/parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
+import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput, resetStructuredOutputCapture, type StructuredOutputRuntime } from "../shared/structured-output.ts";
+import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
+import type { ChainOutputMap } from "../../shared/types.ts";
 import { formatModelAttemptNote, isRetryableModelFailure, isTransportFailure } from "../shared/model-fallback.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput, findLatestSessionFile } from "../../shared/utils.ts";
@@ -570,6 +573,7 @@ async function runSingleStep(
 	sessionFile?: string;
 	intercomTarget?: string;
 	completionGuardTriggered?: boolean;
+	structuredOutput?: unknown;
 }> {
 	const placeholderRegex = new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
 	const task = step.task.replace(placeholderRegex, () => ctx.previousOutput);
@@ -598,9 +602,13 @@ async function runSingleStep(
 	let finalResult: RunPiStreamingResult | undefined;
 	let finalOutputSnapshot: SingleOutputSnapshot | undefined;
 	let completionGuardTriggeredFinal = false;
+	const structuredRuntime: StructuredOutputRuntime | undefined = step.outputSchema ? createStructuredOutputRuntime(step.outputSchema) : undefined;
+	let structuredOutputValue: unknown;
 
 	for (let index = 0; index < candidates.length; index++) {
 		const candidate = candidates[index];
+		// Clear any capture written by a prior failed attempt so the final attempt must write its own.
+		resetStructuredOutputCapture(structuredRuntime);
 		const outputSnapshot = captureSingleOutputSnapshot(step.outputPath);
 		const { args, env, tempDir } = buildPiArgs({
 			baseArgs: ["--mode", "json", "-p"],
@@ -627,6 +635,7 @@ async function runSingleStep(
 			parentControlInbox: ctx.nestedRoute?.controlInbox,
 			parentRootRunId: ctx.nestedRoute?.rootRunId,
 			parentCapabilityToken: ctx.nestedRoute?.capabilityToken,
+			structuredOutput: structuredRuntime ? { schemaPath: structuredRuntime.schemaPath, outputPath: structuredRuntime.outputPath } : undefined,
 		});
 		const run = await runPiStreaming(
 			args,
@@ -701,6 +710,15 @@ async function runSingleStep(
 		);
 		finalResult = { ...finalResult, exitCode: 0, error: undefined };
 	}
+	if (structuredRuntime && finalResult && finalResult.exitCode === 0 && !finalResult.error) {
+		const structured = readStructuredOutput(structuredRuntime);
+		if (structured.error) {
+			finalResult = { ...finalResult, exitCode: 1, error: structured.error };
+		} else {
+			structuredOutputValue = structured.value;
+		}
+	}
+	cleanupStructuredOutputRuntime(structuredRuntime);
 	const rawOutput = finalResult?.finalOutput ?? "";
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
 		? resolveSingleOutput(step.outputPath, rawOutput, finalOutputSnapshot)
@@ -758,6 +776,7 @@ async function runSingleStep(
 		artifactPaths,
 		interrupted: finalResult?.interrupted,
 		completionGuardTriggered: completionGuardTriggeredFinal,
+		structuredOutput: structuredOutputValue,
 	};
 }
 
@@ -890,6 +909,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const { id, steps, resultPath, cwd, placeholder, taskIndex, totalTasks, maxOutput, artifactsDir, artifactConfig } =
 		config;
 	let previousOutput = "";
+	const outputs: ChainOutputMap = {};
 	const results: StepResult[] = [];
 	const overallStartTime = Date.now();
 	const shareEnabled = config.share === true;
@@ -1467,9 +1487,10 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						const taskSessionDir = config.sessionDir
 							? path.join(config.sessionDir, `parallel-${taskIdx}`)
 							: undefined;
-						const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
+											const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
+						const taskForRunResolved = { ...taskForRun, task: resolveOutputReferences(taskForRun.task, outputs) };
 
-						const singleResult = await runSingleStep(taskForRun, {
+						const singleResult = await runSingleStep(taskForRunResolved, {
 							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
 							sessionDir: taskSessionDir,
 							artifactsDir, artifactConfig, id,
@@ -1487,6 +1508,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						});
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
+						}
+						if (task.as) {
+							outputs[task.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
 						}
 
 						const taskEndTime = Date.now();
@@ -1627,7 +1651,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				agent: seqStep.agent,
 			}));
 
-			const singleResult = await runSingleStep(seqStep, {
+			const seqStepResolved = { ...seqStep, task: resolveOutputReferences(seqStep.task, outputs) };
+			const singleResult = await runSingleStep(seqStepResolved, {
 				previousOutput, placeholder, cwd, sessionEnabled,
 				sessionDir: config.sessionDir,
 				artifactsDir, artifactConfig, id,
@@ -1648,6 +1673,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			previousOutput = singleResult.output;
+			if (seqStep.as) {
+				outputs[seqStep.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
+			}
 			results.push({
 				agent: singleResult.agent,
 				output: singleResult.output,

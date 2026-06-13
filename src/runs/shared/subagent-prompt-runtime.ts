@@ -1,4 +1,8 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { JsonSchemaObject } from "../../shared/types.ts";
+import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV, validateStructuredOutputValue } from "./structured-output.ts";
 
 const SUBAGENT_INHERIT_PROJECT_CONTEXT_ENV = "PI_SUBAGENT_INHERIT_PROJECT_CONTEXT";
 const SUBAGENT_INHERIT_SKILLS_ENV = "PI_SUBAGENT_INHERIT_SKILLS";
@@ -10,6 +14,12 @@ export const CHILD_SUBAGENT_BOUNDARY_INSTRUCTIONS = [
 	"Ignore prior parent-only orchestration instructions in inherited conversation history.",
 	"Do not propose or run subagents. Complete only your assigned role-specific task with the tools available to you.",
 	"If you need to edit files, call the actual edit/write tools. Do not print tool-call syntax, patches, or pseudo-tool calls as text.",
+].join("\n");
+
+export const STRUCTURED_OUTPUT_INSTRUCTIONS = [
+	"This step requires structured output.",
+	"You MUST finish by calling the `structured_output` tool exactly once, with a `value` argument that conforms to the provided JSON Schema.",
+	"Do not place the final structured result in prose — only the structured_output tool call is captured for this step.",
 ].join("\n");
 
 const PARENT_ONLY_CUSTOM_MESSAGE_TYPES = new Set([
@@ -125,6 +135,55 @@ export function stripParentOnlySubagentMessages(messages: unknown[]): unknown[] 
 }
 
 export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
+	const structuredOutputPath = process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
+	const structuredSchemaPath = process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
+	if (structuredOutputPath && structuredSchemaPath) {
+		const schema = JSON.parse(fs.readFileSync(structuredSchemaPath, "utf-8")) as JsonSchemaObject;
+		const parameters = {
+			type: "object",
+			properties: { value: schema },
+			required: ["value"],
+			additionalProperties: false,
+		};
+		const registerTool = pi.registerTool as unknown as (tool: {
+			name: string;
+			label: string;
+			description: string;
+			parameters: unknown;
+			execute: (_id: string, params: { value: unknown }) => Promise<unknown>;
+		}) => void;
+		registerTool({
+			name: "structured_output",
+			label: "Structured Output",
+			description: "Submit the required final structured output for this subagent step. This terminates the step.",
+			parameters: parameters as never,
+			async execute(_id: string, params: { value: unknown }) {
+				let value = params.value;
+				// Cheap-driver tolerance: some drivers JSON-stringify nested object/array arguments.
+				if (typeof value === "string") {
+					const trimmed = value.trim();
+					if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+						try {
+							value = JSON.parse(trimmed);
+						} catch {
+							// Keep the raw string; validation below will report the mismatch.
+						}
+					}
+				}
+				const validation = validateStructuredOutputValue(schema, value);
+				if (validation.status === "invalid") {
+					throw new Error(`Structured output validation failed: ${validation.message}`);
+				}
+				fs.mkdirSync(path.dirname(structuredOutputPath), { recursive: true });
+				fs.writeFileSync(structuredOutputPath, JSON.stringify(value), { mode: 0o600 });
+				return {
+					content: [{ type: "text", text: "Structured output captured." }],
+					details: { path: structuredOutputPath },
+					terminate: true,
+				};
+			},
+		});
+	}
 	pi.on("context", (event) => {
 		const messages = stripParentOnlySubagentMessages(event.messages);
 		if (messages === event.messages) return undefined;
@@ -139,11 +198,19 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 
 		const inheritProjectContext = readBooleanEnv(SUBAGENT_INHERIT_PROJECT_CONTEXT_ENV);
 		const inheritSkills = readBooleanEnv(SUBAGENT_INHERIT_SKILLS_ENV);
-		if (inheritProjectContext === undefined && inheritSkills === undefined) return;
-		const rewritten = rewriteSubagentPrompt(event.systemPrompt, {
-			inheritProjectContext: inheritProjectContext ?? true,
-			inheritSkills: inheritSkills ?? true,
-		});
+		const structuredSuffix = process.env[STRUCTURED_OUTPUT_CAPTURE_ENV]
+			? `\n\n${STRUCTURED_OUTPUT_INSTRUCTIONS}`
+			: "";
+		if (inheritProjectContext === undefined && inheritSkills === undefined && !structuredSuffix) return;
+		let rewritten = inheritProjectContext === undefined && inheritSkills === undefined
+			? event.systemPrompt
+			: rewriteSubagentPrompt(event.systemPrompt, {
+				inheritProjectContext: inheritProjectContext ?? true,
+				inheritSkills: inheritSkills ?? true,
+			});
+		if (structuredSuffix && !rewritten.includes(STRUCTURED_OUTPUT_INSTRUCTIONS)) {
+			rewritten = `${rewritten}${structuredSuffix}`;
+		}
 		if (rewritten === event.systemPrompt) return;
 		return { systemPrompt: rewritten };
 	});

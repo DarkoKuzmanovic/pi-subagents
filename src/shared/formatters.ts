@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Usage, SingleResult } from "./types.ts";
 import type { ChainStep } from "./settings.ts";
-import { isParallelStep } from "./settings.ts";
+import { isDynamicParallelStep, isParallelStep } from "./settings.ts";
 
 /**
  * Format token count with k suffix for large numbers
@@ -54,7 +54,7 @@ export function buildChainSummary(
 	failedStep?: { index: number; error: string; recoveredOutput?: string },
 ): string {
 	const stepNames = steps
-		.map((step) => (isParallelStep(step) ? `parallel[${step.parallel.length}]` : step.agent))
+		.map((step) => (isDynamicParallelStep(step) ? `fanout[${step.collect.as}]` : isParallelStep(step) ? `parallel[${step.parallel.length}]` : step.agent))
 		.join(" → ");
 
 	const totalDuration = results.reduce((sum, r) => sum + (r.progress?.durationMs || 0), 0);

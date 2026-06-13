@@ -47,6 +47,7 @@ import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { applyEffectiveThinkingSuffix, applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
+import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput, resetStructuredOutputCapture, type StructuredOutputRuntime } from "../shared/structured-output.ts";
 import { captureSingleOutputSnapshot, formatSavedOutputReference, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
@@ -119,6 +120,7 @@ async function runSingleAttempt(
 		artifactPaths?: ArtifactPaths;
 		attemptNotes: string[];
 		outputSnapshot?: SingleOutputSnapshot;
+		structuredOutput?: { schemaPath: string; outputPath: string };
 	},
 ): Promise<SingleResult> {
 	const effectiveThinking = options.effectiveThinking ?? agent.thinking;
@@ -150,6 +152,7 @@ async function runSingleAttempt(
 		parentControlInbox: options.nestedRoute?.controlInbox,
 		parentRootRunId: options.nestedRoute?.rootRunId,
 		parentCapabilityToken: options.nestedRoute?.capabilityToken,
+		structuredOutput: shared.structuredOutput,
 	});
 
 	const result: SingleResult = {
@@ -902,10 +905,15 @@ export async function runSync(
 	}
 
 	let lastResult: SingleResult | undefined;
+	const structuredRuntime: StructuredOutputRuntime | undefined = options.outputSchema
+		? createStructuredOutputRuntime(options.outputSchema)
+		: undefined;
 	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
 	for (let i = 0; i < modelsToTry.length; i++) {
 		const candidate = modelsToTry[i];
 		if (candidate) attemptedModels.push(candidate);
+		// Clear any capture written by a prior failed attempt so the final attempt must write its own.
+		resetStructuredOutputCapture(structuredRuntime);
 		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
 		const result = await runSingleAttempt(runtimeCwd, agent, task, candidate, options, {
 			sessionEnabled,
@@ -916,6 +924,9 @@ export async function runSync(
 			artifactPaths: artifactPathsResult,
 			attemptNotes,
 			outputSnapshot,
+			structuredOutput: structuredRuntime
+				? { schemaPath: structuredRuntime.schemaPath, outputPath: structuredRuntime.outputPath }
+				: undefined,
 		});
 		lastResult = result;
 		sumUsage(aggregateUsage, result.usage);
@@ -963,46 +974,60 @@ export async function runSync(
 		}
 	}
 
-	if (artifactPathsResult && options.artifactConfig?.enabled !== false) {
-		result.artifactPaths = artifactPathsResult;
-		if (options.artifactConfig?.includeOutput !== false) {
-			writeArtifact(artifactPathsResult.outputPath, artifactOutputByResult.get(result) ?? result.finalOutput ?? "");
+	if (structuredRuntime && result.exitCode === 0 && !result.error) {
+		const structured = readStructuredOutput(structuredRuntime);
+		if (structured.error) {
+			result.error = structured.error;
+			result.exitCode = 1;
+		} else {
+			result.structuredOutput = structured.value;
 		}
-		if (options.artifactConfig?.includeMetadata !== false) {
-			writeMetadata(artifactPathsResult.metadataPath, {
-				runId: options.runId,
-				agent: agentName,
-				task,
-				exitCode: result.exitCode,
-				usage: result.usage,
-				model: result.model,
-				attemptedModels: result.attemptedModels,
-				modelAttempts: result.modelAttempts,
-				durationMs: result.progressSummary?.durationMs,
-				toolCount: result.progressSummary?.toolCount,
-				error: result.error,
-				skills: result.skills,
-				skillsWarning: result.skillsWarning,
-				timestamp: Date.now(),
-			});
-		}
-
-		if (options.maxOutput) {
-			const config = { ...DEFAULT_MAX_OUTPUT, ...options.maxOutput };
-			const truncationResult = truncateOutput(result.finalOutput ?? "", config, artifactPathsResult.outputPath);
-			if (truncationResult.truncated) result.truncation = truncationResult;
-		}
-	} else if (options.maxOutput) {
-		const config = { ...DEFAULT_MAX_OUTPUT, ...options.maxOutput };
-		const truncationResult = truncateOutput(result.finalOutput ?? "", config);
-		if (truncationResult.truncated) result.truncation = truncationResult;
 	}
 
-	if (options.sessionFile && (existsSync(options.sessionFile) || result.messages?.length)) {
-		result.sessionFile = options.sessionFile;
-	} else if (shareEnabled && options.sessionDir) {
-		const sessionFile = findLatestSessionFile(options.sessionDir);
-		if (sessionFile) result.sessionFile = sessionFile;
+	try {
+		if (artifactPathsResult && options.artifactConfig?.enabled !== false) {
+			result.artifactPaths = artifactPathsResult;
+			if (options.artifactConfig?.includeOutput !== false) {
+				writeArtifact(artifactPathsResult.outputPath, artifactOutputByResult.get(result) ?? result.finalOutput ?? "");
+			}
+			if (options.artifactConfig?.includeMetadata !== false) {
+				writeMetadata(artifactPathsResult.metadataPath, {
+					runId: options.runId,
+					agent: agentName,
+					task,
+					exitCode: result.exitCode,
+					usage: result.usage,
+					model: result.model,
+					attemptedModels: result.attemptedModels,
+					modelAttempts: result.modelAttempts,
+					durationMs: result.progressSummary?.durationMs,
+					toolCount: result.progressSummary?.toolCount,
+					error: result.error,
+					skills: result.skills,
+					skillsWarning: result.skillsWarning,
+					timestamp: Date.now(),
+				});
+			}
+
+			if (options.maxOutput) {
+				const config = { ...DEFAULT_MAX_OUTPUT, ...options.maxOutput };
+				const truncationResult = truncateOutput(result.finalOutput ?? "", config, artifactPathsResult.outputPath);
+				if (truncationResult.truncated) result.truncation = truncationResult;
+			}
+		} else if (options.maxOutput) {
+			const config = { ...DEFAULT_MAX_OUTPUT, ...options.maxOutput };
+			const truncationResult = truncateOutput(result.finalOutput ?? "", config);
+			if (truncationResult.truncated) result.truncation = truncationResult;
+		}
+
+		if (options.sessionFile && (existsSync(options.sessionFile) || result.messages?.length)) {
+			result.sessionFile = options.sessionFile;
+		} else if (shareEnabled && options.sessionDir) {
+			const sessionFile = findLatestSessionFile(options.sessionDir);
+			if (sessionFile) result.sessionFile = sessionFile;
+		}
+	} finally {
+		cleanupStructuredOutputRuntime(structuredRuntime);
 	}
 
 	return result;

@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveMcpDirectToolNames } from "./mcp-direct-tool-allowlist.ts";
+import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV } from "./structured-output.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const TASK_ARG_LIMIT = 8000;
@@ -56,6 +57,7 @@ interface BuildPiArgsInput {
 	parentPath?: Array<{ runId: string; stepIndex?: number; agent?: string }>;
 	parentCapabilityToken?: string;
 	skipContextFiles?: boolean;
+	structuredOutput?: { schemaPath: string; outputPath: string };
 }
 
 interface BuildPiArgsResult {
@@ -230,6 +232,11 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	if (input.parentDepth !== undefined) env[SUBAGENT_PARENT_DEPTH_ENV] = String(input.parentDepth);
 	if (input.parentPath) env[SUBAGENT_PARENT_PATH_ENV] = JSON.stringify(input.parentPath);
 	if (input.parentCapabilityToken) env[SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV] = input.parentCapabilityToken;
+
+	if (input.structuredOutput) {
+		env[STRUCTURED_OUTPUT_SCHEMA_ENV] = input.structuredOutput.schemaPath;
+		env[STRUCTURED_OUTPUT_CAPTURE_ENV] = input.structuredOutput.outputPath;
+	}
 
 	return { args, env, tempDir };
 }

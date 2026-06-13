@@ -1,3 +1,5 @@
+import type { JsonSchemaObject } from "../../shared/types.ts";
+
 export interface RunnerSubagentStep {
 	agent: string;
 	task: string;
@@ -16,6 +18,10 @@ export interface RunnerSubagentStep {
 	outputMode?: "inline" | "file-only";
 	sessionFile?: string;
 	maxSubagentDepth?: number;
+	/** Tier 1 structured output: when set, the child must finish by calling structured_output with a schema-valid value. */
+	outputSchema?: JsonSchemaObject;
+	/** Chain-output binding name; this step's (structured) output is exposed as {outputs.<as>}. */
+	as?: string;
 }
 
 export interface ParallelStepGroup {

@@ -13,8 +13,9 @@ import type { AgentConfig } from "../../agents/agents.ts";
 import { formatUnknownAgentError } from "../../agents/agent-selection.ts";
 import { applyEffectiveThinkingSuffix } from "../shared/pi-args.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { buildChainInstructions, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
+import { ChainOutputValidationError, validateChainOutputBindings } from "../shared/chain-outputs.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { resolveChildCwd } from "../../shared/utils.ts";
@@ -288,6 +289,15 @@ export function executeAsyncChain(
 		? (isParallelStep(firstStep) ? firstStep.parallel[0]?.task : (firstStep as SequentialStep).task)
 		: undefined);
 
+	const dynamicStepIndex = chain.findIndex((s) => isDynamicParallelStep(s));
+	if (dynamicStepIndex >= 0) {
+		return {
+			content: [{ type: "text", text: `Dynamic fanout (expand/collect) at chain step ${dynamicStepIndex + 1} is not yet supported in async mode. Run this chain in the foreground (omit async), where dynamic fanout is fully supported.` }],
+			isError: true,
+			details: { mode: resultMode, results: [] },
+		};
+	}
+
 	for (const s of chain) {
 		const stepAgents = isParallelStep(s)
 			? s.parallel.map((t) => t.agent)
@@ -301,6 +311,19 @@ export function executeAsyncChain(
 				};
 			}
 		}
+	}
+
+	try {
+		validateChainOutputBindings(chain);
+	} catch (error) {
+		if (error instanceof ChainOutputValidationError) {
+			return {
+				content: [{ type: "text", text: error.message }],
+				isError: true,
+				details: { mode: resultMode, results: [] },
+			};
+		}
+		throw error;
 	}
 
 	const asyncDir = path.join(ASYNC_DIR, id);
@@ -373,6 +396,8 @@ export function executeAsyncChain(
 			outputMode: behavior.outputMode,
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
+			outputSchema: s.outputSchema,
+			as: s.as,
 		};
 	};
 
