@@ -81,6 +81,7 @@ export function validateChainOutputBindings(steps: ChainStep[], dynamicFanoutCon
 export function resolveOutputReferences(template: string, outputs: ChainOutputMap): string {
 	return template.replace(OUTPUT_REF_PATTERN, (rawReference, name: string) => {
 		if (!SAFE_OUTPUT_NAME_PATTERN.test(name)) return rawReference;
+		if (!Object.hasOwn(outputs, name)) return rawReference;
 		const entry = outputs[name];
 		if (!entry) return rawReference;
 		return entry.text;

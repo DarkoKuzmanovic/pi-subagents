@@ -89,6 +89,15 @@ describe("resolveOutputReferences", () => {
 		assert.doesNotThrow(() => resolveOutputReferences("explain the {outputs.name} syntax", outputs));
 		assert.strictEqual(resolveOutputReferences("explain the {outputs.name} syntax", outputs), "explain the {outputs.name} syntax");
 	});
+
+	it("leaves inherited Object.prototype names literal (no prototype-chain leak)", () => {
+		for (const proto of ["toString", "constructor", "hasOwnProperty", "valueOf", "__proto__"]) {
+			assert.strictEqual(
+				resolveOutputReferences(`x {outputs.${proto}} y`, outputs),
+				`x {outputs.${proto}} y`,
+			);
+		}
+	});
 });
 
 describe("outputEntryFromResult", () => {
