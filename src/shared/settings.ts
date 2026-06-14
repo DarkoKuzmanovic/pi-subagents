@@ -7,7 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "../agents/agents.ts";
 import { normalizeSkillInput } from "../agents/skills.ts";
-import { CHAIN_RUNS_DIR, type OutputMode } from "./types.ts";
+import { CHAIN_RUNS_DIR, type JsonSchemaObject, type OutputMode } from "./types.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const INITIAL_PROGRESS_CONTENT = "# Progress\n\n## Status\nIn Progress\n\n## Tasks\n\n## Files Changed\n\n## Notes\n";
 
@@ -51,6 +51,9 @@ function normalizeOutputOverride(output: string | false | undefined): string | f
 export interface SequentialStep {
 	agent: string;
 	task?: string;
+	label?: string;
+	as?: string;
+	outputSchema?: JsonSchemaObject;
 	cwd?: string;
 	output?: string | false;
 	outputMode?: OutputMode;
@@ -66,6 +69,9 @@ export interface SequentialStep {
 export interface ParallelTaskItem {
 	agent: string;
 	task?: string;
+	label?: string;
+	as?: string;
+	outputSchema?: JsonSchemaObject;
 	cwd?: string;
 	count?: number;
 	output?: string | false;
@@ -87,8 +93,37 @@ export interface ParallelStep {
 	worktree?: boolean;
 }
 
+/** Source array spec for dynamic fanout: expand an array from a prior step's structured output. */
+export interface DynamicExpandSpec {
+	from: {
+		output: string;
+		path: string;
+	};
+	item?: string;
+	key?: string;
+	maxItems?: number;
+	onEmpty?: "skip" | "fail";
+}
+
+export type DynamicParallelTemplate = Omit<ParallelTaskItem, "as" | "count">;
+
+export interface DynamicCollectSpec {
+	as: string;
+	outputSchema?: JsonSchemaObject;
+}
+
+/** Dynamic fanout step: expand a structured array, run one parallel template per item, collect results. */
+export interface DynamicParallelStep {
+	expand: DynamicExpandSpec;
+	parallel: DynamicParallelTemplate;
+	collect: DynamicCollectSpec;
+	concurrency?: number;
+	failFast?: boolean;
+	label?: string;
+}
+
 /** Union type for chain steps */
-export type ChainStep = SequentialStep | ParallelStep;
+export type ChainStep = SequentialStep | ParallelStep | DynamicParallelStep;
 
 // =============================================================================
 // Type Guards
@@ -98,8 +133,15 @@ export function isParallelStep(step: ChainStep): step is ParallelStep {
 	return "parallel" in step && Array.isArray((step as ParallelStep).parallel);
 }
 
+export function isDynamicParallelStep(step: ChainStep): step is DynamicParallelStep {
+	return "expand" in step && "collect" in step && "parallel" in step && !Array.isArray((step as { parallel?: unknown }).parallel);
+}
+
 /** Get all agent names in a step (single for sequential, multiple for parallel) */
 export function getStepAgents(step: ChainStep): string[] {
+	if (isDynamicParallelStep(step)) {
+		return [step.parallel.agent];
+	}
 	if (isParallelStep(step)) {
 		return step.parallel.map((t) => t.agent);
 	}

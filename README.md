@@ -559,6 +559,7 @@ Task templates support:
 | `{task}`      | Original task from the first step.                                     |
 | `{previous}`  | Output from the prior step, or aggregated output from a parallel step. |
 | `{chain_dir}` | Path to the chain artifact directory.                                  |
+| `{outputs.name}` | A prior step's captured output, by its `as` name (see Structured output). |
 
 Parallel outputs are aggregated with clear separators before being passed to the next step:
 
@@ -569,6 +570,59 @@ Parallel outputs are aggregated with clear separators before being passed to the
 === Parallel Task 2 (worker) ===
 ...
 ```
+
+## Structured output and named outputs
+
+A chain step (sequential, or a parallel task) can require its child to return **schema-valid structured output** instead of free-form prose. Set `outputSchema` to a JSON Schema object; the child must finish by calling the `structured_output` tool with a value that validates against it. The value is captured out-of-band (not parsed from prose) — a prose-only or invalid result fails the step.
+
+Expose a step's result with `as`, then reference it from a later step with `{outputs.name}` (substituted with compact structured JSON when the step produced structured output, otherwise the step's text):
+
+```ts
+{
+  chain: [
+    {
+      agent: "context-builder",
+      task: "List the changed source files as JSON.",
+      as: "changed",
+      outputSchema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] },
+    },
+    { agent: "reviewer", task: "Review these files: {outputs.changed}" },
+  ],
+}
+```
+
+Bindings are validated before execution: `as` names must be unique valid identifiers, and `{outputs.name}` may only reference a step that has already produced its output. Structured output works in the **foreground** and in **async/background** runs (single dispatch and chains).
+
+## Dynamic fanout (`expand` / `collect`)
+
+A chain step can expand an array from a prior step's structured output into N parallel subagent tasks, then collect the results back into a single named array. Use a single `parallel` **template** object (not an array) together with `expand` and `collect`:
+
+```ts
+{
+  chain: [
+    {
+      agent: "context-builder",
+      task: "Return JSON: a list of files to refactor.",
+      as: "plan",
+      outputSchema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] },
+    },
+    {
+      expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 20 },
+      parallel: { agent: "worker", task: "Refactor {file}" },
+      collect: { as: "results" },
+    },
+    { agent: "reviewer", task: "Summarize: {outputs.results}" },
+  ],
+}
+```
+
+- `expand.from` addresses the source array by a prior `as` name + a JSON Pointer `path`.
+- `item` names the per-item template variable (`{item}`, `{item.field}`); `maxItems` caps the fanout (the `dynamicFanoutMaxItems` config knob sets the default); per-item keys are de-duplicated.
+- `onEmpty` controls an empty source array: `skip` (default) stores an empty result array and continues the chain; `fail` aborts the step.
+- `concurrency` and `failFast` mirror the static-parallel semantics for the materialized tasks.
+- `collect.as` stores the per-item results (optionally validated with `collect.outputSchema`), referenceable as `{outputs.<as>}`. The substituted value is a **JSON array of per-item result objects** — each carries the expanded `item`, the `agent`, and that item's `text`/`structured` output — not a single scalar, so its size grows with the item count. Per-item `as` is **not** supported on a dynamic template; aggregate via `collect.as`.
+
+Dynamic fanout **requires a prior step that produced a structured array** (via `as` + `outputSchema`) — structured output (above) is a hard prerequisite. It is available through direct `subagent({ chain: [...] })` JSON and saved `.chain.js` files, and is **foreground only**: an async chain containing a dynamic-fanout step is rejected with a clear error (run it in the foreground). Full async support is a tracked follow-up.
 
 ## Skills
 

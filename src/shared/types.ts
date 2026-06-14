@@ -19,6 +19,17 @@ export interface MaxOutputConfig {
 
 export type OutputMode = "inline" | "file-only";
 
+export type JsonSchemaObject = Record<string, unknown>;
+
+export interface ChainOutputMapEntry {
+	text: string;
+	structured?: unknown;
+	agent: string;
+	stepIndex: number;
+}
+
+export type ChainOutputMap = Record<string, ChainOutputMapEntry>;
+
 export interface SavedOutputReference {
 	path: string;
 	bytes: number;
@@ -227,6 +238,8 @@ export interface SingleResult {
 	savedOutputPath?: string;
 	outputReference?: SavedOutputReference;
 	outputSaveError?: string;
+	/** Validated structured output value, present when the step declared an outputSchema and the child called structured_output. */
+	structuredOutput?: unknown;
 }
 
 export interface Details {
@@ -521,6 +534,8 @@ export interface RunSyncOptions {
 	/** Skip loading context files (AGENTS.md etc.) for fresh-context children */
 	skipContextFiles?: boolean;
 	nestedRoute?: NestedRouteInfo;
+	/** When set, the child must finish by calling structured_output with a schema-valid value; the validated value is attached to the result. */
+	outputSchema?: JsonSchemaObject;
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";
@@ -546,6 +561,8 @@ export interface ExtensionConfig {
 	worktreeSetupHookTimeoutMs?: number;
 	intercomBridge?: IntercomBridgeConfig;
 	inlineReadMaxBytes?: number;
+	/** Default cap on dynamic-fanout expanded items when a step omits expand.maxItems. */
+	dynamicFanoutMaxItems?: number;
 }
 // ============================================================================
 // Nested run types (upstream v0.25.0 fanout feature)

@@ -41,6 +41,9 @@ import {
 	aggregateParallelOutputs,
 } from "../shared/parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
+import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput, resetStructuredOutputCapture, type StructuredOutputRuntime } from "../shared/structured-output.ts";
+import { isStorableStepResult, outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
+import type { ChainOutputMap } from "../../shared/types.ts";
 import { formatModelAttemptNote, isRetryableModelFailure, isTransportFailure } from "../shared/model-fallback.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput, findLatestSessionFile } from "../../shared/utils.ts";
@@ -570,6 +573,7 @@ async function runSingleStep(
 	sessionFile?: string;
 	intercomTarget?: string;
 	completionGuardTriggered?: boolean;
+	structuredOutput?: unknown;
 }> {
 	const placeholderRegex = new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
 	const task = step.task.replace(placeholderRegex, () => ctx.previousOutput);
@@ -598,108 +602,127 @@ async function runSingleStep(
 	let finalResult: RunPiStreamingResult | undefined;
 	let finalOutputSnapshot: SingleOutputSnapshot | undefined;
 	let completionGuardTriggeredFinal = false;
+	const structuredRuntime: StructuredOutputRuntime | undefined = step.outputSchema ? createStructuredOutputRuntime(step.outputSchema) : undefined;
+	let structuredOutputValue: unknown;
 
-	for (let index = 0; index < candidates.length; index++) {
-		const candidate = candidates[index];
-		const outputSnapshot = captureSingleOutputSnapshot(step.outputPath);
-		const { args, env, tempDir } = buildPiArgs({
-			baseArgs: ["--mode", "json", "-p"],
-			task,
-			sessionEnabled,
-			sessionDir,
-			sessionFile: step.sessionFile,
-			model: candidate,
-			inheritProjectContext: step.inheritProjectContext,
-			inheritSkills: step.inheritSkills,
-			tools: step.tools,
-			extensions: step.extensions,
-			systemPrompt: step.systemPrompt,
-			systemPromptMode: step.systemPromptMode,
-			mcpDirectTools: step.mcpDirectTools,
-			cwd: step.cwd ?? ctx.cwd,
-			promptFileStem: step.agent,
-			intercomSessionName: ctx.childIntercomTarget,
-			orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
-			runId: ctx.id,
-			childAgentName: step.agent,
-			childIndex: ctx.flatIndex,
-			parentEventSink: ctx.nestedRoute?.eventSink,
-			parentControlInbox: ctx.nestedRoute?.controlInbox,
-			parentRootRunId: ctx.nestedRoute?.rootRunId,
-			parentCapabilityToken: ctx.nestedRoute?.capabilityToken,
-		});
-		const run = await runPiStreaming(
-			args,
-			step.cwd ?? ctx.cwd,
-			ctx.outputFile,
-			env,
-			ctx.piPackageRoot,
-			ctx.piArgv1,
-			step.maxSubagentDepth,
-			{ eventsPath, runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
-			ctx.registerInterrupt,
-			ctx.onChildEvent,
-		);
-		cleanupTempDir(tempDir);
-
-		const hiddenError = run.exitCode === 0 && !run.error ? detectSubagentError(run.messages) : null;
-		const completionGuard = run.exitCode === 0 && !run.error && !hiddenError?.hasError
-			? evaluateCompletionMutationGuard({
-				agent: step.agent,
-				tools: step.tools,
+	// Single try/finally so the structured-output temp dir is always cleaned up, even if the
+	// model-candidate loop throws (SF-2). readStructuredOutput itself never throws.
+	try {
+		for (let index = 0; index < candidates.length; index++) {
+			const candidate = candidates[index];
+			// Clear any capture written by a prior failed attempt so the final attempt must write its own.
+			resetStructuredOutputCapture(structuredRuntime);
+			const outputSnapshot = captureSingleOutputSnapshot(step.outputPath);
+			const { args, env, tempDir } = buildPiArgs({
+				baseArgs: ["--mode", "json", "-p"],
 				task,
-				messages: run.messages,
-			})
-			: undefined;
-		const completionGuardTriggered = completionGuard?.triggered === true && !run.observedMutationAttempt;
-		const completionGuardError = completionGuardTriggered
-			? "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes."
-			: undefined;
-		const effectiveExitCode = completionGuardTriggered
-			? 1
-			: hiddenError?.hasError
-				? (hiddenError.exitCode ?? 1)
-				: run.error && run.exitCode === 0
-					? 1
-					: run.exitCode;
-		const error = completionGuardError
-			?? (hiddenError?.hasError
-				? hiddenError.details
-					? `${hiddenError.errorType} failed (exit ${effectiveExitCode}): ${hiddenError.details}`
-					: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
-				: run.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined));
-		const attempt: ModelAttempt = {
-			model: candidate ?? run.model ?? step.model ?? "default",
-			success: effectiveExitCode === 0 && !error,
-			exitCode: effectiveExitCode,
-			error,
-			usage: run.usage,
-		};
-		modelAttempts.push(attempt);
-		if (candidate) attemptedModels.push(candidate);
-		completionGuardTriggeredFinal = completionGuardTriggered;
-		finalOutputSnapshot = outputSnapshot;
-		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error };
-		if (attempt.success || completionGuardTriggered) break;
-		if (!isRetryableModelFailure(error) || index === candidates.length - 1) break;
-		attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
-	}
+				sessionEnabled,
+				sessionDir,
+				sessionFile: step.sessionFile,
+				model: candidate,
+				inheritProjectContext: step.inheritProjectContext,
+				inheritSkills: step.inheritSkills,
+				tools: step.tools,
+				extensions: step.extensions,
+				systemPrompt: step.systemPrompt,
+				systemPromptMode: step.systemPromptMode,
+				mcpDirectTools: step.mcpDirectTools,
+				cwd: step.cwd ?? ctx.cwd,
+				promptFileStem: step.agent,
+				intercomSessionName: ctx.childIntercomTarget,
+				orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
+				runId: ctx.id,
+				childAgentName: step.agent,
+				childIndex: ctx.flatIndex,
+				parentEventSink: ctx.nestedRoute?.eventSink,
+				parentControlInbox: ctx.nestedRoute?.controlInbox,
+				parentRootRunId: ctx.nestedRoute?.rootRunId,
+				parentCapabilityToken: ctx.nestedRoute?.capabilityToken,
+				structuredOutput: structuredRuntime ? { schemaPath: structuredRuntime.schemaPath, outputPath: structuredRuntime.outputPath } : undefined,
+			});
+			const run = await runPiStreaming(
+				args,
+				step.cwd ?? ctx.cwd,
+				ctx.outputFile,
+				env,
+				ctx.piPackageRoot,
+				ctx.piArgv1,
+				step.maxSubagentDepth,
+				{ eventsPath, runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
+				ctx.registerInterrupt,
+				ctx.onChildEvent,
+			);
+			cleanupTempDir(tempDir);
 
-	// Output-aware finalization: if a transient transport error struck *after* the
-	// agent already produced its declared output (e.g. the planner's plan.md), the
-	// deliverable exists and the run should not be reported as a hard failure.
-	// Downgrade to success and surface the transport error as a warning note.
-	if (
-		finalResult
-		&& finalResult.exitCode !== 0
-		&& !completionGuardTriggeredFinal
-		&& isTransportFailure(finalResult.error)
-		&& singleOutputWasProduced(step.outputPath, finalOutputSnapshot)
-	) {
-		attemptNotes.push(
-			`[transport-warning] ${step.agent} produced its output (${step.outputPath}) but the model connection then failed (${finalResult.error}). Treating the run as complete.`,
-		);
-		finalResult = { ...finalResult, exitCode: 0, error: undefined };
+			const hiddenError = run.exitCode === 0 && !run.error ? detectSubagentError(run.messages) : null;
+			const completionGuard = run.exitCode === 0 && !run.error && !hiddenError?.hasError
+				? evaluateCompletionMutationGuard({
+					agent: step.agent,
+					tools: step.tools,
+					task,
+					messages: run.messages,
+				})
+				: undefined;
+			const completionGuardTriggered = completionGuard?.triggered === true && !run.observedMutationAttempt;
+			const completionGuardError = completionGuardTriggered
+				? "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes."
+				: undefined;
+			const effectiveExitCode = completionGuardTriggered
+				? 1
+				: hiddenError?.hasError
+					? (hiddenError.exitCode ?? 1)
+					: run.error && run.exitCode === 0
+						? 1
+						: run.exitCode;
+			const error = completionGuardError
+				?? (hiddenError?.hasError
+					? hiddenError.details
+						? `${hiddenError.errorType} failed (exit ${effectiveExitCode}): ${hiddenError.details}`
+						: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
+					: run.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined));
+			const attempt: ModelAttempt = {
+				model: candidate ?? run.model ?? step.model ?? "default",
+				success: effectiveExitCode === 0 && !error,
+				exitCode: effectiveExitCode,
+				error,
+				usage: run.usage,
+			};
+			modelAttempts.push(attempt);
+			if (candidate) attemptedModels.push(candidate);
+			completionGuardTriggeredFinal = completionGuardTriggered;
+			finalOutputSnapshot = outputSnapshot;
+			finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error };
+			if (attempt.success || completionGuardTriggered) break;
+			if (!isRetryableModelFailure(error) || index === candidates.length - 1) break;
+			attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
+		}
+
+		// Output-aware finalization: if a transient transport error struck *after* the
+		// agent already produced its declared output (e.g. the planner's plan.md), the
+		// deliverable exists and the run should not be reported as a hard failure.
+		// Downgrade to success and surface the transport error as a warning note.
+		if (
+			finalResult
+			&& finalResult.exitCode !== 0
+			&& !completionGuardTriggeredFinal
+			&& isTransportFailure(finalResult.error)
+			&& singleOutputWasProduced(step.outputPath, finalOutputSnapshot)
+		) {
+			attemptNotes.push(
+				`[transport-warning] ${step.agent} produced its output (${step.outputPath}) but the model connection then failed (${finalResult.error}). Treating the run as complete.`,
+			);
+			finalResult = { ...finalResult, exitCode: 0, error: undefined };
+		}
+		if (structuredRuntime && finalResult && finalResult.exitCode === 0 && !finalResult.error) {
+			const structured = readStructuredOutput(structuredRuntime);
+			if (structured.error) {
+				finalResult = { ...finalResult, exitCode: 1, error: structured.error };
+			} else {
+				structuredOutputValue = structured.value;
+			}
+		}
+	} finally {
+		cleanupStructuredOutputRuntime(structuredRuntime);
 	}
 	const rawOutput = finalResult?.finalOutput ?? "";
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
@@ -758,6 +781,7 @@ async function runSingleStep(
 		artifactPaths,
 		interrupted: finalResult?.interrupted,
 		completionGuardTriggered: completionGuardTriggeredFinal,
+		structuredOutput: structuredOutputValue,
 	};
 }
 
@@ -890,6 +914,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const { id, steps, resultPath, cwd, placeholder, taskIndex, totalTasks, maxOutput, artifactsDir, artifactConfig } =
 		config;
 	let previousOutput = "";
+	const outputs: ChainOutputMap = {};
 	const results: StepResult[] = [];
 	const overallStartTime = Date.now();
 	const shareEnabled = config.share === true;
@@ -1468,8 +1493,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							? path.join(config.sessionDir, `parallel-${taskIdx}`)
 							: undefined;
 						const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
+						const taskForRunResolved = { ...taskForRun, task: resolveOutputReferences(taskForRun.task, outputs) };
 
-						const singleResult = await runSingleStep(taskForRun, {
+						const singleResult = await runSingleStep(taskForRunResolved, {
 							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
 							sessionDir: taskSessionDir,
 							artifactsDir, artifactConfig, id,
@@ -1487,6 +1513,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						});
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
+						}
+						if (task.as && isStorableStepResult(singleResult)) {
+							outputs[task.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
 						}
 
 						const taskEndTime = Date.now();
@@ -1627,7 +1656,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				agent: seqStep.agent,
 			}));
 
-			const singleResult = await runSingleStep(seqStep, {
+			const seqStepResolved = { ...seqStep, task: resolveOutputReferences(seqStep.task, outputs) };
+			const singleResult = await runSingleStep(seqStepResolved, {
 				previousOutput, placeholder, cwd, sessionEnabled,
 				sessionDir: config.sessionDir,
 				artifactsDir, artifactConfig, id,
@@ -1648,6 +1678,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			previousOutput = singleResult.output;
+			if (seqStep.as && isStorableStepResult(singleResult)) {
+				outputs[seqStep.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
+			}
 			results.push({
 				agent: singleResult.agent,
 				output: singleResult.output,

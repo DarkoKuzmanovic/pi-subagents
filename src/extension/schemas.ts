@@ -35,6 +35,9 @@ const ReadsOverride = Type.Unsafe({
 	description: "Files to read before running (array of filenames, supports globs like src/**/*.ts), or false to disable",
 });
 
+const AsParam = Type.String({ description: "Store this step/task output under this name for later {outputs.name} references in the chain. Must match /^[A-Za-z_][A-Za-z0-9_]*$/ and be unique across the chain." });
+const OutputSchemaParam = Type.Unsafe<Record<string, unknown>>({ type: "object", description: "JSON Schema (object) the child's structured_output value must satisfy. When set, the step must finish by calling the structured_output tool; prose-only or schema-invalid completion fails the step." });
+
 const TaskItem = Type.Object({
 	agent: Type.String(), 
 	task: Type.String(), 
@@ -64,6 +67,8 @@ const ParallelTaskSchema = Type.Object({
 	model: Type.Optional(Type.String({ description: "Override model for this task" })),
 	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this parallel task." })),
 	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for this parallel task" })),
+	as: Type.Optional(AsParam),
+	outputSchema: Type.Optional(OutputSchemaParam),
 });
 
 // Flattened so chain steps do not need an object-shape anyOf/oneOf union.
@@ -81,7 +86,23 @@ const ChainItem = Type.Object({
 	model: Type.Optional(Type.String({ description: "Override model for this step" })),
 	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this chain step." })),
 	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for this chain step" })),
-	parallel: Type.Optional(Type.Union([Type.Array(ParallelTaskSchema, { minItems: 1 }), Type.String()], { description: "Tasks to run in parallel. Prefer a literal JSON array; a JSON-stringified array is tolerated and parsed." })),
+	as: Type.Optional(AsParam),
+	outputSchema: Type.Optional(OutputSchemaParam),
+	parallel: Type.Optional(Type.Union([Type.Array(ParallelTaskSchema, { minItems: 1 }), ParallelTaskSchema, Type.String()], { description: "Tasks to run in parallel (array), or a single parallel template object when used with expand/collect for dynamic fanout. Prefer literal JSON; a JSON-stringified array is tolerated and parsed." })),
+	expand: Type.Optional(Type.Object({
+		from: Type.Object({
+			output: Type.String({ description: "Name of a prior step's structured output ({outputs.name}) to expand." }),
+			path: Type.String({ description: "JSON Pointer into that structured output addressing the array to fan out over (e.g. '/files')." }),
+		}),
+		item: Type.Optional(Type.String({ description: "Template variable name for each item (default 'item'); reference as {item} or {item.field} in the parallel task." })),
+		key: Type.Optional(Type.String({ description: "JSON Pointer into each item producing a unique key (default: array index)." })),
+		maxItems: Type.Optional(Type.Integer({ minimum: 0, description: "Maximum items to fan out; required unless config.chain.dynamicFanout.maxItems is set." })),
+		onEmpty: Type.Optional(Type.String({ enum: ["skip", "fail"], description: "Behavior when the source array is empty (default 'skip')." })),
+	}, { description: "Dynamic fanout: expand an array from a prior step's structured output. Pairs with a single parallel template object and collect." })),
+	collect: Type.Optional(Type.Object({
+		as: AsParam,
+		outputSchema: Type.Optional(OutputSchemaParam),
+	}, { description: "Dynamic fanout: store the collected per-item results array under collect.as for later {outputs.name} references." })),
 	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: 4)" })),
 	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure (default: false)" })),
 	worktree: Type.Optional(Type.Boolean({

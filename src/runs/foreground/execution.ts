@@ -47,6 +47,7 @@ import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { applyEffectiveThinkingSuffix, applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
+import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput, resetStructuredOutputCapture, type StructuredOutputRuntime } from "../shared/structured-output.ts";
 import { captureSingleOutputSnapshot, formatSavedOutputReference, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
@@ -119,6 +120,7 @@ async function runSingleAttempt(
 		artifactPaths?: ArtifactPaths;
 		attemptNotes: string[];
 		outputSnapshot?: SingleOutputSnapshot;
+		structuredOutput?: { schemaPath: string; outputPath: string };
 	},
 ): Promise<SingleResult> {
 	const effectiveThinking = options.effectiveThinking ?? agent.thinking;
@@ -150,6 +152,7 @@ async function runSingleAttempt(
 		parentControlInbox: options.nestedRoute?.controlInbox,
 		parentRootRunId: options.nestedRoute?.rootRunId,
 		parentCapabilityToken: options.nestedRoute?.capabilityToken,
+		structuredOutput: shared.structuredOutput,
 	});
 
 	const result: SingleResult = {
@@ -902,110 +905,134 @@ export async function runSync(
 	}
 
 	let lastResult: SingleResult | undefined;
-	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
-	for (let i = 0; i < modelsToTry.length; i++) {
-		const candidate = modelsToTry[i];
-		if (candidate) attemptedModels.push(candidate);
-		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
-		const result = await runSingleAttempt(runtimeCwd, agent, task, candidate, options, {
-			sessionEnabled,
-			systemPrompt,
-			resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
-			skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
-			jsonlPath,
-			artifactPaths: artifactPathsResult,
-			attemptNotes,
-			outputSnapshot,
-		});
-		lastResult = result;
-		sumUsage(aggregateUsage, result.usage);
-		totalToolCount += result.progressSummary?.toolCount ?? 0;
-		totalDurationMs += result.progressSummary?.durationMs ?? 0;
-		const attemptSucceeded = result.exitCode === 0 && !result.error;
-		const attempt: ModelAttempt = {
-			model: candidate ?? result.model ?? agent.model ?? "default",
-			success: attemptSucceeded,
-			exitCode: result.exitCode,
-			error: result.error,
-			usage: { ...result.usage },
-		};
-		modelAttempts.push(attempt);
-		if (attemptSucceeded) {
-			break;
-		}
-		if (!isRetryableModelFailure(result.error) || i === modelsToTry.length - 1) {
-			break;
-		}
-		attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[i + 1]));
-	}
-
-	const result = lastResult ?? {
-		agent: agentName,
-		task,
-		exitCode: 1,
-		messages: [],
-		usage: emptyUsage(),
-		error: "Subagent did not produce a result.",
-	} satisfies SingleResult;
-
-	result.usage = aggregateUsage;
-	result.attemptedModels = attemptedModels.length > 0 ? attemptedModels : undefined;
-	result.modelAttempts = modelAttempts.length > 0 ? modelAttempts : undefined;
-	result.progressSummary = {
-		toolCount: totalToolCount,
-		tokens: aggregateUsage.input + aggregateUsage.output,
-		durationMs: totalDurationMs,
-	};
-	if (attemptNotes.length > 0 && result.progress) {
-		result.progress.recentOutput = [...attemptNotes, ...result.progress.recentOutput];
-		if (result.progress.recentOutput.length > 50) {
-			result.progress.recentOutput.splice(50);
-		}
-	}
-
-	if (artifactPathsResult && options.artifactConfig?.enabled !== false) {
-		result.artifactPaths = artifactPathsResult;
-		if (options.artifactConfig?.includeOutput !== false) {
-			writeArtifact(artifactPathsResult.outputPath, artifactOutputByResult.get(result) ?? result.finalOutput ?? "");
-		}
-		if (options.artifactConfig?.includeMetadata !== false) {
-			writeMetadata(artifactPathsResult.metadataPath, {
-				runId: options.runId,
-				agent: agentName,
-				task,
-				exitCode: result.exitCode,
-				usage: result.usage,
-				model: result.model,
-				attemptedModels: result.attemptedModels,
-				modelAttempts: result.modelAttempts,
-				durationMs: result.progressSummary?.durationMs,
-				toolCount: result.progressSummary?.toolCount,
-				error: result.error,
-				skills: result.skills,
-				skillsWarning: result.skillsWarning,
-				timestamp: Date.now(),
+	const structuredRuntime: StructuredOutputRuntime | undefined = options.outputSchema
+		? createStructuredOutputRuntime(options.outputSchema)
+		: undefined;
+	// Single try/finally so the structured-output temp dir is always cleaned up, even if the
+	// model-candidate loop or readStructuredOutput throws (SF-2).
+	try {
+		const modelsToTry = candidates.length > 0 ? candidates : [undefined];
+		for (let i = 0; i < modelsToTry.length; i++) {
+			const candidate = modelsToTry[i];
+			if (candidate) attemptedModels.push(candidate);
+			// Clear any capture written by a prior failed attempt so the final attempt must write its own.
+			resetStructuredOutputCapture(structuredRuntime);
+			const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
+			const result = await runSingleAttempt(runtimeCwd, agent, task, candidate, options, {
+				sessionEnabled,
+				systemPrompt,
+				resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
+				skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
+				jsonlPath,
+				artifactPaths: artifactPathsResult,
+				attemptNotes,
+				outputSnapshot,
+				structuredOutput: structuredRuntime
+					? { schemaPath: structuredRuntime.schemaPath, outputPath: structuredRuntime.outputPath }
+					: undefined,
 			});
+			lastResult = result;
+			sumUsage(aggregateUsage, result.usage);
+			totalToolCount += result.progressSummary?.toolCount ?? 0;
+			totalDurationMs += result.progressSummary?.durationMs ?? 0;
+			const attemptSucceeded = result.exitCode === 0 && !result.error;
+			const attempt: ModelAttempt = {
+				model: candidate ?? result.model ?? agent.model ?? "default",
+				success: attemptSucceeded,
+				exitCode: result.exitCode,
+				error: result.error,
+				usage: { ...result.usage },
+			};
+			modelAttempts.push(attempt);
+			if (attemptSucceeded) {
+				break;
+			}
+			if (!isRetryableModelFailure(result.error) || i === modelsToTry.length - 1) {
+				break;
+			}
+			attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[i + 1]));
 		}
 
-		if (options.maxOutput) {
+		const result = lastResult ?? {
+			agent: agentName,
+			task,
+			exitCode: 1,
+			messages: [],
+			usage: emptyUsage(),
+			error: "Subagent did not produce a result.",
+		} satisfies SingleResult;
+
+		result.usage = aggregateUsage;
+		result.attemptedModels = attemptedModels.length > 0 ? attemptedModels : undefined;
+		result.modelAttempts = modelAttempts.length > 0 ? modelAttempts : undefined;
+		result.progressSummary = {
+			toolCount: totalToolCount,
+			tokens: aggregateUsage.input + aggregateUsage.output,
+			durationMs: totalDurationMs,
+		};
+		if (attemptNotes.length > 0 && result.progress) {
+			result.progress.recentOutput = [...attemptNotes, ...result.progress.recentOutput];
+			if (result.progress.recentOutput.length > 50) {
+				result.progress.recentOutput.splice(50);
+			}
+		}
+
+		if (structuredRuntime && result.exitCode === 0 && !result.error) {
+			const structured = readStructuredOutput(structuredRuntime);
+			if (structured.error) {
+				result.error = structured.error;
+				result.exitCode = 1;
+			} else {
+				result.structuredOutput = structured.value;
+			}
+		}
+
+		if (artifactPathsResult && options.artifactConfig?.enabled !== false) {
+			result.artifactPaths = artifactPathsResult;
+			if (options.artifactConfig?.includeOutput !== false) {
+				writeArtifact(artifactPathsResult.outputPath, artifactOutputByResult.get(result) ?? result.finalOutput ?? "");
+			}
+			if (options.artifactConfig?.includeMetadata !== false) {
+				writeMetadata(artifactPathsResult.metadataPath, {
+					runId: options.runId,
+					agent: agentName,
+					task,
+					exitCode: result.exitCode,
+					usage: result.usage,
+					model: result.model,
+					attemptedModels: result.attemptedModels,
+					modelAttempts: result.modelAttempts,
+					durationMs: result.progressSummary?.durationMs,
+					toolCount: result.progressSummary?.toolCount,
+					error: result.error,
+					skills: result.skills,
+					skillsWarning: result.skillsWarning,
+					timestamp: Date.now(),
+				});
+			}
+
+			if (options.maxOutput) {
+				const config = { ...DEFAULT_MAX_OUTPUT, ...options.maxOutput };
+				const truncationResult = truncateOutput(result.finalOutput ?? "", config, artifactPathsResult.outputPath);
+				if (truncationResult.truncated) result.truncation = truncationResult;
+			}
+		} else if (options.maxOutput) {
 			const config = { ...DEFAULT_MAX_OUTPUT, ...options.maxOutput };
-			const truncationResult = truncateOutput(result.finalOutput ?? "", config, artifactPathsResult.outputPath);
+			const truncationResult = truncateOutput(result.finalOutput ?? "", config);
 			if (truncationResult.truncated) result.truncation = truncationResult;
 		}
-	} else if (options.maxOutput) {
-		const config = { ...DEFAULT_MAX_OUTPUT, ...options.maxOutput };
-		const truncationResult = truncateOutput(result.finalOutput ?? "", config);
-		if (truncationResult.truncated) result.truncation = truncationResult;
-	}
 
-	if (options.sessionFile && (existsSync(options.sessionFile) || result.messages?.length)) {
-		result.sessionFile = options.sessionFile;
-	} else if (shareEnabled && options.sessionDir) {
-		const sessionFile = findLatestSessionFile(options.sessionDir);
-		if (sessionFile) result.sessionFile = sessionFile;
-	}
+		if (options.sessionFile && (existsSync(options.sessionFile) || result.messages?.length)) {
+			result.sessionFile = options.sessionFile;
+		} else if (shareEnabled && options.sessionDir) {
+			const sessionFile = findLatestSessionFile(options.sessionDir);
+			if (sessionFile) result.sessionFile = sessionFile;
+		}
 
-	return result;
+		return result;
+	} finally {
+		cleanupStructuredOutputRuntime(structuredRuntime);
+	}
 }
 
 /** An agent is read-only if it has no write/edit/bash tools. */

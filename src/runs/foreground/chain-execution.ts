@@ -21,9 +21,11 @@ import {
 	createParallelDirs,
 	suppressProgressForReadOnlyTask,
 	stripStaleAgentBlocks,
+	isDynamicParallelStep,
 	isParallelStep,
 	type StepOverrides,
 	type ChainStep,
+	type ParallelStep,
 	type SequentialStep,
 	type ResolvedStepBehavior,
 	type ResolvedTemplates,
@@ -34,6 +36,9 @@ import { INTERCOM_BRIDGE_MARKER } from "../../intercom/intercom-bridge.ts";
 import { runSync } from "./execution.ts";
 import { buildChainSummary } from "../../shared/formatters.ts";
 import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd, substituteTemplateVars } from "../../shared/utils.ts";
+import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings } from "../shared/chain-outputs.ts";
+import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection, type DynamicCollectedResult } from "../shared/dynamic-fanout.ts";
+import type { ChainOutputMap } from "../../shared/types.ts";
 import { recordRun } from "../shared/run-history.ts";
 import {
 	cleanupWorktrees,
@@ -87,7 +92,7 @@ interface ChainExecutionDetailsInput {
 }
 
 interface ParallelChainRunInput {
-	step: Exclude<ChainStep, SequentialStep>;
+	step: ParallelStep;
 	parallelTemplates: string[];
 	parallelBehaviors: ResolvedStepBehavior[];
 	agents: AgentConfig[];
@@ -250,6 +255,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 
 			const result = await runSync(input.ctx.cwd, input.agents, task.agent, taskStr, {
 				cwd: taskCwd,
+				outputSchema: task.outputSchema,
 				signal: input.signal,
 				interruptSignal: interruptController.signal,
 				allowIntercomDetach: taskAgentConfig?.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
@@ -365,6 +371,7 @@ interface ChainExecutionParams {
 	worktreeSetupHookTimeoutMs?: number;
 	inlineReads?: boolean;
 	nestedRoute?: NestedRouteInfo;
+	dynamicFanoutMaxItems?: number;
 	}
 
 interface ChainExecutionResult {
@@ -408,13 +415,28 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	} = params;
 	const chainSkills = chainSkillsParam ?? [];
 
+	try {
+		validateChainOutputBindings(chainSteps, { maxItems: params.dynamicFanoutMaxItems });
+	} catch (error) {
+		if (error instanceof ChainOutputValidationError) {
+			return {
+				content: [{ type: "text", text: `Invalid chain output bindings: ${error.message}` }],
+				isError: true,
+				details: { mode: "chain" as const, results: [] },
+			};
+		}
+		throw error;
+	}
+
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
 
 	const chainAgents: string[] = chainSteps.map((step) =>
 		isParallelStep(step)
 			? `[${step.parallel.map((t) => t.agent).join("+")}]`
-			: (step as SequentialStep).agent,
+			: isDynamicParallelStep(step)
+				? `fanout[${step.collect.as}]`
+				: (step as SequentialStep).agent,
 	);
 	const totalSteps = chainSteps.length;
 
@@ -423,7 +445,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		?? (isParallelStep(firstStep) ? firstStep.parallel[0]!.task! : (firstStep as SequentialStep).task!);
 
 	const chainDir = createChainDir(runId, chainDirBase);
-	const hasParallelSteps = chainSteps.some(isParallelStep);
+	const hasParallelSteps = chainSteps.some((step) => isParallelStep(step) || isDynamicParallelStep(step));
 	let templates: ResolvedTemplates = resolveChainTemplates(chainSteps);
 	const shouldClarify = clarify !== false && ctx.hasUI && !hasParallelSteps;
 	let tuiBehaviorOverrides: (BehaviorOverride | undefined)[] | undefined;
@@ -517,13 +539,14 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	}
 
 	const results: SingleResult[] = [];
+	const outputs: ChainOutputMap = {};
 	let prev = "";
 	let globalTaskIndex = 0;
 	let progressCreated = false;
 
 	if (onUpdate) {
 		const stepNames = chainSteps
-			.map((s) => (isParallelStep(s) ? `parallel[${s.parallel.length}]` : (s as SequentialStep).agent))
+			.map((s) => (isParallelStep(s) ? `parallel[${s.parallel.length}]` : isDynamicParallelStep(s) ? `fanout[${s.collect.as}]` : (s as SequentialStep).agent))
 			.join(" → ");
 		const banner = [
 			`┃  Chain ${runId}`,
@@ -547,7 +570,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		const stepTemplates = templates[stepIndex]!;
 
 		if (isParallelStep(step)) {
-			const parallelTemplates = stepTemplates as string[];
+			const parallelTemplates = (stepTemplates as string[]).map((template) => resolveOutputReferences(template, outputs));
 			const parallelCwd = resolveChildCwd(cwd ?? ctx.cwd, step.cwd);
 			let worktreeSetup: WorktreeSetup | undefined;
 			if (step.worktree) {
@@ -650,10 +673,15 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				});
 				globalTaskIndex += step.parallel.length;
 
-				for (const result of parallelResults) {
+				for (let i = 0; i < parallelResults.length; i++) {
+					const result = parallelResults[i]!;
 					results.push(result);
 					if (result.progress) allProgress.push(result.progress);
 					if (result.artifactPaths) allArtifactPaths.push(result.artifactPaths);
+					const asName = step.parallel[i]?.as;
+					if (asName && result.exitCode === 0 && !result.error) {
+						outputs[asName] = outputEntryFromResult(result, stepIndex);
+					}
 				}
 
 				const interrupted = parallelResults.find((result) => result.interrupted);
@@ -751,6 +779,154 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			} finally {
 				if (worktreeSetup) cleanupWorktrees(worktreeSetup);
 			}
+		} else if (isDynamicParallelStep(step)) {
+			let materialized: ReturnType<typeof materializeDynamicParallelStep>;
+			try {
+				materialized = materializeDynamicParallelStep(step, outputs, stepIndex, { maxItems: params.dynamicFanoutMaxItems });
+			} catch (error) {
+				const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
+				return buildChainExecutionErrorResult(message, {
+					results, includeProgress, allProgress, allArtifactPaths, artifactsDir, chainAgents, totalSteps, currentStepIndex: stepIndex,
+				});
+			}
+
+			if (materialized.parallel.length === 0) {
+				const collection: DynamicCollectedResult[] = [];
+				try {
+					validateDynamicCollection(step.collect.outputSchema, collection);
+				} catch (error) {
+					const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
+					return buildChainExecutionErrorResult(message, {
+						results, includeProgress, allProgress, allArtifactPaths, artifactsDir, chainAgents, totalSteps, currentStepIndex: stepIndex,
+					});
+				}
+				outputs[step.collect.as] = { text: JSON.stringify(collection), structured: collection, agent: step.parallel.agent, stepIndex };
+				prev = "Dynamic fanout produced 0 results.";
+				continue;
+			}
+
+			const dynamicParallelStep: ParallelStep = {
+				parallel: materialized.parallel,
+				concurrency: step.concurrency,
+				failFast: step.failFast,
+			};
+			const dynParallelTemplates = materialized.parallel.map((task) => resolveOutputReferences(task.task ?? "{previous}", outputs));
+			const dynAgentNames = dynamicParallelStep.parallel.map((task) => task.agent);
+			const dynParallelBehaviors = resolveParallelBehaviors(dynamicParallelStep.parallel, agents, stepIndex, chainSkills)
+				.map((behavior, taskIndex) => suppressProgressForReadOnlyTask(behavior, dynParallelTemplates[taskIndex] ?? dynamicParallelStep.parallel[taskIndex]?.task, originalTask));
+
+			for (let taskIndex = 0; taskIndex < dynamicParallelStep.parallel.length; taskIndex++) {
+				const behavior = dynParallelBehaviors[taskIndex]!;
+				const outputPath = typeof behavior.output === "string"
+					? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
+					: undefined;
+				const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Dynamic chain step ${stepIndex + 1} item ${taskIndex + 1} (${dynamicParallelStep.parallel[taskIndex]!.agent})`);
+				if (validationError) return buildChainExecutionErrorResult(validationError, {
+					results, includeProgress, allProgress, allArtifactPaths, artifactsDir, chainAgents, totalSteps, currentStepIndex: stepIndex,
+				});
+			}
+
+			progressCreated = ensureParallelProgressFile(chainDir, progressCreated, dynParallelBehaviors);
+			createParallelDirs(chainDir, stepIndex, dynamicParallelStep.parallel.length, dynAgentNames);
+
+			const parallelResults = await runParallelChainTasks({
+				step: dynamicParallelStep,
+				parallelTemplates: dynParallelTemplates,
+				parallelBehaviors: dynParallelBehaviors,
+				agents,
+				stepIndex,
+				availableModels,
+				chainDir,
+				prev,
+				originalTask,
+				ctx,
+				intercomEvents,
+				cwd,
+				runId,
+				globalTaskIndex,
+				sessionDirForIndex,
+				sessionFileForIndex,
+				shareEnabled,
+				artifactConfig,
+				artifactsDir,
+				signal,
+				onUpdate,
+				results,
+				allProgress,
+				chainAgents,
+				totalSteps,
+				controlConfig,
+				onControlEvent,
+				childIntercomTarget,
+				orchestratorIntercomTarget,
+				foregroundControl,
+				maxSubagentDepth: params.maxSubagentDepth,
+				inlineReads: params.inlineReads,
+			});
+			globalTaskIndex += dynamicParallelStep.parallel.length;
+
+			for (const result of parallelResults) {
+				results.push(result);
+				if (result.progress) allProgress.push(result.progress);
+				if (result.artifactPaths) allArtifactPaths.push(result.artifactPaths);
+			}
+
+			const interrupted = parallelResults.find((result) => result.interrupted);
+			if (interrupted) {
+				return {
+					content: [{ type: "text", text: `Chain paused after interrupt at step ${stepIndex + 1} (${interrupted.agent}). Waiting for explicit next action.` }],
+					details: buildChainExecutionDetails({
+						results, includeProgress, allProgress, allArtifactPaths, artifactsDir, chainAgents, totalSteps, currentStepIndex: stepIndex,
+					}),
+				};
+			}
+			const detached = parallelResults.find((result) => result.detached);
+			if (detached) {
+				return {
+					content: [{ type: "text", text: `Chain detached for intercom coordination at step ${stepIndex + 1} (${detached.agent}). Reply to the supervisor request first. After the child exits, start a fresh follow-up if needed.` }],
+					details: buildChainExecutionDetails({
+						results, includeProgress, allProgress, allArtifactPaths, artifactsDir, chainAgents, totalSteps, currentStepIndex: stepIndex,
+					}),
+				};
+			}
+
+			const failures = parallelResults
+				.map((result, originalIndex) => ({ ...result, originalIndex }))
+				.filter((result) => result.exitCode !== 0 && result.exitCode !== -1);
+			if (failures.length > 0) {
+				const failureSummary = failures
+					.map((failure) => `- Item ${failure.originalIndex + 1} (${failure.agent}, key ${materialized.items[failure.originalIndex]?.key ?? failure.originalIndex}): ${failure.error || "failed"}`)
+					.join("\n");
+				const errorMsg = `Dynamic step ${stepIndex + 1} failed:\n${failureSummary}`;
+				const summary = buildChainSummary(chainSteps, results, chainDir, "failed", {
+					index: stepIndex,
+					error: errorMsg,
+				});
+				return {
+					content: [{ type: "text", text: summary }],
+					isError: true,
+					details: buildChainExecutionDetails({
+						results, includeProgress, allProgress, allArtifactPaths, artifactsDir, chainAgents, totalSteps, currentStepIndex: stepIndex,
+					}),
+				};
+			}
+
+			const collected = collectDynamicResults(step, materialized.items, parallelResults);
+			try {
+				validateDynamicCollection(step.collect.outputSchema, collected);
+			} catch (error) {
+				const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
+				return buildChainExecutionErrorResult(message, {
+					results, includeProgress, allProgress, allArtifactPaths, artifactsDir, chainAgents, totalSteps, currentStepIndex: stepIndex,
+				});
+			}
+			outputs[step.collect.as] = {
+				text: JSON.stringify(collected),
+				structured: collected,
+				agent: step.parallel.agent,
+				stepIndex,
+			};
+			prev = `Dynamic fanout collected ${collected.length} result(s) into ${step.collect.as}.`;
 		} else {
 			const seqStep = step as SequentialStep;
 			const stepTemplate = stepTemplates as string;
@@ -798,6 +974,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				previous: prev,
 				chain_dir: chainDir,
 			});
+			stepTask = resolveOutputReferences(stepTask, outputs);
 			const cleanTask = stepTask;
 			stepTask = prefix + stepTask + suffix;
 
@@ -856,6 +1033,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				outputMode: behavior.outputMode,
 				maxSubagentDepth,
 				skipContextFiles: params.inlineReads === true,
+				outputSchema: seqStep.outputSchema,
 				controlConfig,
 				onControlEvent,
 				intercomSessionName: childIntercomTarget?.(seqStep.agent, globalTaskIndex),
@@ -984,6 +1162,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				}
 			}
 
+			if (seqStep.as && r.exitCode === 0 && !r.error) outputs[seqStep.as] = outputEntryFromResult(r, stepIndex);
 			prev = stripStaleAgentBlocks(getSingleResultOutput(r));
 		}
 	}

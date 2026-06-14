@@ -19,7 +19,7 @@ import {
 	type SubagentHubResult,
 } from "../tui/subagent-hub.ts";
 import { toModelInfo } from "../shared/model-info.ts";
-import { isParallelStep, type ChainStep } from "../shared/settings.ts";
+import { isDynamicParallelStep, isParallelStep, type ChainStep } from "../shared/settings.ts";
 import { buildModelThinkingOverride } from "../runs/shared/pi-args.ts";
 import type {
 	SlashSubagentResponse,
@@ -210,6 +210,7 @@ const mapSavedChainSteps = (
 		(step) => {
 			if (isParallelStep(step))
 				return worktree ? { ...step, worktree: true } : { ...step };
+			if (isDynamicParallelStep(step)) return { ...step };
 			return {
 				agent: step.agent,
 				task: step.task || undefined,

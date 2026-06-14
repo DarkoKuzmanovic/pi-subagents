@@ -260,6 +260,36 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.equal(toolsArg, "read,grep,find,ls,bash,edit,write,contact_supervisor");
 	});
 
+	it("adds structured_output to a restricted tool allowlist when a schema is active", () => {
+		const { args, env } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read", "grep", "bash"],
+			structuredOutput: { schemaPath: "/tmp/x/schema.json", outputPath: "/tmp/x/output.json" },
+		});
+
+		const toolsArg = args[args.indexOf("--tools") + 1];
+		assert.equal(toolsArg, "read,grep,bash,structured_output");
+		assert.equal(env.PI_SUBAGENT_STRUCTURED_OUTPUT_SCHEMA, "/tmp/x/schema.json");
+		assert.equal(env.PI_SUBAGENT_STRUCTURED_OUTPUT_CAPTURE, "/tmp/x/output.json");
+	});
+
+	it("does not add structured_output to the allowlist without a schema", () => {
+		const { args } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read", "grep", "bash"],
+		});
+
+		assert.equal(args[args.indexOf("--tools") + 1], "read,grep,bash");
+	});
+
 	it("keeps tool extension paths when explicit extensions are allowlisted", () => {
 		const { args } = buildPiArgs({
 			baseArgs: ["-p"],

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.39.0] - 2026-06-13
+
+### Added
+
+- **Structured output for chain steps (`outputSchema` + `{outputs.name}` references).** A chain step (sequential or a parallel task) may declare an `outputSchema` (a JSON Schema object); the child is then required to finish by calling a `structured_output` tool with a schema-valid value, and that value is captured out-of-band (temp `schema.json`/`output.json`, mode `0600`, env-passed to the child) rather than parsed from prose. Producing steps expose their result via `as: "name"`, and later steps reference it with `{outputs.name}` (substituted with compact structured JSON when present, else the step's text). Bindings are validated up front: unique safe `as` names, valid identifiers, and refs only available after the producing step. Cheap drivers that JSON-stringify the `value` argument are tolerated (parsed before validation). Works in the **foreground** and in the **async/background runner**, for chain steps (sequential steps and parallel tasks within a chain — not top-level single dispatch). Reimplemented from upstream `nicobailon/pi-subagents` (acceptance-gate and workflow-graph machinery deliberately not ported).
+- **Dynamic fanout (`expand`/`collect`) for chains.** A chain step may expand an array from a prior step's structured output (`expand.from` via JSON Pointer) into N parallel subagent tasks from a single `parallel` template (item templating via `{item}`/`{item.field}`, `maxItems` caps, per-item key dedup), then `collect` the per-item results into an array exposed as `{outputs.<collect.as>}` (optionally validated against `collect.outputSchema`). Available through direct `subagent({chain:[...]})` JSON and saved `.chain.js`. Foreground only for now; a `dynamicFanoutMaxItems` config knob provides a default item cap.
+
+### Changed
+
+- **Async chains containing a dynamic-fanout step are rejected with a clear, actionable error** ("... not yet supported in async mode. Run this chain in the foreground ...") instead of failing obscurely. The async runner pre-bakes per-task scaffolding (session files, status slots, intercom targets, flat indices) from the static chain shape, which is incompatible with fanout's runtime-determined task count; full async dynamic fanout is tracked as a dedicated follow-up. Structured output is fully supported in async.
+- **Type change (`ChainStep`):** the `ChainStep` union now includes `DynamicParallelStep` (`{ expand, parallel, collect }`). Consumers that exhaustively switch on `ChainStep`, or that cast a non-parallel step straight to `SequentialStep`, should adopt the `isDynamicParallelStep` guard to avoid mislabeling dynamic steps.
+
+### Fixed
+
+- **Structured output now works for subagents that declare a restricted `tools:` allowlist.** The `structured_output` tool is registered at child startup by the prompt-runtime extension, but the child's `--tools` allowlist was built only from the agent's declared builtin tools and filtered the extension tool out — so a schema-bound step on any agent with a `tools:` list (`worker`, `reviewer`, `context-builder`, `planner`, `oracle`, `janitor`) always failed with `Missing structured_output call`, in both foreground and async. `buildPiArgs` now appends `structured_output` to the allowlist whenever a schema is active; agents with no tool restriction are unaffected. Caught by live end-to-end testing.
+- **`{outputs.name}` runtime resolution is total and prototype-safe.** `resolveOutputReferences` never throws on an unknown/invalid reference (it leaves the token literal, like `{previous}`/`{item}`), so an unresolved token in post-substitution text or a model-produced value can no longer crash a foreground chain or kill the detached async runner. Lookups use `Object.hasOwn`, so a reference named after an inherited `Object.prototype` member (`toString`, `constructor`, …) stays literal instead of resolving to `"undefined"`. `validateChainOutputBindings` remains the authoring-time gate.
+- **Failed async steps no longer publish under their `as` name.** The async runner applies the same success predicate as the foreground path, so a non-zero exit or errored step cannot expose partial output to downstream `{outputs.name}` consumers.
+- **Structured-output temp dirs are always cleaned up.** Runtime creation, the model-candidate retry loop, and the capture read are wrapped so a throw on any path removes the temp dir (foreground and async); the capture read is also bounded by a 5 MB cap.
+- **Dynamic steps render correctly in the live-state TUI**, and dynamic-fanout error messages name the real flat `dynamicFanoutMaxItems` config field.
+
 ## [0.38.2] - 2026-06-12
 
 ### Added
