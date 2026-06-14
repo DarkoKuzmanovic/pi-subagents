@@ -289,6 +289,10 @@ export function executeAsyncChain(
 		? (isParallelStep(firstStep) ? firstStep.parallel[0]?.task : (firstStep as SequentialStep).task)
 		: undefined);
 
+	// TODO(async-fanout): dynamic fanout (expand/collect) is rejected in async mode below.
+	// Lifting this needs runtime task-count scaffolding in the background runner (the static
+	// pre-baked session-file/status/index slots have no room for runtime-materialized items).
+	// See PLAN-structured-output-fanout.md "Follow-up: Async dynamic fanout".
 	const dynamicStepIndex = chain.findIndex((s) => isDynamicParallelStep(s));
 	if (dynamicStepIndex >= 0) {
 		return {

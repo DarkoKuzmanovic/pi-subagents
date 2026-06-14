@@ -88,3 +88,24 @@ Tier 1 is a hard prerequisite for Tier 2.
 - **Phase 3 (async): structured output DONE.** `runSingleStep` runtime+read+cleanup, chain loop `ChainOutputMap`/`{outputs}`/`as`, pre-spawn binding validation. Single dispatch + chains.
 - **Phase 3 (async): dynamic fanout DEFERRED.** The async runner pre-bakes per-task scaffolding (session files, status slots, intercom targets, flat indices) from the static chain shape; fanout's runtime task count needs (a) extracting the inline parallel executor into a shared function and (b) runtime splicing of the status/index arrays — verifiable only via live detached runs. Shipped a clear launch-time guard instead; full async fanout is a tracked follow-up.
 - **Verification:** typecheck clean, biome+tsc `check` clean, unit 756 pass / 0 fail, integration 322 pass / 0 fail.
+
+## Follow-up: Async dynamic fanout (deferred from v0.39.0)
+
+Guard: `src/runs/background/async-execution.ts` rejects any chain containing a dynamic step
+before spawn (`TODO(async-fanout)`). Lifting it requires, in the background runner:
+
+1. **Extract the inline ~170-line parallel executor** (`mapConcurrent` + per-task
+   `statusPayload.steps[fi]` writes + intercom + completion/interrupt) into a reusable
+   function callable for both static groups and runtime-materialized dynamic groups.
+2. **Runtime splicing of the index arrays.** Materialized items have no pre-baked slots, so
+   insert N entries into `statusPayload.steps`, `stepEscalationStartedAt`, and
+   `parallelGroups` at the live flat index — keeping every *later* step's index resolvable.
+3. **Runtime resource minting + launcher serialization.** Mint session files / artifact dirs
+   per materialized item, add the dynamic branch, and teach `async-execution.ts` (which
+   pre-bakes session files, intercom targets, and parallel groups before spawn) to defer
+   those allocations for dynamic steps.
+
+Acceptance: a live detached async chain whose step 1 emits a structured array and step 2
+fans out over it via `expand`/`collect`, feeding a `{outputs.<collect.as>}` consumer — green.
+**Unit tests can't prove this; it needs live async runs.** When done, remove the guard and
+drop the "foreground only" caveat from CHANGELOG/README.
