@@ -10,6 +10,8 @@
 
 - **Six default builtin roles** — context-builder, planner, worker, reviewer, oracle, and janitor. Compatibility agents remain on disk but are disabled by default.
 - **Chains** — sequential multi-step pipelines with `{task}`, `{previous}`, `{chain_dir}` template variables and fan-out/fan-in parallel groups
+- **Structured output** — a chain step can require schema-valid JSON from its child (`outputSchema` + a `structured_output` tool) and expose it to later steps as `{outputs.name}` (foreground and async)
+- **Dynamic fanout** — expand a prior step's structured array into N parallel tasks and `collect` the results into one named array (foreground)
 - **Parallel execution** — concurrent agents with grouped output, optional worktree isolation
 - **Background runs** — detached async execution with status polling, completion notifications, and resume
 - **Forked context** — real branched sessions from the parent leaf, not injected summaries
@@ -591,7 +593,7 @@ Expose a step's result with `as`, then reference it from a later step with `{out
 }
 ```
 
-Bindings are validated before execution: `as` names must be unique valid identifiers, and `{outputs.name}` may only reference a step that has already produced its output. Structured output works in the **foreground** and in **async/background** runs (single dispatch and chains).
+Bindings are validated before execution: `as` names must be unique valid identifiers, and `{outputs.name}` may only reference a step that has already produced its output. Structured output works in the **foreground** and in **async/background** runs, on chain steps (sequential steps and parallel tasks within a chain) — not top-level single dispatch. `outputSchema` and `as` are configured through the `subagent({ chain: [...] })` JSON form or a saved `.chain.js` chain; `.chain.md` files do not parse them.
 
 ## Dynamic fanout (`expand` / `collect`)
 
@@ -808,7 +810,7 @@ Agent definitions are not loaded into context by default. Management actions let
 
 Use `outputMode: "file-only"` when a saved output may be large and the parent only needs a pointer. The returned text is a compact reference like `Output saved to: /abs/report.md (48.2 KB, 2847 lines). Read this file if needed.` Failed runs and save errors still return normal inline output for debugging. In chains, later `{previous}` steps receive the same compact reference when the prior step used file-only mode.
 
-Sequential and parallel chain tasks accept `agent`, `task`, `cwd`, `output`, `outputMode`, `reads`, `progress`, `skill`, and `model`. Parallel tasks also accept `count`. Parallel step groups accept `parallel`, `concurrency`, `failFast`, and `worktree`.
+Sequential and parallel chain tasks accept `agent`, `task`, `cwd`, `output`, `outputMode`, `reads`, `progress`, `skill`, `model`, and `thinking`. Parallel tasks also accept `count`. Parallel step groups accept `parallel`, `concurrency`, `failFast`, and `worktree`. Chain steps and parallel tasks additionally accept `as` (expose the result under a name) and `outputSchema` (require schema-valid structured output) — see Structured output. A dynamic-fanout step replaces `agent`/`task` with `expand` + a single `parallel` template + `collect` — see Dynamic fanout.
 
 Status and control actions:
 
@@ -875,6 +877,7 @@ After a worktree parallel step completes, per-agent diff stats are appended to t
 | `worktreeSetupHook`              | string  | none       | Script to run once per created worktree. Paths must be absolute, `~/...`, or repo-relative. stdin is JSON with `repoRoot`, `worktreePath`, `agentCwd`, `branch`, `index`, `runId`, `baseCommit`. stdout must be JSON, e.g. `{ "syntheticPaths": [".venv"] }`. |
 | `worktreeSetupHookTimeoutMs`     | number  | `30000`    | Timeout for the worktree setup hook.                                                                                                                                                                                                                          |
 | `inlineReadMaxBytes`             | number  | `204800`   | Max bytes for inline-read content in fresh-context children. Range: `[1024, 8MB]`.                                                                                                                                                                            |
+| `dynamicFanoutMaxItems`          | number  | none       | Default cap on dynamic-fanout expanded items when a step omits `expand.maxItems`. A dynamic step with no effective cap (neither here nor on the step) is rejected before execution.                                                                            |
 
 Bridge activation requires `pi-intercom` to be installed and enabled, a targetable session name, and `pi-intercom` in any explicit agent `extensions` allowlist. The default injected guidance tells children to use `contact_supervisor` with `reason: "need_decision"` when blocked and `reason: "progress_update"` for meaningful updates.
 
