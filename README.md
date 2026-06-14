@@ -6,6 +6,52 @@
 
 > **Contributing / hacking on this?** Start with [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the request lifecycle and a "where do I change X?" file map.
 
+## Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Try this first](#try-this-first)
+- [What happens](#what-happens)
+- [Good first prompts](#good-first-prompts)
+- [Common workflows](#common-workflows)
+- [Builtin agents in plain English](#builtin-agents-in-plain-english)
+- [Changing a builtin agent's model](#changing-a-builtin-agents-model)
+- [Where running subagents show up](#where-running-subagents-show-up)
+- [Recommended orchestration pattern (scaffolding)](#recommended-orchestration-pattern-scaffolding)
+- [Optional shortcuts](#optional-shortcuts)
+- [Optional pi-intercom companion](#optional-pi-intercom-companion)
+- [Direct commands](#direct-commands)
+  - [Per-step tasks](#per-step-tasks)
+  - [Inline per-step config](#inline-per-step-config)
+  - [Background and forked runs](#background-and-forked-runs)
+- [Clarify and launch UI](#clarify-and-launch-ui)
+- [Agents and chains](#agents-and-chains)
+  - [Builtin overrides](#builtin-overrides)
+  - [Prompt assembly](#prompt-assembly)
+  - [Agent frontmatter](#agent-frontmatter)
+  - [Tool and extension selection](#tool-and-extension-selection)
+- [Chain files](#chain-files)
+  - [Built-in chain templates](#built-in-chain-templates)
+- [Chain variables](#chain-variables)
+- [Structured output and named outputs](#structured-output-and-named-outputs)
+- [Dynamic fanout (expand / collect)](#dynamic-fanout-expand--collect)
+- [Skills](#skills)
+  - [Bundled skill](#bundled-skill)
+- [Programmatic tool usage](#programmatic-tool-usage)
+  - [Execution examples](#execution-examples)
+  - [Management actions](#management-actions)
+  - [Parameter reference](#parameter-reference)
+- [Worktree isolation](#worktree-isolation)
+- [Configuration](#configuration)
+- [Files, logs, and observability](#files-logs-and-observability)
+- [Live progress](#live-progress)
+- [Session sharing](#session-sharing)
+- [Recursion guard](#recursion-guard)
+- [Events](#events)
+- [Prompt-template integration](#prompt-template-integration)
+- [Changes from upstream](#changes-from-upstream)
+- [Runtime files](#runtime-files)
+
 ## Features
 
 - **Six default builtin roles** — context-builder, planner, worker, reviewer, oracle, and janitor. Compatibility agents remain on disk but are disabled by default.
@@ -719,6 +765,23 @@ These are the parameters the LLM passes when it calls the `subagent` tool. Most 
   { agent: "reviewer", task: "Review all changes from {previous}" }
 ]}
 
+// Chain with structured output + named references
+{ chain: [
+  { agent: "context-builder", task: "List changed files as JSON", as: "files",
+    outputSchema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] } },
+  { agent: "worker", task: "Refactor each file in {outputs.files}" }
+]}
+
+// Dynamic fanout: expand a prior step's array into N parallel tasks (foreground)
+{ chain: [
+  { agent: "context-builder", task: "List modules as JSON", as: "mods",
+    outputSchema: { type: "object", properties: { mods: { type: "array", items: { type: "string" } } }, required: ["mods"] } },
+  { expand: { from: { output: "mods", path: "/mods" }, maxItems: 10 },
+    parallel: { agent: "worker", task: "Document module {item}" },
+    collect: { as: "docs" } },
+  { agent: "reviewer", task: "Review module docs from {outputs.docs}" }
+]}
+
 // Worktree isolation
 { tasks: [
   { agent: "worker", task: "Implement auth" },
@@ -1016,6 +1079,10 @@ Optimizations:
 - **Cache + deduplicate inline reads**: A process-scoped `Map<string, string>` keyed by `(absPath, mtimeMs, size)` caches `readFileSync` results. Same file across N parallel tasks = 1 read, N-1 cache hits. Automatic invalidation on file change via mtime+size.
 - **Drop redundant `resolveStepBehavior` call**: The single-mode fresh-reads patch resolved output/skills/model/progress just to extract `reads`. Replaced with an inline fallback: `const reads = readsOverride ?? agentConfig.defaultReads ?? false`.
 
+Ported from upstream (v0.39.0):
+
+- **Structured output** (`outputSchema` + `{outputs.name}`) and **dynamic fanout** (`expand`/`collect`) were reimplemented from upstream — structured output in the foreground and the async/background runner, dynamic fanout in the foreground only. Upstream's acceptance-gate and workflow-graph machinery were intentionally not ported. See the Structured output and Dynamic fanout sections.
+
 Visible cleanup role:
 
 - **`janitor`**: Repository hygiene agent with `contact_supervisor` escalation. Designed for dead code removal, stale docs, orphaned artifact audits, and structural cleanup. The old `deslopper` file remains as a disabled compatibility alias.
@@ -1043,4 +1110,5 @@ The main runtime files are:
 | `src/tui/subagent-hub.ts`                                                   | Subagent hub TUI for browsing agents and configuring model overrides before launch.                    |
 | `src/intercom/intercom-bridge.ts`                                           | Runtime intercom bridge instructions and diagnostics.                                                  |
 | `src/extension/schemas.ts` / `src/shared/types.ts`                          | Tool schemas, shared types, and event constants.                                                       |
+| `src/runs/shared/structured-output.ts` / `chain-outputs.ts` / `dynamic-fanout.ts` | Structured-output capture and validation, `{outputs.name}` resolution, and dynamic-fanout materialization. |
 | `test/unit/` / `test/integration/`                                          | Unit and loader-based integration tests.                                                               |
