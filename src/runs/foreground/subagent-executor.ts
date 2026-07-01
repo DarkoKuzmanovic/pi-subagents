@@ -1079,6 +1079,14 @@ function applyResolvedLaneToChainStep(baseCwd: string, step: ChainStep): ChainSt
 		};
 	}
 
+	if (isDynamicParallelStep(step)) {
+		if (!step.parallel.lane) return step;
+		return {
+			...step,
+		parallel: applyResolvedLaneToRequest(resolveChildCwd(baseCwd, step.parallel.cwd), step.parallel),
+		};
+	}
+
 	const sequential = step as SequentialStep;
 	if (!sequential.lane) return step;
 	const resolved = resolveLaneOverridesForRequest(resolveChildCwd(baseCwd, sequential.cwd), {
@@ -1118,6 +1126,10 @@ function collectChainSessionFiles(
 	const sessionFiles: (string | undefined)[] = [];
 	let flatIndex = 0;
 	for (const step of chain) {
+		// Dynamic-fanout steps contribute no pre-baked flat slots — their per-item task
+		// count is unknown until runtime, so the background runner materializes (and, where
+		// applicable, mints) their slots itself. Keep them out of the static session-file map.
+		if (isDynamicParallelStep(step)) continue;
 		if (isParallelStep(step)) {
 			for (let i = 0; i < step.parallel.length; i++) {
 				sessionFiles.push(sessionFileForIndex(flatIndex));
@@ -1289,6 +1301,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			maxSubagentDepth: currentMaxSubagentDepth,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
+			dynamicFanoutMaxItems: deps.config.dynamicFanoutMaxItems,
 			controlConfig,
 			controlIntercomTarget,
 			childIntercomTarget,
@@ -1432,6 +1445,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			maxSubagentDepth: currentMaxSubagentDepth,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
+			dynamicFanoutMaxItems: deps.config.dynamicFanoutMaxItems,
 			controlConfig,
 			controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 			childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,

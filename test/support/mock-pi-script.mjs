@@ -115,6 +115,17 @@ async function main() {
 	const jsonMode = isJsonMode(args);
 	const response = claimNextResponse(queueDir) ?? defaultResponse();
 	writeSessionFile(args);
+
+	// Simulate a child calling the structured_output tool: write the value to the capture path
+	// the parent handed us via env. Lets tests exercise structured output + dynamic fanout without
+	// a real model call.
+	if (response.structured !== undefined) {
+		const capturePath = process.env.PI_SUBAGENT_STRUCTURED_OUTPUT_CAPTURE;
+		if (capturePath) {
+			fs.mkdirSync(path.dirname(capturePath), { recursive: true });
+			fs.writeFileSync(capturePath, JSON.stringify(response.structured), "utf-8");
+		}
+	}
 	fs.writeFileSync(
 		path.join(queueDir, `call-${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}.json`),
 		JSON.stringify({ args }),

@@ -11,10 +11,19 @@ import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { formatUnknownAgentError } from "../../agents/agent-selection.ts";
+import { resolveModelLaneOverrides } from "../../agents/model-lanes.ts";
+import type { ThinkingLevel } from "../../shared/model-info.ts";
 import { applyEffectiveThinkingSuffix } from "../shared/pi-args.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
-import type { RunnerStep } from "../shared/parallel-utils.ts";
+import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type DynamicParallelStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import type { RunnerDynamicStep, RunnerStep } from "../shared/parallel-utils.ts";
+
+/**
+ * Placeholder for the per-item task inside a dynamic-fanout template built at spawn time.
+ * The runner clones the template per materialized item and swaps this sentinel for the
+ * item's resolved task text, preserving the read/output/progress instruction wrapping.
+ */
+const DYNAMIC_ITEM_TASK_SENTINEL = "__PI_SUBAGENTS_DYNAMIC_ITEM_TASK_SENTINEL__";
 import { ChainOutputValidationError, validateChainOutputBindings } from "../shared/chain-outputs.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
@@ -125,6 +134,7 @@ interface AsyncChainParams {
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	dynamicFanoutMaxItems?: number;
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	nestedRoute?: import("../../shared/types.ts").NestedRouteInfo;
@@ -162,6 +172,13 @@ interface AsyncExecutionResult {
 	content: Array<{ type: "text"; text: string }>;
 	details: Details;
 	isError?: boolean;
+}
+
+/** Compact per-step agent label for the started event and chain description. */
+function describeChainStepAgents(step: ChainStep): string {
+	if (isParallelStep(step)) return `[${step.parallel.map((t) => t.agent).join("+")}]`;
+	if (isDynamicParallelStep(step)) return `fanout[${step.parallel.agent}->${step.collect.as}]`;
+	return (step as SequentialStep).agent;
 }
 
 export function formatAsyncStartedMessage(headline: string): string {
@@ -292,26 +309,15 @@ export function executeAsyncChain(
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
 	const firstStep = chain[0];
 	const originalTask = params.task ?? (firstStep
-		? (isParallelStep(firstStep) ? firstStep.parallel[0]?.task : (firstStep as SequentialStep).task)
+		? (isParallelStep(firstStep) ? firstStep.parallel[0]?.task : isDynamicParallelStep(firstStep) ? firstStep.parallel.task : (firstStep as SequentialStep).task)
 		: undefined);
-
-	// TODO(async-fanout): dynamic fanout (expand/collect) is rejected in async mode below.
-	// Lifting this needs runtime task-count scaffolding in the background runner (the static
-	// pre-baked session-file/status/index slots have no room for runtime-materialized items).
-	// See PLAN-structured-output-fanout.md "Follow-up: Async dynamic fanout".
-	const dynamicStepIndex = chain.findIndex((s) => isDynamicParallelStep(s));
-	if (dynamicStepIndex >= 0) {
-		return {
-			content: [{ type: "text", text: `Dynamic fanout (expand/collect) at chain step ${dynamicStepIndex + 1} is not yet supported in async mode. Run this chain in the foreground (omit async), where dynamic fanout is fully supported.` }],
-			isError: true,
-			details: { mode: resultMode, results: [] },
-		};
-	}
 
 	for (const s of chain) {
 		const stepAgents = isParallelStep(s)
 			? s.parallel.map((t) => t.agent)
-			: [(s as SequentialStep).agent];
+			: isDynamicParallelStep(s)
+				? [s.parallel.agent]
+				: [(s as SequentialStep).agent];
 		for (const agentName of stepAgents) {
 			if (!agents.find((x) => x.name === agentName)) {
 				return {
@@ -324,7 +330,7 @@ export function executeAsyncChain(
 	}
 
 	try {
-		validateChainOutputBindings(chain);
+		validateChainOutputBindings(chain, { maxItems: params.dynamicFanoutMaxItems });
 	} catch (error) {
 		if (error instanceof ChainOutputValidationError) {
 			return {
@@ -411,6 +417,54 @@ export function executeAsyncChain(
 		};
 	};
 
+	// A dynamic-fanout step can't be flattened at spawn time (its per-item count depends on a
+	// prior step's runtime structured output). Pre-resolve the shared per-item template — agent
+	// config, model candidates, skills, system prompt, output-schema, and the read/output/progress
+	// instruction wrapping — with a sentinel standing in for the per-item task. The runner
+	// materializes items at runtime, clones this template per item (swapping the sentinel), and
+	// runs them as a normal parallel group. Contributes no pre-baked flat slots.
+const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDynamicStep => {
+		const a = agents.find((x) => x.name === s.parallel.agent)!;
+		const stepCwd = resolveChildCwd(runnerCwd, s.parallel.cwd);
+		const stepOverride: StepOverrides = {
+			output: s.parallel.output,
+			outputMode: s.parallel.outputMode,
+			reads: s.parallel.reads,
+			progress: s.parallel.progress,
+			skills: normalizeSkillInput(s.parallel.skill),
+			model: s.parallel.model,
+			thinking: s.parallel.thinking,
+		};
+		const behavior = suppressProgressForReadOnlyTask(resolveStepBehavior(a, stepOverride, chainSkills), DYNAMIC_ITEM_TASK_SENTINEL, originalTask);
+		const isFirstProgressAgent = behavior.progress && !progressInstructionCreated;
+		const progressSuffix = buildChainInstructions({ ...behavior, output: false, reads: false }, runnerCwd, isFirstProgressAgent).suffix;
+
+		// Resolve parallel.lane to concrete model/thinking for the template, matching the static
+		// parallel path (applyResolvedLaneToChainStep in subagent-executor.ts).
+		const resolvedLane = resolveModelLaneOverrides(stepCwd, {
+			agentName: s.parallel.agent,
+			laneName: s.parallel.lane,
+			model: s.parallel.model,
+			thinking: s.parallel.thinking as ThinkingLevel | undefined,
+		});
+
+		const templateSource: SequentialStep = {
+			agent: s.parallel.agent,
+			task: DYNAMIC_ITEM_TASK_SENTINEL,
+			...(s.parallel.cwd !== undefined ? { cwd: s.parallel.cwd } : {}),
+			...(s.parallel.output !== undefined ? { output: s.parallel.output } : {}),
+			...(s.parallel.outputMode !== undefined ? { outputMode: s.parallel.outputMode } : {}),
+			...(s.parallel.reads !== undefined ? { reads: s.parallel.reads } : {}),
+			...(s.parallel.progress !== undefined ? { progress: s.parallel.progress } : {}),
+			...(s.parallel.skill !== undefined ? { skill: s.parallel.skill } : {}),
+			...(resolvedLane.model !== undefined ? { model: resolvedLane.model } : s.parallel.model !== undefined ? { model: s.parallel.model } : {}),
+			...(resolvedLane.thinking !== undefined ? { thinking: resolvedLane.thinking } : s.parallel.thinking !== undefined ? { thinking: s.parallel.thinking } : {}),
+			...(s.parallel.outputSchema !== undefined ? { outputSchema: s.parallel.outputSchema } : {}),
+		};
+		const template = buildSeqStep(templateSource);
+		return { dynamic: { step: s, template, behavior, progressSuffix, originalTask, sentinel: DYNAMIC_ITEM_TASK_SENTINEL, stepIndex, maxItems: params.dynamicFanoutMaxItems } };
+	};
+
 	let flatStepIndex = 0;
 	const nextSessionFile = (): string | undefined => {
 		const sessionFile = sessionFilesByFlatIndex?.[flatStepIndex];
@@ -421,6 +475,7 @@ export function executeAsyncChain(
 	let steps: RunnerStep[];
 	try {
 		steps = chain.map((s, stepIndex) => {
+			if (isDynamicParallelStep(s)) return buildDynamicStep(s, stepIndex);
 			if (isParallelStep(s)) {
 				const parallelBehaviors = s.parallel.map((task) => {
 					const agent = agents.find((candidate) => candidate.name === task.agent)!;
@@ -456,6 +511,7 @@ export function executeAsyncChain(
 	}
 	let childTargetIndex = 0;
 	const childIntercomTargets = childIntercomTarget ? steps.flatMap((step) => {
+		if ("dynamic" in step) return []; // materialized at runtime; no pre-baked intercom slots
 		if ("parallel" in step) {
 			return step.parallel.map((task) => childIntercomTarget(task.agent, childTargetIndex++));
 		}
@@ -482,6 +538,7 @@ export function executeAsyncChain(
 				piArgv1: process.argv[1],
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
+				dynamicFanoutMaxItems: params.dynamicFanoutMaxItems,
 				controlConfig,
 				controlIntercomTarget,
 				childIntercomTargets,
@@ -505,7 +562,9 @@ export function executeAsyncChain(
 		const firstStep = chain[0];
 		const firstAgents = isParallelStep(firstStep)
 			? firstStep.parallel.map((t) => t.agent)
-			: [(firstStep as SequentialStep).agent];
+			: isDynamicParallelStep(firstStep)
+				? [firstStep.parallel.agent]
+				: [(firstStep as SequentialStep).agent];
 		const parallelGroups: Array<{ start: number; count: number; stepIndex: number }> = [];
 		const flatAgents: string[] = [];
 		let flatStepStart = 0;
@@ -515,6 +574,9 @@ export function executeAsyncChain(
 				parallelGroups.push({ start: flatStepStart, count: step.parallel.length, stepIndex });
 				flatAgents.push(...step.parallel.map((task) => task.agent));
 				flatStepStart += step.parallel.length;
+			} else if (isDynamicParallelStep(step)) {
+				// Materialized at runtime; count unknown here, so it contributes no flat slots to
+				// the initial started-event projection. The runner splices its group in live.
 			} else {
 				flatAgents.push((step as SequentialStep).agent);
 				flatStepStart++;
@@ -529,10 +591,10 @@ export function executeAsyncChain(
 			agents: flatAgents,
 			task: isParallelStep(firstStep)
 				? firstStep.parallel[0]?.task?.slice(0, 50)
-				: (firstStep as SequentialStep).task?.slice(0, 50),
-			chain: chain.map((s) =>
-				isParallelStep(s) ? `[${s.parallel.map((t) => t.agent).join("+")}]` : (s as SequentialStep).agent,
-			),
+				: isDynamicParallelStep(firstStep)
+					? firstStep.parallel.task?.slice(0, 50)
+					: (firstStep as SequentialStep).task?.slice(0, 50),
+			chain: chain.map((s) => describeChainStepAgents(s)),
 			chainStepCount: chain.length,
 			parallelGroups,
 			cwd: runnerCwd,
@@ -541,9 +603,7 @@ export function executeAsyncChain(
 	}
 
 	const chainDesc = chain
-		.map((s) =>
-			isParallelStep(s) ? `[${s.parallel.map((t) => t.agent).join("+")}]` : (s as SequentialStep).agent,
-		)
+		.map((s) => describeChainStepAgents(s))
 		.join(" -> ");
 
 	return {

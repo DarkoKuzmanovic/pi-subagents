@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.40.0] - unreleased
+
+### Added
+
+- **Dynamic fanout (`expand`/`collect`) now runs in async/background chains.** The v0.39.0 "foreground only" restriction is lifted. When a background chain reaches a dynamic-fanout step, the detached runner materializes the per-item tasks at runtime from the prior step's structured array, splices runtime flat-index slots into the status/session/escalation/intercom bookkeeping so downstream steps stay aligned, runs the items through the standard parallel executor, and collects them into `{outputs.<collect.as>}` for later steps. Verified end-to-end through the mock-`pi` runner harness (happy path + `onEmpty: skip`), including the downstream `{outputs}` consumer. Two async-only caveats: materialized items run without per-item session files or intercom targets (no individual resume/share/contact), so a `context: "fork"` dynamic template does not fork per item in the background.
+- **`subagent.fanout.materialized` event** is appended to an async run's `events.jsonl` when a dynamic step expands, recording the collect name and item count.
+
+### Changed
+
+- **Async chains containing a dynamic-fanout step are no longer rejected.** This supersedes the v0.39.0 guard and its "run this chain in the foreground" error. The runner defers the dynamic step's flat-slot allocation (a new `RunnerDynamicStep` carries a pre-resolved per-item template with a task sentinel) and splices materialized slots in at runtime.
+
+### Fixed
+
+- **Async dynamic-fanout parity with the foreground path** (from code review of the async fanout feature):
+  - Read-only progress suppression is now recomputed against each resolved per-item task at materialization, matching the foreground path. Previously it was computed against the internal task sentinel, so async fanout emitted progress instructions for read-only per-item tasks that the foreground suppressed.
+  - Parallel-group status bookkeeping is corrected after a runtime fanout splice: the `start` of every trailing pre-recorded parallel group is rebased by the materialized item count, and the fanout group is recorded at the dynamic step's logical index. This fixes mislabeled `step N/M` progress and prevents a trailing or final fanout group from being dropped from async status.
+  - `parallel.lane` on a dynamic-fanout template is now resolved to a concrete `model`/`thinking` in both the foreground and async paths (previously silently ignored).
+  - Dynamic materialize/collect failures (`onEmpty: "fail"`, `maxItems` exceeded, unknown/invalid source output, `collect.outputSchema` mismatch, and per-item hard failures) now set `statusPayload.error`, so an async run's `status.json` explains the failure instead of leaving the error empty. Per-item hard-failure errors name the failing item's `key`.
+- **`subagent.fanout.materialized` is also emitted on the empty-source (`onEmpty: "skip"`) path** with `count: 0`, so consumers relying on it as the fanout marker still observe it. The materialize-failure event now references the dynamic step's logical index.
+- **The dynamic-fanout task sentinel no longer contains NUL bytes**, so `src/runs/background/async-execution.ts` is a text file again and its diffs render normally.
+- **The `expand.maxItems` tool-schema description** now names the real flat `dynamicFanoutMaxItems` config setting instead of a non-existent nested key.
+
 ## [0.39.0] - 2026-06-13
 
 ### Added
