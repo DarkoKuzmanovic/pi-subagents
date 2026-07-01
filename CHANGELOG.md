@@ -11,6 +11,17 @@
 
 - **Async chains containing a dynamic-fanout step are no longer rejected.** This supersedes the v0.39.0 guard and its "run this chain in the foreground" error. The runner defers the dynamic step's flat-slot allocation (a new `RunnerDynamicStep` carries a pre-resolved per-item template with a task sentinel) and splices materialized slots in at runtime.
 
+### Fixed
+
+- **Async dynamic-fanout parity with the foreground path** (from code review of the async fanout feature):
+  - Read-only progress suppression is now recomputed against each resolved per-item task at materialization, matching the foreground path. Previously it was computed against the internal task sentinel, so async fanout emitted progress instructions for read-only per-item tasks that the foreground suppressed.
+  - Parallel-group status bookkeeping is corrected after a runtime fanout splice: the `start` of every trailing pre-recorded parallel group is rebased by the materialized item count, and the fanout group is recorded at the dynamic step's logical index. This fixes mislabeled `step N/M` progress and prevents a trailing or final fanout group from being dropped from async status.
+  - `parallel.lane` on a dynamic-fanout template is now resolved to a concrete `model`/`thinking` in both the foreground and async paths (previously silently ignored).
+  - Dynamic materialize/collect failures (`onEmpty: "fail"`, `maxItems` exceeded, unknown/invalid source output, `collect.outputSchema` mismatch, and per-item hard failures) now set `statusPayload.error`, so an async run's `status.json` explains the failure instead of leaving the error empty. Per-item hard-failure errors name the failing item's `key`.
+- **`subagent.fanout.materialized` is also emitted on the empty-source (`onEmpty: "skip"`) path** with `count: 0`, so consumers relying on it as the fanout marker still observe it. The materialize-failure event now references the dynamic step's logical index.
+- **The dynamic-fanout task sentinel no longer contains NUL bytes**, so `src/runs/background/async-execution.ts` is a text file again and its diffs render normally.
+- **The `expand.maxItems` tool-schema description** now names the real flat `dynamicFanoutMaxItems` config setting instead of a non-existent nested key.
+
 ## [0.39.0] - 2026-06-13
 
 ### Added

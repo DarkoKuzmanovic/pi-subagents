@@ -1664,6 +1664,17 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				}));
 
 				if (parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1)) {
+					// For dynamic fanout, surface the per-item key of each failed item (mirrors the
+					// foreground "Item K (agent, key X)" diagnostics) so status.json/results identify
+					// which expanded items failed rather than just naming the agent.
+					if (group.dynamicItems) {
+						const failed = parallelResults
+							.map((r, i) => ({ r, key: group.dynamicItems![i]?.key ?? String(i), pos: i + 1 }))
+							.filter(({ r }) => r.exitCode !== 0 && r.exitCode !== -1)
+							.map(({ r, key, pos }) => `- Item ${pos} (${r.agent}, key ${key}): ${r.error || "failed"}`)
+							.join("\n");
+						if (failed) statusPayload.error = `Dynamic fanout failed:\n${failed}`;
+					}
 					break;
 				}
 			} finally {
@@ -1683,7 +1694,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				const message = formatMaterializationError(error);
 				results.push({ agent: dyn.step.parallel.agent, output: message, error: message, success: false });
 				statusPayload.error = message;
-				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.failed", ts: Date.now(), runId: id, stepIndex: flatIndex, agent: dyn.step.parallel.agent, error: message }));
+				// Use the dynamic step's logical index (not the flat cursor, whose slot is not yet spliced)
+				// so consumers walking statusPayload.steps land on a real step, matching the success emit.
+				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.failed", ts: Date.now(), runId: id, stepIndex: dynStepIndex, agent: dyn.step.parallel.agent, error: message }));
 				break;
 			}
 
@@ -1699,6 +1712,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				}
 				outputs[dyn.step.collect.as] = { text: JSON.stringify(collection), structured: collection, agent: dyn.step.parallel.agent, stepIndex: dynStepIndex };
 				previousOutput = "Dynamic fanout produced 0 results.";
+				// Signal that a fanout ran even though it produced no items, so consumers relying on
+				// subagent.fanout.materialized as the fanout marker still observe it (count: 0).
+				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.fanout.materialized", ts: Date.now(), runId: id, stepIndex: dynStepIndex, collectAs: dyn.step.collect.as, count: 0 }));
 				continue;
 			}
 
@@ -2035,7 +2051,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	statusPayload.shareUrl = shareUrl;
 	statusPayload.gistUrl = gistUrl;
 	statusPayload.shareError = shareError;
-	if (statusPayload.state === "failed") {
+	if (statusPayload.state === "failed" && !statusPayload.error) {
+		// Only synthesize a generic message if a more specific error (e.g. a dynamic-fanout
+		// materialize/collect/hard-failure summary) was not already recorded on a catch path.
 		const failedStep = statusPayload.steps.find((s) => s.status === "failed");
 		if (failedStep?.agent) {
 			statusPayload.error = `Step failed: ${failedStep.agent}`;

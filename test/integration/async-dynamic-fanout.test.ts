@@ -174,6 +174,17 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			// The consumer saw an empty collected array.
 			const consumerTask = findCallWith(mockPi!.dir, "[]");
 			assert.ok(consumerTask, "consumer task should contain the empty collected array");
+
+			// The fanout still ran (with zero items), so consumers relying on the event as the
+			// fanout marker must still observe it with count 0.
+			const events = fs
+				.readFileSync(path.join(ASYNC_DIR!, id, "events.jsonl"), "utf-8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line));
+			const materialized = events.find((e) => e.type === "subagent.fanout.materialized");
+			assert.ok(materialized, "onEmpty:skip should still emit subagent.fanout.materialized");
+			assert.equal(materialized.count, 0, "empty-source fanout should report count 0");
 		},
 	);
 

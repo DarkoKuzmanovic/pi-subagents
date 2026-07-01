@@ -96,7 +96,7 @@ const ChainItem = Type.Object({
 		}),
 		item: Type.Optional(Type.String({ description: "Template variable name for each item (default 'item'); reference as {item} or {item.field} in the parallel task." })),
 		key: Type.Optional(Type.String({ description: "JSON Pointer into each item producing a unique key (default: array index)." })),
-		maxItems: Type.Optional(Type.Integer({ minimum: 0, description: "Maximum items to fan out; required unless config.chain.dynamicFanout.maxItems is set." })),
+		maxItems: Type.Optional(Type.Integer({ minimum: 0, description: "Maximum items to fan out; required unless the dynamicFanoutMaxItems config setting is set. A dynamic step with no effective cap is rejected before execution." })),
 		onEmpty: Type.Optional(Type.String({ enum: ["skip", "fail"], description: "Behavior when the source array is empty (default 'skip')." })),
 	}, { description: "Dynamic fanout: expand an array from a prior step's structured output. Pairs with a single parallel template object and collect." })),
 	collect: Type.Optional(Type.Object({
