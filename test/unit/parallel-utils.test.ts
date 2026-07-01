@@ -2,14 +2,42 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
 	isParallelGroup,
+	isRunnerDynamicStep,
 	flattenSteps,
 	mapConcurrent,
 	aggregateParallelOutputs,
 	type RunnerSubagentStep,
 	type ParallelStepGroup,
+	type RunnerDynamicStep,
 	type RunnerStep,
 	} from "../../src/runs/shared/parallel-utils.ts";
 import { MAX_CONCURRENCY } from "../../src/shared/types.ts";
+
+const DYNAMIC_STEP: RunnerDynamicStep = {
+	dynamic: {
+		step: {
+			expand: { from: { output: "plan", path: "/files" }, item: "file" },
+			parallel: { agent: "reviewer", task: "Review {file}" },
+			collect: { as: "results" },
+		},
+		template: { agent: "reviewer", task: "Review @@ITEM@@", inheritProjectContext: false, inheritSkills: false },
+		sentinel: "@@ITEM@@",
+		stepIndex: 1,
+	},
+};
+
+describe("isRunnerDynamicStep", () => {
+	it("returns true for a deferred dynamic step", () => {
+		assert.equal(isRunnerDynamicStep(DYNAMIC_STEP), true);
+	});
+	it("returns false for parallel groups and sequential steps", () => {
+		assert.equal(isRunnerDynamicStep({ parallel: [{ agent: "a", task: "t", inheritProjectContext: false, inheritSkills: false }] }), false);
+		assert.equal(isRunnerDynamicStep({ agent: "a", task: "t", inheritProjectContext: false, inheritSkills: false }), false);
+	});
+	it("is not misclassified as a parallel group", () => {
+		assert.equal(isParallelGroup(DYNAMIC_STEP), false);
+	});
+});
 
 describe("isParallelGroup", () => {
 	it("returns true for a parallel step group", () => {
@@ -66,6 +94,16 @@ describe("flattenSteps", () => {
 
 	it("handles empty steps array", () => {
 		assert.deepEqual(flattenSteps([]), []);
+	});
+
+	it("skips deferred dynamic steps (materialized at runtime)", () => {
+		const steps: RunnerStep[] = [
+			{ agent: "before", task: "x" },
+			DYNAMIC_STEP,
+			{ agent: "after", task: "y" },
+		];
+		const flat = flattenSteps(steps);
+		assert.deepEqual(flat.map((s) => s.agent), ["before", "after"]);
 	});
 
 	it("handles empty parallel group", () => {

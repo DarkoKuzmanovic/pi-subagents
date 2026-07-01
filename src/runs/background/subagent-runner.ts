@@ -35,11 +35,14 @@ import {
 import {
 	type RunnerSubagentStep as SubagentStep,
 	type RunnerStep,
+	type ParallelStepGroup,
 	isParallelGroup,
+	isRunnerDynamicStep,
 	flattenSteps,
 	mapConcurrent,
 	aggregateParallelOutputs,
 } from "../shared/parallel-utils.ts";
+import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput, resetStructuredOutputCapture, type StructuredOutputRuntime } from "../shared/structured-output.ts";
 import { isStorableStepResult, outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
@@ -97,6 +100,7 @@ interface SubagentRunConfig {
 	piArgv1?: string;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	dynamicFanoutMaxItems?: number;
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	childIntercomTargets?: Array<string | undefined>;
@@ -933,6 +937,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	let flatStepCount = 0;
 	for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
 		const step = steps[stepIndex]!;
+		if (isRunnerDynamicStep(step)) continue; // materialized + spliced in at runtime
 		if (isParallelGroup(step)) {
 			parallelGroups.push({ start: flatStepCount, count: step.parallel.length, stepIndex });
 			flatStepCount += step.parallel.length;
@@ -941,6 +946,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		}
 	}
 	const flatSteps = flattenSteps(steps);
+	// Per-flat-index intercom targets. Copied to a mutable local because dynamic fanout splices
+	// runtime placeholder slots in as it materializes, keeping post-fanout steps' indices aligned.
+	const childIntercomTargets: Array<string | undefined> | undefined = config.childIntercomTargets
+		? [...config.childIntercomTargets]
+		: undefined;
 
 	// Per-step escalation tracking for timed_out_escalating → timed_out transitions.
 	// Declared AFTER flatSteps to avoid TDZ ReferenceError.
@@ -1001,7 +1011,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const mutatingFailureWindowMs = 5 * 60_000;
 	const appendControlEvent = (event: ReturnType<typeof buildControlEvent>) => {
 		if (!controlConfig.enabled) return;
-		const childIntercomTarget = config.childIntercomTargets?.[event.index ?? statusPayload.currentStep];
+		const childIntercomTarget = childIntercomTargets?.[event.index ?? statusPayload.currentStep];
 		const channels = event.type === "active_long_running"
 			? controlConfig.notifyChannels.filter((channel) => channel !== "intercom")
 			: controlConfig.notifyChannels;
@@ -1503,7 +1513,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							outputFile: path.join(asyncDir, `output-${fi}.log`),
 							piPackageRoot: config.piPackageRoot,
 							piArgv1: config.piArgv1,
-							childIntercomTarget: config.childIntercomTargets?.[fi],
+							childIntercomTarget: childIntercomTargets?.[fi],
 							orchestratorIntercomTarget: config.controlIntercomTarget,
 							registerInterrupt: (interrupt) => {
 								activeChildInterrupts.set(fi, interrupt);
@@ -1618,6 +1628,28 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				);
 				previousOutput = appendParallelWorktreeSummary(previousOutput, worktreeSetup, asyncDir, stepIndex, group);
 
+				// Dynamic-fanout collect epilogue: when this group was materialized from a dynamic
+				// step, aggregate the per-item results into outputs[collect.as] so downstream steps
+				// can reference {outputs.<as>}. Only on full success — a hard failure breaks below and
+				// downstream never runs, mirroring the foreground contract.
+				if (group.collect && group.dynamicStep && group.dynamicItems) {
+					const hardFailure = parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1);
+					if (!hardFailure) {
+						const collectAgent = group.dynamicAgent ?? group.dynamicStep.parallel.agent;
+						const collected = collectDynamicResults(group.dynamicStep, group.dynamicItems, parallelResults);
+						try {
+							validateDynamicCollection(group.collect.outputSchema, collected);
+						} catch (error) {
+							const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
+							results.push({ agent: collectAgent, output: message, error: message, success: false });
+							appendJsonl(eventsPath, JSON.stringify({ type: "subagent.parallel.completed", ts: Date.now(), runId: id, stepIndex, success: false }));
+							break;
+						}
+						outputs[group.collect.as] = { text: JSON.stringify(collected), structured: collected, agent: collectAgent, stepIndex };
+						previousOutput = `Dynamic fanout collected ${collected.length} result(s) into ${group.collect.as}.`;
+					}
+				}
+
 				appendJsonl(eventsPath, JSON.stringify({
 					type: "subagent.parallel.completed",
 					ts: Date.now(),
@@ -1632,6 +1664,78 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			} finally {
 				if (worktreeSetup) cleanupWorktrees(worktreeSetup);
 			}
+		} else if (isRunnerDynamicStep(step)) {
+			// Dynamic fanout: materialize the per-item tasks from a prior step's structured output,
+			// splice runtime flat-index slots so downstream steps stay aligned, then inject a real
+			// parallel group so the loop's next iteration runs it through the standard executor +
+			// collect epilogue above.
+			const dyn = step.dynamic;
+			const dynStepIndex = dyn.stepIndex;
+			let materialized: ReturnType<typeof materializeDynamicParallelStep>;
+			try {
+				materialized = materializeDynamicParallelStep(dyn.step, outputs, dynStepIndex, { maxItems: dyn.maxItems ?? config.dynamicFanoutMaxItems });
+			} catch (error) {
+				const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
+				results.push({ agent: dyn.step.parallel.agent, output: message, error: message, success: false });
+				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.failed", ts: Date.now(), runId: id, stepIndex: flatIndex, agent: dyn.step.parallel.agent, error: message }));
+				break;
+			}
+
+			if (materialized.parallel.length === 0) {
+				const collection = materialized.collectedOnEmpty ?? [];
+				try {
+					validateDynamicCollection(dyn.step.collect.outputSchema, collection);
+				} catch (error) {
+					const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
+					results.push({ agent: dyn.step.parallel.agent, output: message, error: message, success: false });
+					break;
+				}
+				outputs[dyn.step.collect.as] = { text: JSON.stringify(collection), structured: collection, agent: dyn.step.parallel.agent, stepIndex: dynStepIndex };
+				previousOutput = "Dynamic fanout produced 0 results.";
+				continue;
+			}
+
+			// Clone the pre-resolved template per item, swapping the sentinel for the item task.
+			const materializedSteps: SubagentStep[] = materialized.parallel.map((task) => ({
+				...dyn.template,
+				task: dyn.template.task.split(dyn.sentinel).join(task.task ?? "{previous}"),
+			}));
+			const count = materializedSteps.length;
+
+			// Splice runtime flat-index slots at flatIndex. Post-fanout steps have not run yet, so
+			// no live child's index is shifted out from under it.
+			const materializedAt = Date.now();
+			const newStatusSteps: RunnerStatusStep[] = materializedSteps.map((s) => ({
+				agent: s.agent,
+				status: "pending",
+				skills: s.skills,
+				model: s.model,
+				attemptedModels: s.modelCandidates && s.modelCandidates.length > 0 ? s.modelCandidates : s.model ? [s.model] : undefined,
+				recentTools: [],
+				recentOutput: [],
+			}));
+			statusPayload.steps.splice(flatIndex, 0, ...newStatusSteps);
+			flatSteps.splice(flatIndex, 0, ...materializedSteps);
+			stepEscalationStartedAt.splice(flatIndex, 0, ...new Array(count).fill(undefined));
+			mutatingFailureStates.splice(flatIndex, 0, ...materializedSteps.map(() => createMutatingFailureState()));
+			pendingToolResults.splice(flatIndex, 0, ...new Array(count).fill(undefined));
+			if (childIntercomTargets) childIntercomTargets.splice(flatIndex, 0, ...new Array<string | undefined>(count).fill(undefined));
+			statusPayload.parallelGroups.push({ start: flatIndex, count, stepIndex: stepIndex + 1 });
+			statusPayload.lastUpdate = materializedAt;
+			writeAtomicJson(statusPath, statusPayload);
+			appendJsonl(eventsPath, JSON.stringify({ type: "subagent.fanout.materialized", ts: materializedAt, runId: id, stepIndex: dynStepIndex, collectAs: dyn.step.collect.as, count }));
+
+			const group: ParallelStepGroup = {
+				parallel: materializedSteps,
+				...(dyn.step.concurrency !== undefined ? { concurrency: dyn.step.concurrency } : {}),
+				...(dyn.step.failFast !== undefined ? { failFast: dyn.step.failFast } : {}),
+				collect: { as: dyn.step.collect.as, ...(dyn.step.collect.outputSchema ? { outputSchema: dyn.step.collect.outputSchema } : {}) },
+				dynamicItems: materialized.items,
+				dynamicStep: dyn.step,
+				dynamicAgent: dyn.step.parallel.agent,
+			};
+			steps.splice(stepIndex + 1, 0, group);
+			continue;
 		} else {
 			const seqStep = step as SubagentStep;
 			const stepStartTime = Date.now();
@@ -1665,7 +1769,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				outputFile: path.join(asyncDir, `output-${flatIndex}.log`),
 				piPackageRoot: config.piPackageRoot,
 				piArgv1: config.piArgv1,
-				childIntercomTarget: config.childIntercomTargets?.[flatIndex],
+				childIntercomTarget: childIntercomTargets?.[flatIndex],
 				orchestratorIntercomTarget: config.controlIntercomTarget,
 				registerInterrupt: (interrupt) => {
 					activeChildInterrupts.set(flatIndex, interrupt);

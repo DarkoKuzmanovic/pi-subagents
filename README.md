@@ -670,7 +670,7 @@ A chain step can expand an array from a prior step's structured output into N pa
 - `concurrency` and `failFast` mirror the static-parallel semantics for the materialized tasks.
 - `collect.as` stores the per-item results (optionally validated with `collect.outputSchema`), referenceable as `{outputs.<as>}`. The substituted value is a **JSON array of per-item result objects** — each carries the expanded `item`, the `agent`, and that item's `text`/`structured` output — not a single scalar, so its size grows with the item count. Per-item `as` is **not** supported on a dynamic template; aggregate via `collect.as`.
 
-Dynamic fanout **requires a prior step that produced a structured array** (via `as` + `outputSchema`) — structured output (above) is a hard prerequisite. It is available through direct `subagent({ chain: [...] })` JSON and saved `.chain.js` files, and is **foreground only**: an async chain containing a dynamic-fanout step is rejected with a clear error (run it in the foreground). Full async support is a tracked follow-up.
+Dynamic fanout **requires a prior step that produced a structured array** (via `as` + `outputSchema`) — structured output (above) is a hard prerequisite. It is available through direct `subagent({ chain: [...] })` JSON and saved `.chain.js` files, and works in the **foreground and in async/background** runs: the background runner materializes the per-item tasks at runtime from the prior step's structured output and collects them into `{outputs.<as>}` for downstream steps. Two async-only caveats today: materialized items run without per-item session files or intercom targets, so they can't be individually resumed/shared or contacted mid-run, and a `context: "fork"` dynamic template does not fork per item in the background.
 
 ## Skills
 
@@ -1081,7 +1081,7 @@ Optimizations:
 
 Ported from upstream (v0.39.0):
 
-- **Structured output** (`outputSchema` + `{outputs.name}`) and **dynamic fanout** (`expand`/`collect`) were reimplemented from upstream — structured output in the foreground and the async/background runner, dynamic fanout in the foreground only. Upstream's acceptance-gate and workflow-graph machinery were intentionally not ported. See the Structured output and Dynamic fanout sections.
+- **Structured output** (`outputSchema` + `{outputs.name}`) and **dynamic fanout** (`expand`/`collect`) were reimplemented from upstream — both in the foreground and in the async/background runner (async dynamic fanout landed in v0.40.0). Upstream's acceptance-gate and workflow-graph machinery were intentionally not ported. See the Structured output and Dynamic fanout sections.
 
 Visible cleanup role:
 

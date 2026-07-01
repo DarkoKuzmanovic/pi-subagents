@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.40.0] - unreleased
+
+### Added
+
+- **Dynamic fanout (`expand`/`collect`) now runs in async/background chains.** The v0.39.0 "foreground only" restriction is lifted. When a background chain reaches a dynamic-fanout step, the detached runner materializes the per-item tasks at runtime from the prior step's structured array, splices runtime flat-index slots into the status/session/escalation/intercom bookkeeping so downstream steps stay aligned, runs the items through the standard parallel executor, and collects them into `{outputs.<collect.as>}` for later steps. Verified end-to-end through the mock-`pi` runner harness (happy path + `onEmpty: skip`), including the downstream `{outputs}` consumer. Two async-only caveats: materialized items run without per-item session files or intercom targets (no individual resume/share/contact), so a `context: "fork"` dynamic template does not fork per item in the background.
+- **`subagent.fanout.materialized` event** is appended to an async run's `events.jsonl` when a dynamic step expands, recording the collect name and item count.
+
+### Changed
+
+- **Async chains containing a dynamic-fanout step are no longer rejected.** This supersedes the v0.39.0 guard and its "run this chain in the foreground" error. The runner defers the dynamic step's flat-slot allocation (a new `RunnerDynamicStep` carries a pre-resolved per-item template with a task sentinel) and splices materialized slots in at runtime.
+
 ## [0.39.0] - 2026-06-13
 
 ### Added

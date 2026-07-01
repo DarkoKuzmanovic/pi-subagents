@@ -29,17 +29,52 @@ export interface ParallelStepGroup {
 	concurrency?: number;
 	failFast?: boolean;
 	worktree?: boolean;
+	/**
+	 * Runtime-only dynamic-fanout markers. Set when a group is materialized from a
+	 * {@link RunnerDynamicStep} at runtime (never present in the spawn config). When set,
+	 * the parallel executor runs the tasks normally and then collects their results into
+	 * `outputs[collect.as]` via a small epilogue. Not serialized.
+	 */
+	collect?: { as: string; outputSchema?: import("../../shared/types.ts").JsonSchemaObject };
+	dynamicItems?: import("./dynamic-fanout.ts").DynamicMaterializedItem[];
+	dynamicStep?: import("../../shared/settings.ts").DynamicParallelStep;
+	dynamicAgent?: string;
 }
 
-export type RunnerStep = RunnerSubagentStep | ParallelStepGroup;
+/**
+ * A dynamic-fanout step deferred to the background runner. Unlike a static parallel group,
+ * its task count is unknown at spawn time — it expands an array from a prior step's
+ * structured output. The parent pre-resolves the per-item {@link RunnerSubagentStep}
+ * `template` (agent config, model, skills, system prompt, output-schema, instruction
+ * wrapping) with a `sentinel` standing in for the per-item task; the runner materializes
+ * items at runtime, clones the template per item, and runs them as a normal parallel group.
+ * Contributes ZERO flat-index slots to the pre-baked status/session/intercom arrays; the
+ * runner splices runtime slots in when it materializes.
+ */
+export interface RunnerDynamicStep {
+	dynamic: {
+		step: import("../../shared/settings.ts").DynamicParallelStep;
+		template: RunnerSubagentStep;
+		sentinel: string;
+		stepIndex: number;
+		maxItems?: number;
+	};
+}
+
+export type RunnerStep = RunnerSubagentStep | ParallelStepGroup | RunnerDynamicStep;
 
 export function isParallelGroup(step: RunnerStep): step is ParallelStepGroup {
-	return "parallel" in step && Array.isArray(step.parallel);
+	return "parallel" in step && Array.isArray((step as ParallelStepGroup).parallel);
+}
+
+export function isRunnerDynamicStep(step: RunnerStep): step is RunnerDynamicStep {
+	return "dynamic" in step && !!(step as RunnerDynamicStep).dynamic && typeof (step as RunnerDynamicStep).dynamic === "object";
 }
 
 export function flattenSteps(steps: RunnerStep[]): RunnerSubagentStep[] {
 	const flat: RunnerSubagentStep[] = [];
 	for (const step of steps) {
+		if (isRunnerDynamicStep(step)) continue; // materialized at runtime; contributes no pre-baked flat slots
 		if (isParallelGroup(step)) {
 			for (const task of step.parallel) flat.push(task);
 		} else {

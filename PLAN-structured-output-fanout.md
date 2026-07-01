@@ -91,8 +91,17 @@ Tier 1 is a hard prerequisite for Tier 2.
 
 ## Follow-up: Async dynamic fanout (deferred from v0.39.0)
 
-Guard: `src/runs/background/async-execution.ts` rejects any chain containing a dynamic step
-before spawn (`TODO(async-fanout)`). Lifting it requires, in the background runner:
+**Status: DONE in v0.40.0.** The guard was lifted. The background runner now defers the dynamic
+step (`RunnerDynamicStep` carries a pre-resolved per-item template with a task sentinel),
+materializes items at runtime from the prior structured array, splices runtime flat-index slots
+into the status/session/escalation/intercom arrays, runs them via the standard parallel executor,
+and collects into `{outputs.<collect.as>}`. Verified end-to-end via the mock-`pi` runner harness
+(`test/integration/async-dynamic-fanout.test.ts`). Remaining async-only limitation: materialized
+items get no per-item session files or intercom targets (no individual resume/share/contact; a
+`context: "fork"` template does not fork per item in the background). Original notes preserved below.
+
+Guard (now removed): `src/runs/background/async-execution.ts` rejected any chain containing a dynamic
+step before spawn (`TODO(async-fanout)`). Lifting it required, in the background runner:
 
 1. **Extract the inline ~170-line parallel executor** (`mapConcurrent` + per-task
    `statusPayload.steps[fi]` writes + intercom + completion/interrupt) into a reusable
