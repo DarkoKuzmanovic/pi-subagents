@@ -281,6 +281,12 @@ export function executeAsyncChain(
 		childIntercomTarget,
 	} = params;
 	const resultMode = params.resultMode ?? "chain";
+	// A single-agent dispatch reads more cleanly without a redundant mode label:
+	// "Async: worker [id]" / "Failed to start async run 'id'" rather than
+	// "Async single: worker [id]" / "Failed to start async single 'id'". Parallel and
+	// chain keep their explicit mode word.
+	const startedModeLabel = resultMode === "single" ? "" : ` ${resultMode}`;
+	const startFailureMode = resultMode === "single" ? "run" : resultMode;
 	const chainSkills = params.chainSkills ?? [];
 	const availableModels = params.availableModels;
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
@@ -488,11 +494,11 @@ export function executeAsyncChain(
 		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		return formatAsyncStartError(resultMode, `Failed to start async ${resultMode} '${id}': ${message}`);
+		return formatAsyncStartError(resultMode, `Failed to start async ${startFailureMode} '${id}': ${message}`);
 	}
 
 	if (spawnResult.error) {
-		return formatAsyncStartError(resultMode, `Failed to start async ${resultMode} '${id}': ${spawnResult.error}`);
+		return formatAsyncStartError(resultMode, `Failed to start async ${startFailureMode} '${id}': ${spawnResult.error}`);
 	}
 
 	if (spawnResult.pid) {
@@ -541,7 +547,7 @@ export function executeAsyncChain(
 		.join(" -> ");
 
 	return {
-		content: [{ type: "text", text: formatAsyncStartedMessage(`Async ${resultMode}: ${chainDesc} [${id}]`) }],
+		content: [{ type: "text", text: formatAsyncStartedMessage(`Async${startedModeLabel}: ${chainDesc} [${id}]`) }],
 		details: { mode: resultMode, runId: id, results: [], asyncId: id, asyncDir },
 	};
 }
