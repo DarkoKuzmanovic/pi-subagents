@@ -1,4 +1,5 @@
 import type { JsonSchemaObject } from "../../shared/types.ts";
+import type { ResolvedStepBehavior } from "../../shared/settings.ts";
 
 export interface RunnerSubagentStep {
 	agent: string;
@@ -55,6 +56,12 @@ export interface RunnerDynamicStep {
 	dynamic: {
 		step: import("../../shared/settings.ts").DynamicParallelStep;
 		template: RunnerSubagentStep;
+		/** Behavior resolved at spawn time for the template (with sentinel task). */
+		behavior: ResolvedStepBehavior;
+		/** Progress instruction suffix that was appended to the template task. */
+		progressSuffix?: string;
+		/** Original top-level task for progress-suppression policy. */
+		originalTask?: string;
 		sentinel: string;
 		stepIndex: number;
 		maxItems?: number;

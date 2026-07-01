@@ -176,4 +176,320 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			assert.ok(consumerTask, "consumer task should contain the empty collected array");
 		},
 	);
+
+
+	it(
+		"labels a dynamic fanout as the same logical step it replaces",
+		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
+		async () => {
+			mockPi!.onCall({ structured: { files: ["a.ts", "b.ts"] }, output: "listed files" });
+			mockPi!.onCall({ output: "reviewed one" });
+			mockPi!.onCall({ output: "reviewed two" });
+			mockPi!.onCall({ output: "final summary" });
+
+			const id = `async-fanout-logical-label-${Date.now().toString(36)}`;
+			executeAsyncChain!(id, {
+				chain: [
+					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{
+						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
+						parallel: { agent: "reviewer", task: "Review file {file}" },
+						collect: { as: "results" },
+					},
+					{ agent: "planner", task: "Summarize {outputs.results}" },
+				],
+				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig,
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
+			await waitForFile(resultPath);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+			assert.equal(payload.success, true);
+
+			const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR!, id, "status.json"), "utf-8"));
+			assert.equal(status.chainStepCount, 3, "chainStepCount should stay the original logical length");
+			assert.equal(status.steps.length, 4, "flat steps = producer + 2 materialized + consumer");
+			assert.equal(status.parallelGroups.length, 1, "fanout should be recorded as one group");
+			assert.equal(status.parallelGroups[0].count, 2);
+			assert.equal(status.parallelGroups[0].start, 1);
+			assert.equal(status.parallelGroups[0].stepIndex, 1, "fanout should occupy the dynamic step's logical slot, not the following slot");
+		},
+	);
+
+	it(
+		"records a final dynamic fanout as a valid parallel group instead of dropping it",
+		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
+		async () => {
+			mockPi!.onCall({ structured: { files: ["a.ts", "b.ts"] }, output: "listed files" });
+			mockPi!.onCall({ output: "reviewed one" });
+			mockPi!.onCall({ output: "reviewed two" });
+
+			const id = `async-fanout-final-${Date.now().toString(36)}`;
+			executeAsyncChain!(id, {
+				chain: [
+					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{
+						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
+						parallel: { agent: "reviewer", task: "Review file {file}" },
+						collect: { as: "results" },
+					},
+				],
+				agents: [makeAgent("context-builder"), makeAgent("reviewer")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig,
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
+			await waitForFile(resultPath);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+			assert.equal(payload.success, true);
+
+			const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR!, id, "status.json"), "utf-8"));
+			assert.equal(status.chainStepCount, 2, "original logical length is preserved");
+			assert.equal(status.steps.length, 3, "flat steps = producer + 2 materialized");
+			assert.equal(status.parallelGroups.length, 1, "final fanout group should not be dropped by normalizeParallelGroups");
+			assert.equal(status.parallelGroups[0].count, 2);
+			assert.equal(status.parallelGroups[0].start, 1);
+			assert.equal(status.parallelGroups[0].stepIndex, 1, "final fanout group stepIndex should be the dynamic step's logical slot");
+		},
+	);
+
+	it(
+		"bumps the start of a trailing static parallel group after a dynamic fanout splice",
+		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
+		async () => {
+			mockPi!.onCall({ structured: { files: ["a.ts", "b.ts"] }, output: "listed files" });
+			mockPi!.onCall({ output: "reviewed one" });
+			mockPi!.onCall({ output: "reviewed two" });
+			mockPi!.onCall({ output: "static one" });
+			mockPi!.onCall({ output: "static two" });
+			mockPi!.onCall({ output: "final summary" });
+
+			const id = `async-fanout-trailing-static-${Date.now().toString(36)}`;
+			executeAsyncChain!(id, {
+				chain: [
+					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{
+						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
+						parallel: { agent: "reviewer", task: "Review file {file}" },
+						collect: { as: "results" },
+					},
+					{
+						parallel: [
+							{ agent: "worker-a", task: "Static task A" },
+							{ agent: "worker-b", task: "Static task B" },
+						],
+					},
+					{ agent: "planner", task: "Summarize" },
+				],
+				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("worker-a"), makeAgent("worker-b"), makeAgent("planner")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig,
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
+			await waitForFile(resultPath);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+			assert.equal(payload.success, true);
+
+			const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR!, id, "status.json"), "utf-8"));
+			assert.equal(status.chainStepCount, 4, "original logical length is preserved");
+			assert.equal(status.steps.length, 6, "flat steps = producer + 2 fanout + 2 static + consumer");
+			assert.equal(status.parallelGroups.length, 2, `fanout and trailing static groups both recorded: ${JSON.stringify(status.parallelGroups)}`);
+			const fanoutGroup = status.parallelGroups.find((g: { count: number }) => g.count === 2 && g.start === 1);
+			const staticGroup = status.parallelGroups.find((g: { count: number }) => g.count === 2 && g.start === 3);
+			assert.ok(fanoutGroup, "fanout group should start at flatIndex 1");
+			assert.ok(staticGroup, "trailing static group should be bumped from 1 to 3 to account for 2 materialized slots");
+			assert.equal(staticGroup.stepIndex, 2, "trailing static group keeps its original logical step index");
+		},
+	);
+
+	it(
+		"suppresses progress instructions for per-item read-only tasks",
+		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
+		async () => {
+			mockPi!.onCall({ structured: { files: ["a.ts", "b.ts"] }, output: "listed files" });
+			mockPi!.onCall({ output: "reviewed one" });
+			mockPi!.onCall({ output: "reviewed two" });
+			mockPi!.onCall({ output: "final summary" });
+
+			const id = `async-fanout-readonly-progress-${Date.now().toString(36)}`;
+			executeAsyncChain!(id, {
+				chain: [
+					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{
+						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
+						parallel: { agent: "reviewer", task: "Review-only file {file}: do not edit files. Return findings." },
+						collect: { as: "results" },
+					},
+					{ agent: "planner", task: "Summarize {outputs.results}" },
+				],
+				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig,
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
+			await waitForFile(resultPath);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+			assert.equal(payload.success, true);
+
+			for (const name of fs.readdirSync(mockPi!.dir)) {
+				if (!name.startsWith("call-")) continue;
+				const args = JSON.parse(fs.readFileSync(path.join(mockPi!.dir, name), "utf-8")).args as string[];
+				const task = args.at(-1) ?? "";
+				if (task.includes("Review-only file")) {
+					assert.doesNotMatch(task, /progress at:/, "read-only per-item task should not include progress instructions");
+				}
+			}
+		},
+	);
+
+	function writeLaneSettings(cwd: string, value: unknown): void {
+		const piDir = path.join(cwd, ".pi");
+		fs.mkdirSync(piDir, { recursive: true });
+		fs.writeFileSync(path.join(piDir, "settings.json"), JSON.stringify(value), "utf-8");
+	}
+
+	it(
+		"resolves parallel.lane to concrete model and thinking for dynamic fanout",
+		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
+		async () => {
+			writeLaneSettings(tempDir, {
+				subagents: {
+					modelLanes: {
+						reviewer: {
+							fast: { model: "deepseek/deepseek-v4-flash", thinking: "high" },
+						},
+					},
+				},
+			});
+
+			mockPi!.onCall({ structured: { files: ["a.ts"] }, output: "listed files" });
+			mockPi!.onCall({ output: "reviewed one" });
+			mockPi!.onCall({ output: "final summary" });
+
+			const id = `async-fanout-lane-${Date.now().toString(36)}`;
+			executeAsyncChain!(id, {
+				chain: [
+					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{
+						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
+						parallel: { agent: "reviewer", task: "Review file {file}", lane: "fast" },
+						collect: { as: "results" },
+					},
+					{ agent: "planner", task: "Summarize {outputs.results}" },
+				],
+				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig,
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
+			await waitForFile(resultPath);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+			assert.equal(payload.success, true);
+
+			const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR!, id, "status.json"), "utf-8"));
+			const fanoutStep = status.steps[1];
+			assert.equal(fanoutStep.model, "deepseek/deepseek-v4-flash:high", "lane should resolve the model+thinking on the materialized template");
+		},
+	);
+
+	it(
+		"reports a non-empty status error when the source array is empty and onEmpty is fail",
+		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
+		async () => {
+			mockPi!.onCall({ structured: { files: [] }, output: "no files" });
+
+			const id = `async-fanout-empty-fail-${Date.now().toString(36)}`;
+			executeAsyncChain!(id, {
+				chain: [
+					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{
+						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10, onEmpty: "fail" },
+						parallel: { agent: "reviewer", task: "Review file {file}" },
+						collect: { as: "results" },
+					},
+					{ agent: "planner", task: "Summarize {outputs.results}" },
+				],
+				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig,
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
+			await waitForFile(resultPath);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+			assert.equal(payload.success, false, "run should fail with onEmpty: fail");
+
+			const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR!, id, "status.json"), "utf-8"));
+			assert.ok(status.error, "status.error should be set for a failed materialization");
+			assert.match(status.error, /source array is empty/);
+		},
+	);
+
+	it(
+		"reports a non-empty status error when collect outputSchema validation fails",
+		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
+		async () => {
+			mockPi!.onCall({ structured: { files: ["a.ts"] }, output: "listed files" });
+			mockPi!.onCall({ output: "reviewed one" });
+
+			const id = `async-fanout-schema-fail-${Date.now().toString(36)}`;
+			executeAsyncChain!(id, {
+				chain: [
+					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{
+						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
+						parallel: { agent: "reviewer", task: "Review file {file}" },
+						collect: {
+							as: "results",
+							outputSchema: {
+								type: "object",
+								properties: { requiredField: { type: "string" } },
+								required: ["requiredField"],
+								additionalProperties: false,
+							},
+						},
+					},
+				],
+				agents: [makeAgent("context-builder"), makeAgent("reviewer")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig,
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
+			await waitForFile(resultPath);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+			assert.equal(payload.success, false, "run should fail with schema mismatch");
+
+			const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR!, id, "status.json"), "utf-8"));
+			assert.ok(status.error, "status.error should be set for a failed collect validation");
+			assert.match(status.error, /Collected output validation failed/);
+		},
+	);
 });

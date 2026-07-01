@@ -75,7 +75,7 @@ import {
 	formatWorktreeTaskCwdConflict,
 	type WorktreeSetup,
 } from "../shared/worktree.ts";
-import { writeInitialProgressFile } from "../../shared/settings.ts";
+import { suppressProgressForReadOnlyTask, writeInitialProgressFile } from "../../shared/settings.ts";
 import { emptyUsage, tokenUsageFromAttempts } from "../shared/usage.ts";
 import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
@@ -125,6 +125,10 @@ interface StepResult {
 
 const require = createRequire(import.meta.url);
 const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
+
+function formatMaterializationError(err: unknown): string {
+	return err instanceof DynamicFanoutError ? err.message : err instanceof Error ? err.message : String(err);
+}
 
 function appendRecentStepOutput(step: RunnerStatusStep, lines: string[]): void {
 	step.recentOutput ??= [];
@@ -1640,8 +1644,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						try {
 							validateDynamicCollection(group.collect.outputSchema, collected);
 						} catch (error) {
-							const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
+							const message = formatMaterializationError(error);
 							results.push({ agent: collectAgent, output: message, error: message, success: false });
+							statusPayload.error = message;
 							appendJsonl(eventsPath, JSON.stringify({ type: "subagent.parallel.completed", ts: Date.now(), runId: id, stepIndex, success: false }));
 							break;
 						}
@@ -1673,10 +1678,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			const dynStepIndex = dyn.stepIndex;
 			let materialized: ReturnType<typeof materializeDynamicParallelStep>;
 			try {
-				materialized = materializeDynamicParallelStep(dyn.step, outputs, dynStepIndex, { maxItems: dyn.maxItems ?? config.dynamicFanoutMaxItems });
+				materialized = materializeDynamicParallelStep(dyn.step, outputs, dynStepIndex, { maxItems: dyn.maxItems });
 			} catch (error) {
-				const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
+				const message = formatMaterializationError(error);
 				results.push({ agent: dyn.step.parallel.agent, output: message, error: message, success: false });
+				statusPayload.error = message;
 				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.failed", ts: Date.now(), runId: id, stepIndex: flatIndex, agent: dyn.step.parallel.agent, error: message }));
 				break;
 			}
@@ -1686,8 +1692,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				try {
 					validateDynamicCollection(dyn.step.collect.outputSchema, collection);
 				} catch (error) {
-					const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
+					const message = formatMaterializationError(error);
 					results.push({ agent: dyn.step.parallel.agent, output: message, error: message, success: false });
+					statusPayload.error = message;
 					break;
 				}
 				outputs[dyn.step.collect.as] = { text: JSON.stringify(collection), structured: collection, agent: dyn.step.parallel.agent, stepIndex: dynStepIndex };
@@ -1696,10 +1703,20 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			// Clone the pre-resolved template per item, swapping the sentinel for the item task.
-			const materializedSteps: SubagentStep[] = materialized.parallel.map((task) => ({
-				...dyn.template,
-				task: dyn.template.task.split(dyn.sentinel).join(task.task ?? "{previous}"),
-			}));
+			// Recompute read-only progress suppression per item so async behavior matches the
+			// foreground path (which resolves against the real per-item task text).
+			const materializedSteps: SubagentStep[] = materialized.parallel.map((task) => {
+				const resolvedTask = task.task ?? "{previous}";
+				const itemBehavior = suppressProgressForReadOnlyTask(dyn.behavior, resolvedTask, dyn.originalTask);
+				let itemTask = dyn.template.task.split(dyn.sentinel).join(resolvedTask);
+				if (!itemBehavior.progress && dyn.progressSuffix) {
+					itemTask = itemTask.replace(dyn.progressSuffix, "");
+				}
+				return {
+					...dyn.template,
+					task: itemTask,
+				};
+			});
 			const count = materializedSteps.length;
 
 			// Splice runtime flat-index slots at flatIndex. Post-fanout steps have not run yet, so
@@ -1720,7 +1737,13 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			mutatingFailureStates.splice(flatIndex, 0, ...materializedSteps.map(() => createMutatingFailureState()));
 			pendingToolResults.splice(flatIndex, 0, ...new Array(count).fill(undefined));
 			if (childIntercomTargets) childIntercomTargets.splice(flatIndex, 0, ...new Array<string | undefined>(count).fill(undefined));
-			statusPayload.parallelGroups.push({ start: flatIndex, count, stepIndex: stepIndex + 1 });
+			// Splicing shifted the flat indices of every trailing group recorded in the pre-loop.
+			for (const group of statusPayload.parallelGroups) {
+				if (group.start >= flatIndex) {
+					group.start += count;
+				}
+			}
+			statusPayload.parallelGroups.push({ start: flatIndex, count, stepIndex: dynStepIndex });
 			statusPayload.lastUpdate = materializedAt;
 			writeAtomicJson(statusPath, statusPayload);
 			appendJsonl(eventsPath, JSON.stringify({ type: "subagent.fanout.materialized", ts: materializedAt, runId: id, stepIndex: dynStepIndex, collectAs: dyn.step.collect.as, count }));

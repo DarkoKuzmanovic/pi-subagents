@@ -1079,6 +1079,14 @@ function applyResolvedLaneToChainStep(baseCwd: string, step: ChainStep): ChainSt
 		};
 	}
 
+	if (isDynamicParallelStep(step)) {
+		if (!step.parallel.lane) return step;
+		return {
+			...step,
+		parallel: applyResolvedLaneToRequest(resolveChildCwd(baseCwd, step.parallel.cwd), step.parallel),
+		};
+	}
+
 	const sequential = step as SequentialStep;
 	if (!sequential.lane) return step;
 	const resolved = resolveLaneOverridesForRequest(resolveChildCwd(baseCwd, sequential.cwd), {
