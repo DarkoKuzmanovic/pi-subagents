@@ -81,6 +81,17 @@ import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
 import { getStderrTail } from "../shared/stderr-tail.ts";
+import { createRunEventAppender, createStreamWatchdog } from "../shared/stream-budget.ts";
+
+// All events.jsonl writes in this runner funnel through a per-run byte budget
+// (default 50 MB): once exceeded, high-volume passthrough relays (child
+// stdout/stderr, raw child model events) are dropped while small structural
+// subagent.* lifecycle events are still appended. One runner process serves
+// one run, so a module-level appender is per-run state.
+const runEventAppender = createRunEventAppender(appendJsonl);
+function appendRunEvent(eventsPath: string, payload: Record<string, unknown>): void {
+	runEventAppender.append(eventsPath, payload);
+}
 
 interface SubagentRunConfig {
 	id: string;
@@ -227,6 +238,9 @@ function runPiStreaming(
 		let interrupted = false;
 		let observedMutationAttempt = false;
 		const rawStdoutLines: string[] = [];
+		// Runaway-stream watchdog: aborts children that flood stdout without any
+		// meaningful progress marker (thinking loops), or exceed the hard cap.
+		const streamWatchdog = createStreamWatchdog();
 
 		const writeOutputLine = (line: string) => {
 			if (!line.trim()) return;
@@ -241,14 +255,14 @@ function runPiStreaming(
 
 		const appendChildEvent = (event: Record<string, unknown>) => {
 			if (!childEventContext) return;
-			appendJsonl(childEventContext.eventsPath, JSON.stringify({
+			appendRunEvent(childEventContext.eventsPath, {
 				...event,
 				subagentSource: "child",
 				subagentRunId: childEventContext.runId,
 				subagentStepIndex: childEventContext.stepIndex,
 				subagentAgent: childEventContext.agent,
 				observedAt: Date.now(),
-			}));
+			});
 		};
 
 		const appendChildLine = (type: "subagent.child.stdout" | "subagent.child.stderr", line: string) => {
@@ -258,6 +272,7 @@ function runPiStreaming(
 		const lineProcessor = createLineProcessor({
 			onJson: (parsed) => {
 				const event = parsed as ChildEvent;
+				streamWatchdog.observeEvent(event);
 				appendChildEvent(event);
 				onChildEvent?.(event);
 
@@ -338,6 +353,19 @@ function runPiStreaming(
 		let settled = false;
 		const clearStdioGuard = attachPostExitStdioGuard(child, { idleMs: 2000, hardMs: 8000 });
 		child.stdout.on("data", (chunk: Buffer) => {
+			const runawayError = streamWatchdog.addBytes(chunk.length);
+			if (runawayError) {
+				// Runaway child: record the failure and kill it, mirroring the
+				// timeout-kill escalation (SIGINT, then SIGTERM after 1s).
+				error = runawayError;
+				errorFromChildMessage = false;
+				trySignalChild(child, "SIGINT");
+				setTimeout(() => {
+					if (!settled) trySignalChild(child, "SIGTERM");
+				}, 1000).unref?.();
+			}
+			// Once tripped, stop relaying/parsing the flood entirely.
+			if (streamWatchdog.tripped) return;
 			const text = chunk.toString();
 			stdoutBuf += text;
 			const lines = stdoutBuf.split("\n");
@@ -394,7 +422,7 @@ function runPiStreaming(
 			registerInterrupt?.(undefined);
 			clearDrainTimers();
 			clearStdioGuard();
-			if (stdoutBuf.trim()) processStdoutLine(stdoutBuf);
+			if (!streamWatchdog.tripped && stdoutBuf.trim()) processStdoutLine(stdoutBuf);
 			if (stderrBuf.trim()) appendChildLine("subagent.child.stderr", stderrBuf);
 			outputStream.end();
 			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
@@ -849,13 +877,13 @@ function markParallelGroupSetupFailure(input: {
 	input.statusPayload.lastUpdate = input.failedAt;
 	input.statusPayload.outputFile = path.join(input.asyncDir, `output-${input.groupStartFlatIndex}.log`);
 	writeAtomicJson(input.statusPath, input.statusPayload);
-	appendJsonl(input.eventsPath, JSON.stringify({
+	appendRunEvent(input.eventsPath, {
 		type: "subagent.parallel.completed",
 		ts: input.failedAt,
 		runId: input.runId,
 		stepIndex: input.stepIndex,
 		success: false,
-	}));
+	});
 }
 
 function markParallelGroupRunning(input: {
@@ -885,14 +913,14 @@ function markParallelGroupRunning(input: {
 	input.statusPayload.lastUpdate = input.groupStartTime;
 	input.statusPayload.outputFile = path.join(input.asyncDir, `output-${input.groupStartFlatIndex}.log`);
 	writeAtomicJson(input.statusPath, input.statusPayload);
-	appendJsonl(input.eventsPath, JSON.stringify({
+	appendRunEvent(input.eventsPath, {
 		type: "subagent.parallel.started",
 		ts: input.groupStartTime,
 		runId: input.runId,
 		stepIndex: input.stepIndex,
 		agents: input.group.parallel.map((task) => task.agent),
 		count: input.group.parallel.length,
-	}));
+	});
 }
 
 function prepareParallelTaskRun(
@@ -1031,7 +1059,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			? controlConfig.notifyChannels.filter((channel) => channel !== "intercom")
 			: controlConfig.notifyChannels;
 		if (channels.length === 0 || !claimControlNotification(controlConfig, event, emittedControlEventKeys, childIntercomTarget)) return;
-		appendJsonl(eventsPath, JSON.stringify({
+		appendRunEvent(eventsPath, {
 			type: "subagent.control",
 			event,
 			channels,
@@ -1043,7 +1071,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					message: formatControlIntercomMessage(event, childIntercomTarget),
 				},
 			} : {}),
-		}));
+		});
 	};
 
 	const killStep = (flatIndex: number, reason: "step_inactivity_timeout" | "run_wall_clock_timeout"): void => {
@@ -1376,27 +1404,24 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 		}
 		writeAtomicJson(statusPath, statusPayload);
-		appendJsonl(eventsPath, JSON.stringify({
+		appendRunEvent(eventsPath, {
 			type: "subagent.run.paused",
 			ts: now,
 			runId: id,
-		}));
+		});
 		for (const interrupt of activeChildInterrupts.values()) {
 			try { interrupt(); } catch { /* best-effort */ }
 		}
 	};
 	process.on(ASYNC_INTERRUPT_SIGNAL, interruptRunner);
-	appendJsonl(
-		eventsPath,
-		JSON.stringify({
+	appendRunEvent(eventsPath, {
 			type: "subagent.run.started",
 			ts: overallStartTime,
 			runId: id,
 			mode: statusPayload.mode,
 			cwd,
 			pid: process.pid,
-		}),
-	);
+		});
 
 	let flatIndex = 0;
 
@@ -1489,9 +1514,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							statusPayload.steps[fi].activityState = undefined;
 							statusPayload.lastUpdate = skippedAt;
 							writeAtomicJson(statusPath, statusPayload);
-							appendJsonl(eventsPath, JSON.stringify({
+							appendRunEvent(eventsPath, {
 								type: "subagent.step.failed", ts: skippedAt, runId: id, stepIndex: fi, agent: task.agent, exitCode: -1, durationMs: 0,
-							}));
+							});
 							return { agent: task.agent, output: "(skipped — fail-fast)", exitCode: -1 as number | null, skipped: true };
 						}
 
@@ -1510,9 +1535,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						statusPayload.lastUpdate = taskStartTime;
 						writeAtomicJson(statusPath, statusPayload);
 
-						appendJsonl(eventsPath, JSON.stringify({
+						appendRunEvent(eventsPath, {
 							type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent,
-						}));
+						});
 
 						const taskSessionDir = config.sessionDir
 							? path.join(config.sessionDir, `parallel-${taskIdx}`)
@@ -1565,11 +1590,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						statusPayload.lastUpdate = taskEndTime;
 						writeAtomicJson(statusPath, statusPayload);
 
-						appendJsonl(eventsPath, JSON.stringify({
+						appendRunEvent(eventsPath, {
 							type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
 							ts: taskEndTime, runId: id, stepIndex: fi, agent: task.agent,
 							exitCode: singleResult.exitCode, durationMs: taskDuration,
-						}));
+						});
 						if (singleResult.completionGuardTriggered) {
 							const event = buildControlEvent({
 								from: statusPayload.steps[fi].activityState,
@@ -1658,7 +1683,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							const message = formatMaterializationError(error);
 							results.push({ agent: collectAgent, output: message, error: message, success: false });
 							statusPayload.error = message;
-							appendJsonl(eventsPath, JSON.stringify({ type: "subagent.parallel.completed", ts: Date.now(), runId: id, stepIndex, success: false }));
+							appendRunEvent(eventsPath, { type: "subagent.parallel.completed", ts: Date.now(), runId: id, stepIndex, success: false });
 							break;
 						}
 						outputs[group.collect.as] = { text: JSON.stringify(collected), structured: collected, agent: collectAgent, stepIndex };
@@ -1666,13 +1691,13 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					}
 				}
 
-				appendJsonl(eventsPath, JSON.stringify({
+				appendRunEvent(eventsPath, {
 					type: "subagent.parallel.completed",
 					ts: Date.now(),
 					runId: id,
 					stepIndex,
 					success: parallelResults.every((r) => r.exitCode === 0 || r.exitCode === -1),
-				}));
+				});
 
 				if (parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1)) {
 					// For dynamic fanout, surface the per-item key of each failed item (mirrors the
@@ -1707,7 +1732,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				statusPayload.error = message;
 				// Use the dynamic step's logical index (not the flat cursor, whose slot is not yet spliced)
 				// so consumers walking statusPayload.steps land on a real step, matching the success emit.
-				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.failed", ts: Date.now(), runId: id, stepIndex: dynStepIndex, agent: dyn.step.parallel.agent, error: message }));
+				appendRunEvent(eventsPath, { type: "subagent.step.failed", ts: Date.now(), runId: id, stepIndex: dynStepIndex, agent: dyn.step.parallel.agent, error: message });
 				break;
 			}
 
@@ -1725,7 +1750,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				previousOutput = "Dynamic fanout produced 0 results.";
 				// Signal that a fanout ran even though it produced no items, so consumers relying on
 				// subagent.fanout.materialized as the fanout marker still observe it (count: 0).
-				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.fanout.materialized", ts: Date.now(), runId: id, stepIndex: dynStepIndex, collectAs: dyn.step.collect.as, count: 0 }));
+				appendRunEvent(eventsPath, { type: "subagent.fanout.materialized", ts: Date.now(), runId: id, stepIndex: dynStepIndex, collectAs: dyn.step.collect.as, count: 0 });
 				continue;
 			}
 
@@ -1773,7 +1798,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			statusPayload.parallelGroups.push({ start: flatIndex, count, stepIndex: dynStepIndex });
 			statusPayload.lastUpdate = materializedAt;
 			writeAtomicJson(statusPath, statusPayload);
-			appendJsonl(eventsPath, JSON.stringify({ type: "subagent.fanout.materialized", ts: materializedAt, runId: id, stepIndex: dynStepIndex, collectAs: dyn.step.collect.as, count }));
+			appendRunEvent(eventsPath, { type: "subagent.fanout.materialized", ts: materializedAt, runId: id, stepIndex: dynStepIndex, collectAs: dyn.step.collect.as, count });
 
 			const group: ParallelStepGroup = {
 				parallel: materializedSteps,
@@ -1802,13 +1827,13 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			statusPayload.outputFile = path.join(asyncDir, `output-${flatIndex}.log`);
 			writeAtomicJson(statusPath, statusPayload);
 
-			appendJsonl(eventsPath, JSON.stringify({
+			appendRunEvent(eventsPath, {
 				type: "subagent.step.started",
 				ts: stepStartTime,
 				runId: id,
 				stepIndex: flatIndex,
 				agent: seqStep.agent,
-			}));
+			});
 
 			const seqStepResolved = { ...seqStep, task: resolveOutputReferences(seqStep.task, outputs) };
 			const singleResult = await runSingleStep(seqStepResolved, {
@@ -1911,7 +1936,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				console.error("Token accounting failed (non-fatal):", tokenErr);
 			}
 
-			appendJsonl(eventsPath, JSON.stringify({
+			appendRunEvent(eventsPath, {
 				type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
 				ts: stepEndTime,
 				runId: id,
@@ -1920,7 +1945,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				exitCode: singleResult.exitCode,
 				durationMs: stepEndTime - stepStartTime,
 				tokens: stepTokens,
-			}));
+			});
 			if (singleResult.completionGuardTriggered) {
 				const event = buildControlEvent({
 					from: statusPayload.steps[flatIndex].activityState,
@@ -2071,16 +2096,13 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		}
 	}
 	writeAtomicJson(statusPath, statusPayload);
-	appendJsonl(
-		eventsPath,
-		JSON.stringify({
+	appendRunEvent(eventsPath, {
 			type: "subagent.run.completed",
 			ts: runEndedAt,
 			runId: id,
 			status: statusPayload.state,
 			durationMs: runEndedAt - overallStartTime,
-		}),
-	);
+		});
 	writeRunLog(logPath, {
 		id,
 		mode: statusPayload.mode,

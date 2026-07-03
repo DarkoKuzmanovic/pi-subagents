@@ -71,6 +71,7 @@ import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
 import { getStderrTail } from "../shared/stderr-tail.ts";
+import { createStreamWatchdog } from "../shared/stream-budget.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 
@@ -209,6 +210,9 @@ async function runSingleAttempt(
 	};
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
 	let observedMutationAttempt = false;
+	// Runaway-stream watchdog: aborts children that flood stdout without any
+	// meaningful progress marker (thinking loops), or exceed the hard cap.
+	const streamWatchdog = createStreamWatchdog();
 
 	const exitCode = await new Promise<number>((resolve) => {
 		const spawnSpec = getPiSpawnCommand(args);
@@ -485,6 +489,7 @@ async function runSingleAttempt(
 		const lineProcessor = createLineProcessor({
 			onJson: (parsed) => {
 				const evt = parsed as { type?: string; message?: Message; toolName?: string; args?: unknown };
+				streamWatchdog.observeEvent(evt);
 				const now = Date.now();
 				progress.durationMs = now - startTime;
 				progress.lastActivityAt = now;
@@ -615,6 +620,19 @@ async function runSingleAttempt(
 
 		const clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
 		proc.stdout.on("data", (d) => {
+			const runawayError = streamWatchdog.addBytes(Buffer.isBuffer(d) ? d.length : Buffer.byteLength(String(d)));
+			if (runawayError) {
+				// Runaway child: record the failure and kill it, mirroring the
+				// timeout-kill escalation (SIGINT, then SIGTERM after 1s).
+				result.error = runawayError;
+				errorFromChildMessage = false;
+				trySignalChild(proc, "SIGINT");
+				setTimeout(() => {
+					if (!processClosed && !settled) trySignalChild(proc, "SIGTERM");
+				}, 1000).unref?.();
+			}
+			// Once tripped, stop relaying/parsing the flood entirely.
+			if (streamWatchdog.tripped) return;
 			buf += d.toString();
 			const lines = buf.split("\n");
 			buf = lines.pop() || "";
@@ -639,7 +657,7 @@ async function runSingleAttempt(
 				return;
 			}
 			processClosed = true;
-			if (buf.trim()) processLine(buf);
+			if (!streamWatchdog.tripped && buf.trim()) processLine(buf);
 			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && cleanTerminalAssistantStopReceived && !result.error;
 			if (code !== 0 && stderrBuf.trim() && !result.error && !forcedDrainAfterFinalSuccess) {
 				const stderrTail = getStderrTail(stderrBuf);
