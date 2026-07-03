@@ -42,6 +42,7 @@ export interface BuiltinAgentOverrideBase {
 	inheritProjectContext: boolean;
 	inheritSkills: boolean;
 	defaultContext?: AgentDefaultContext;
+	modelPromptRole?: string;
 	disabled?: boolean;
 	systemPrompt: string;
 	skills?: string[];
@@ -60,10 +61,12 @@ interface BuiltinAgentOverrideConfig {
 	inheritProjectContext?: boolean;
 	inheritSkills?: boolean;
 	defaultContext?: AgentDefaultContext | false;
+	modelPromptRole?: string | false;
 	disabled?: boolean;
 	systemPrompt?: string;
 	skills?: string[] | false;
 	tools?: string[] | false;
+	addTools?: string[];
 	disallowedTools?: string[] | false;
 	memory?: MemoryScope | false;
 }
@@ -90,6 +93,7 @@ export interface AgentConfig {
 	inheritProjectContext: boolean;
 	inheritSkills: boolean;
 	defaultContext?: AgentDefaultContext;
+	modelPromptRole?: string;
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
@@ -187,6 +191,7 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritSkills: agent.inheritSkills,
 		defaultContext: agent.defaultContext,
+		modelPromptRole: agent.modelPromptRole,
 		disabled: agent.disabled,
 		systemPrompt: agent.systemPrompt,
 		skills: agent.skills ? [...agent.skills] : undefined,
@@ -208,10 +213,12 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 		...(override.inheritProjectContext !== undefined ? { inheritProjectContext: override.inheritProjectContext } : {}),
 		...(override.inheritSkills !== undefined ? { inheritSkills: override.inheritSkills } : {}),
 		...(override.defaultContext !== undefined ? { defaultContext: override.defaultContext } : {}),
+		...(override.modelPromptRole !== undefined ? { modelPromptRole: override.modelPromptRole } : {}),
 		...(override.disabled !== undefined ? { disabled: override.disabled } : {}),
 		...(override.systemPrompt !== undefined ? { systemPrompt: override.systemPrompt } : {}),
 		...(override.skills !== undefined ? { skills: override.skills === false ? false : [...override.skills] } : {}),
 		...(override.tools !== undefined ? { tools: override.tools === false ? false : [...override.tools] } : {}),
+		...(override.addTools !== undefined ? { addTools: [...override.addTools] } : {}),
 		...(override.disallowedTools !== undefined
 			? { disallowedTools: override.disallowedTools === false ? false : [...override.disallowedTools] }
 			: {}),
@@ -344,6 +351,17 @@ function parseBuiltinOverrideEntry(
 		}
 	}
 
+	if ("modelPromptRole" in input) {
+		if (input.modelPromptRole === false) {
+			override.modelPromptRole = false;
+		} else if (typeof input.modelPromptRole === "string") {
+			const trimmed = input.modelPromptRole.trim();
+			override.modelPromptRole = trimmed || undefined;
+		} else {
+			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'modelPromptRole'; expected a string or false.`);
+		}
+	}
+
 	if ("disabled" in input) {
 		if (typeof input.disabled === "boolean") {
 			override.disabled = input.disabled;
@@ -365,6 +383,24 @@ function parseBuiltinOverrideEntry(
 
 	const tools = parseOverrideStringArrayOrFalse(input.tools, { filePath, name, field: "tools" });
 	if (tools !== undefined) override.tools = tools;
+
+	if ("addTools" in input) {
+		if (input.addTools === undefined) {
+			// undefined is fine, just skip
+		} else if (!Array.isArray(input.addTools)) {
+			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'addTools'; expected an array of strings.`);
+		} else {
+			const items: string[] = [];
+			for (const item of input.addTools) {
+				if (typeof item !== "string") {
+					throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'addTools'; expected an array of strings.`);
+				}
+				const trimmed = item.trim();
+				if (trimmed) items.push(trimmed);
+			}
+			if (items.length > 0) override.addTools = items;
+		}
+	}
 
 	const disallowedTools = parseOverrideStringArrayOrFalse(input.disallowedTools, { filePath, name, field: "disallowedTools" });
 	if (disallowedTools !== undefined) override.disallowedTools = disallowedTools;
@@ -424,6 +460,7 @@ function applyBuiltinOverride(
 	if (override.inheritProjectContext !== undefined) next.inheritProjectContext = override.inheritProjectContext;
 	if (override.inheritSkills !== undefined) next.inheritSkills = override.inheritSkills;
 	if (override.defaultContext !== undefined) next.defaultContext = override.defaultContext === false ? undefined : override.defaultContext;
+	if (override.modelPromptRole !== undefined) next.modelPromptRole = override.modelPromptRole === false ? undefined : override.modelPromptRole;
 	if (override.disabled !== undefined) next.disabled = override.disabled;
 	if (override.systemPrompt !== undefined) next.systemPrompt = override.systemPrompt;
 	if (override.skills !== undefined) next.skills = override.skills === false ? undefined : [...override.skills];
@@ -432,6 +469,39 @@ function applyBuiltinOverride(
 		next.tools = tools;
 		next.mcpDirectTools = mcpDirectTools;
 	}
+
+	if (override.addTools !== undefined && override.addTools.length > 0) {
+		// addTools is only applied if we have a defined baseline (tools or mcpDirectTools)
+		// If tools === undefined (no allowlist), addTools is a no-op
+		if (next.tools !== undefined || next.mcpDirectTools !== undefined) {
+			const { tools: addedTools, mcpDirectTools: addedMcpDirectTools } = splitToolList(override.addTools);
+			const existingTools = new Set(next.tools ?? []);
+			const existingMcpDirectTools = new Set(next.mcpDirectTools ?? []);
+
+			// Add new regular tools, deduping against existing
+			if (addedTools) {
+				for (const tool of addedTools) {
+					if (!existingTools.has(tool)) {
+						existingTools.add(tool);
+						if (!next.tools) next.tools = [];
+						next.tools.push(tool);
+					}
+				}
+			}
+
+			// Add new mcp direct tools, deduping against existing
+			if (addedMcpDirectTools) {
+				for (const tool of addedMcpDirectTools) {
+					if (!existingMcpDirectTools.has(tool)) {
+						existingMcpDirectTools.add(tool);
+						if (!next.mcpDirectTools) next.mcpDirectTools = [];
+						next.mcpDirectTools.push(tool);
+					}
+				}
+			}
+		}
+	}
+
 	if (override.disallowedTools !== undefined) {
 		next.disallowedTools = override.disallowedTools === false ? undefined : [...override.disallowedTools];
 	}
@@ -475,7 +545,7 @@ function applyBuiltinOverrides(
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools" | "disallowedTools" | "memory">,
+	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "modelPromptRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools" | "disallowedTools" | "memory">,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 
@@ -486,6 +556,7 @@ export function buildBuiltinOverrideConfig(
 	if (draft.inheritProjectContext !== base.inheritProjectContext) override.inheritProjectContext = draft.inheritProjectContext;
 	if (draft.inheritSkills !== base.inheritSkills) override.inheritSkills = draft.inheritSkills;
 	if (draft.defaultContext !== base.defaultContext) override.defaultContext = draft.defaultContext ?? false;
+	if (draft.modelPromptRole !== base.modelPromptRole) override.modelPromptRole = draft.modelPromptRole ?? false;
 	if (draft.disabled !== base.disabled) override.disabled = draft.disabled ?? false;
 	if (draft.systemPrompt !== base.systemPrompt) override.systemPrompt = draft.systemPrompt;
 	if (!arraysEqual(draft.skills, base.skills)) override.skills = draft.skills ? [...draft.skills] : false;
@@ -657,11 +728,31 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 					? "fresh" as const
 					: undefined;
 
+		const modelPromptRole = typeof frontmatter.modelPromptRole === "string" && frontmatter.modelPromptRole.trim()
+			? frontmatter.modelPromptRole.trim()
+			: undefined;
+
 		let extensions: string[] | undefined;
 		if (frontmatter.extensions !== undefined) {
-			extensions = frontmatter.extensions
+			// The frontmatter parser is plain key:value, so YAML-flow lists
+			// ("[]", "[a.ts, b.ts]") arrive as strings — strip the brackets so
+			// `extensions: []` means "empty list", not a literal "[]" path.
+			let raw = frontmatter.extensions.trim();
+			if (raw.startsWith("[") && raw.endsWith("]")) raw = raw.slice(1, -1);
+			extensions = raw
 				.split(",")
-				.map((e) => e.trim())
+				.map((e) => {
+					let trimmed = e.trim();
+					// Strip one pair of matching surrounding quotes (single or double)
+					if (
+						trimmed.length >= 2 &&
+						((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+							(trimmed.startsWith("'") && trimmed.endsWith("'")))
+					) {
+						trimmed = trimmed.slice(1, -1);
+					}
+					return trimmed;
+				})
 				.filter(Boolean);
 		}
 
@@ -688,6 +779,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			inheritProjectContext,
 			inheritSkills,
 			defaultContext,
+			modelPromptRole,
 			systemPrompt: body,
 			source,
 			filePath,

@@ -80,6 +80,7 @@ import { emptyUsage, tokenUsageFromAttempts } from "../shared/usage.ts";
 import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
+import { getStderrTail } from "../shared/stderr-tail.ts";
 
 interface SubagentRunConfig {
 	id: string;
@@ -634,6 +635,8 @@ async function runSingleStep(
 				extensions: step.extensions,
 				systemPrompt: step.systemPrompt,
 				systemPromptMode: step.systemPromptMode,
+				modelPromptRole: step.modelPromptRole,
+				modelPromptRoleFallbackModel: step.modelPromptRoleFallbackModel,
 				mcpDirectTools: step.mcpDirectTools,
 				cwd: step.cwd ?? ctx.cwd,
 				promptFileStem: step.agent,
@@ -682,12 +685,20 @@ async function runSingleStep(
 					: run.error && run.exitCode === 0
 						? 1
 						: run.exitCode;
-			const error = completionGuardError
+			// Bounded stderr tail replaces the old raw run.stderr fallback: full
+			// stderr in the error field was unbounded and duplicated the tail.
+			const stderrTail = run.exitCode !== 0 ? getStderrTail(run.stderr) : "";
+			let error = completionGuardError
 				?? (hiddenError?.hasError
 					? hiddenError.details
 						? `${hiddenError.errorType} failed (exit ${effectiveExitCode}): ${hiddenError.details}`
 						: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
-					: run.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined));
+					: run.error || (stderrTail ? `Child stderr (tail):\n${stderrTail}` : undefined));
+			// When the base error came from run.error (a distinct source, e.g. a
+			// provider error), append the tail as supporting diagnostics.
+			if (run.error && stderrTail && !completionGuardError && !hiddenError?.hasError) {
+				error = `${error}\n\nChild stderr (tail):\n${stderrTail}`;
+			}
 			const attempt: ModelAttempt = {
 				model: candidate ?? run.model ?? step.model ?? "default",
 				success: effectiveExitCode === 0 && !error,

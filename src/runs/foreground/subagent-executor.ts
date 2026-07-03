@@ -1664,6 +1664,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			modelOverride: input.modelOverrides[index],
 			availableModels: input.availableModels,
 			preferredModelProvider: input.ctx.model?.provider,
+			currentModelFullId: currentModelFullId(input.ctx.model),
 			skills: effectiveSkills === false ? [] : effectiveSkills,
 			effectiveThinking: behavior?.thinking,
 			onUpdate: input.onUpdate
@@ -2246,6 +2247,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		modelOverride,
 		availableModels,
 		preferredModelProvider: currentProvider,
+		currentModelFullId: currentModelFullId(ctx.model),
 		skills: effectiveSkills,
 		effectiveThinking,
 	});

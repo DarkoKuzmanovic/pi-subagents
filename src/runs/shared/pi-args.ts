@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveMcpDirectToolNames } from "./mcp-direct-tool-allowlist.ts";
 import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV } from "./structured-output.ts";
+import { resolveModelPromptRoleBlock } from "./model-prompt-role.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const TASK_ARG_LIMIT = 8000;
@@ -40,6 +41,8 @@ interface BuildPiArgsInput {
 	disallowedTools?: string[];
 	extensions?: string[];
 	systemPrompt?: string | null;
+	modelPromptRole?: string;
+	modelPromptRoleFallbackModel?: string;
 	mcpDirectTools?: string[];
 	cwd?: string;
 	promptFileStem?: string;
@@ -58,12 +61,76 @@ interface BuildPiArgsInput {
 	parentCapabilityToken?: string;
 	skipContextFiles?: boolean;
 	structuredOutput?: { schemaPath: string; outputPath: string };
+	childAlwaysExtensions?: string[];
 }
 
 interface BuildPiArgsResult {
 	args: string[];
 	env: Record<string, string | undefined>;
 	tempDir?: string;
+}
+
+/**
+ * Read the child always-load extensions from settings
+ * (settings.subagents.childAlwaysExtensions).
+ * Reads user settings (from userSettingsPath or ~/.pi/agent/settings.json) and
+ * optionally project settings (when cwd is provided). Merges both (user first, then project),
+ * deduplicates, and filters to paths that exist on disk.
+ * Entries should be ABSOLUTE paths — a relative entry is checked against the
+ * current process cwd and silently skipped when absent.
+ * Never throws; returns empty array on any error.
+ */
+export function readChildAlwaysExtensions(userSettingsPath?: string, cwd?: string): string[] {
+	try {
+		const extensions: string[] = [];
+		const seen = new Set<string>();
+
+		// Helper to read extensions from a settings file
+		const readFromFile = (filePath: string | null | undefined) => {
+			if (!filePath || !fs.existsSync(filePath)) return;
+			try {
+				const content = fs.readFileSync(filePath, "utf-8");
+				const settings = JSON.parse(content);
+				const alwaysExtensions = settings?.subagents?.childAlwaysExtensions;
+				if (!Array.isArray(alwaysExtensions)) return;
+				for (const ext of alwaysExtensions) {
+					if (typeof ext === "string" && fs.existsSync(ext) && !seen.has(ext)) {
+						extensions.push(ext);
+						seen.add(ext);
+					}
+				}
+			} catch {
+				// Silently skip malformed files
+			}
+		};
+
+		// Read user settings first
+		const userPath = userSettingsPath ?? path.join(os.homedir(), ".pi", "agent", "settings.json");
+		readFromFile(userPath);
+
+		// Read project settings if cwd provided
+		if (cwd) {
+			let projectRoot: string | null = cwd;
+			let found = false;
+			// Walk up to find .pi or .agents directory
+			while (projectRoot && projectRoot !== path.dirname(projectRoot)) {
+				if (fs.existsSync(path.join(projectRoot, ".pi")) || fs.existsSync(path.join(projectRoot, ".agents"))) {
+					found = true;
+					break;
+				}
+				projectRoot = path.dirname(projectRoot);
+			}
+			if (found && projectRoot) {
+				const projectSettingsPath = path.join(projectRoot, ".pi", "settings.json");
+				readFromFile(projectSettingsPath);
+			}
+		}
+
+		return extensions;
+	} catch {
+		// Never throw; silently return empty array on any error
+		return [];
+	}
 }
 
 export function applyThinkingSuffix(model: string | undefined, thinking: string | undefined): string | undefined {
@@ -164,7 +231,21 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		: [PROMPT_RUNTIME_EXTENSION_PATH];
 	if (input.extensions !== undefined) {
 		args.push("--no-extensions");
-		for (const extPath of [...new Set([...runtimeExtensions, ...toolExtensionPaths, ...input.extensions])]) {
+		// Get child always-set extensions (either from override or by reading settings)
+		const rawAlwaysExtensions =
+			input.childAlwaysExtensions !== undefined
+				? input.childAlwaysExtensions
+				: readChildAlwaysExtensions(undefined, input.cwd);
+		// Filter always-extensions to those that exist on disk
+		const alwaysExtensions = rawAlwaysExtensions.filter((ext) => fs.existsSync(ext));
+		for (const extPath of [
+			...new Set([
+				...runtimeExtensions,
+				...toolExtensionPaths,
+				...alwaysExtensions,
+				...input.extensions,
+			]),
+		]) {
 			args.push("--extension", extPath);
 		}
 	} else {
@@ -182,7 +263,18 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
 		const stem = (input.promptFileStem ?? "prompt").replace(/[^\w.-]/g, "_");
 		const promptPath = path.join(tempDir, `${stem}.md`);
-		fs.writeFileSync(promptPath, input.systemPrompt, { mode: 0o600 });
+
+		// Inject model prompt role block if applicable
+		let finalSystemPrompt = input.systemPrompt;
+		if (input.modelPromptRole) {
+			const resolveModel = input.model ?? input.modelPromptRoleFallbackModel;
+			const roleBlock = resolveModelPromptRoleBlock(resolveModel, input.modelPromptRole);
+			if (roleBlock) {
+				finalSystemPrompt = `${finalSystemPrompt}\n\n${roleBlock.block}`;
+			}
+		}
+
+		fs.writeFileSync(promptPath, finalSystemPrompt, { mode: 0o600 });
 		args.push(input.systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt", promptPath);
 	}
 

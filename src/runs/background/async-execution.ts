@@ -407,6 +407,8 @@ export function executeAsyncChain(
 			systemPromptMode: a.systemPromptMode,
 			inheritProjectContext: a.inheritProjectContext,
 			inheritSkills: a.inheritSkills,
+			modelPromptRole: a.modelPromptRole,
+			modelPromptRoleFallbackModel: ctx.currentModel,
 			skills: resolvedSkills.map((r) => r.name),
 			outputPath,
 			outputMode: behavior.outputMode,

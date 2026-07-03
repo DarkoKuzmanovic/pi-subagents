@@ -70,6 +70,7 @@ import { emptyUsage, sumUsage } from "../shared/usage.ts";
 import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
+import { getStderrTail } from "../shared/stderr-tail.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 
@@ -138,6 +139,8 @@ async function runSingleAttempt(
 		tools: agent.tools,
 		extensions: agent.extensions,
 		systemPrompt: shared.systemPrompt,
+		modelPromptRole: agent.modelPromptRole,
+		modelPromptRoleFallbackModel: options.currentModelFullId,
 		mcpDirectTools: agent.mcpDirectTools,
 		cwd: options.cwd ?? runtimeCwd,
 		disallowedTools: agent.disallowedTools,
@@ -639,7 +642,13 @@ async function runSingleAttempt(
 			if (buf.trim()) processLine(buf);
 			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && cleanTerminalAssistantStopReceived && !result.error;
 			if (code !== 0 && stderrBuf.trim() && !result.error && !forcedDrainAfterFinalSuccess) {
-				result.error = stderrBuf.trim();
+				const stderrTail = getStderrTail(stderrBuf);
+				if (stderrTail) {
+					result.error = `Child stderr (tail):\n${stderrTail}`;
+				}
+				// An empty tail means stderr held no printable text (e.g. pure ANSI
+				// control sequences) — surfacing the raw buffer would emit garbage,
+				// so leave result.error unset and let the generic failure text apply.
 			} else if (forcedDrainAfterFinalSuccess && stderrBuf.trim()) {
 				// Our own drain-kill after a clean final message is success, but the
 				// child's stderr may carry useful diagnostics — preserve a bounded

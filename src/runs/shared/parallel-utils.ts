@@ -14,6 +14,9 @@ export interface RunnerSubagentStep {
 	systemPromptMode?: "append" | "replace";
 	inheritProjectContext: boolean;
 	inheritSkills: boolean;
+	modelPromptRole?: string;
+	/** Fallback model (provider/id format) for role resolution when model is undefined */
+	modelPromptRoleFallbackModel?: string;
 	skills?: string[];
 	outputPath?: string;
 	outputMode?: "inline" | "file-only";

@@ -527,6 +527,8 @@ export interface RunSyncOptions {
 	availableModels?: Array<{ provider: string; id: string; fullId: string }>;
 	/** Current parent-session provider to prefer for ambiguous bare model ids */
 	preferredModelProvider?: string;
+	/** Current parent-session full model id (format: "provider/id") for modelPromptRole fallback */
+	currentModelFullId?: string;
 	/** Inline thinking level override for this dispatch (overrides agent config) */
 	effectiveThinking?: string;
 	/** Skills to inject (overrides agent default if provided) */

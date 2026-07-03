@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { applyThinkingSuffix, buildPiArgs } from "../../src/runs/shared/pi-args.ts";
+import { applyThinkingSuffix, buildPiArgs, readChildAlwaysExtensions } from "../../src/runs/shared/pi-args.ts";
 import { computeMcpServerHash } from "../../src/runs/shared/mcp-direct-tool-allowlist.ts";
 
 const originalEnv = {
@@ -499,5 +499,353 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.ok(extensionArgs.some((arg) => arg.endsWith(path.join("src", "runs", "shared", "subagent-prompt-runtime.ts"))));
 		assert.ok(extensionArgs.includes("./custom-tool.ts"));
 		assert.ok(extensionArgs.includes("./allowed-ext.ts"));
+	});
+});
+
+describe("buildPiArgs safety-extension merge (childAlwaysExtensions)", () => {
+	it("includes childAlwaysExtensions in extension list when input.extensions is defined", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-safety-"));
+		try {
+			const guardPath = path.join(tempDir, "guard.ts");
+			fs.writeFileSync(guardPath, "// guard extension", "utf-8");
+
+			const { args } = buildPiArgs({
+				baseArgs: ["-p"],
+				task: "hello",
+				sessionEnabled: false,
+				inheritProjectContext: false,
+				inheritSkills: false,
+				extensions: [],
+				childAlwaysExtensions: [guardPath],
+			});
+
+			assert.ok(args.includes("--no-extensions"), "should emit --no-extensions");
+			const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
+			assert.ok(extensionArgs.includes(guardPath), "should include guard extension");
+			assert.ok(
+				extensionArgs.some((arg) => arg.endsWith(path.join("src", "runs", "shared", "subagent-prompt-runtime.ts"))),
+				"should include runtime extension",
+			);
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("filters out nonexistent childAlwaysExtensions paths", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-safety-"));
+		try {
+			const guardPath = path.join(tempDir, "guard.ts");
+			fs.writeFileSync(guardPath, "// guard extension", "utf-8");
+			const nonexistentPath = path.join(tempDir, "nonexistent.ts");
+
+			const { args } = buildPiArgs({
+				baseArgs: ["-p"],
+				task: "hello",
+				sessionEnabled: false,
+				inheritProjectContext: false,
+				inheritSkills: false,
+				extensions: [],
+				childAlwaysExtensions: [guardPath, nonexistentPath],
+			});
+
+			const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
+			assert.ok(extensionArgs.includes(guardPath), "should include existing guard extension");
+			assert.ok(!extensionArgs.includes(nonexistentPath), "should NOT include nonexistent extension");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("does NOT consult childAlwaysExtensions when input.extensions is undefined (discovery mode)", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-safety-"));
+		try {
+			const guardPath = path.join(tempDir, "guard.ts");
+			fs.writeFileSync(guardPath, "// guard extension", "utf-8");
+
+			const { args } = buildPiArgs({
+				baseArgs: ["-p"],
+				task: "hello",
+				sessionEnabled: false,
+				inheritProjectContext: false,
+				inheritSkills: false,
+				// extensions is undefined (not provided)
+				childAlwaysExtensions: [guardPath],
+			});
+
+			assert.ok(!args.includes("--no-extensions"), "should NOT emit --no-extensions in discovery mode");
+			const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
+			assert.ok(
+				!extensionArgs.includes(guardPath),
+				"should NOT include always-extension in discovery mode even if provided",
+			);
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("dedupes extensions correctly when merging always-set with input.extensions", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-safety-"));
+		try {
+			const guardPath = path.join(tempDir, "guard.ts");
+			const customExtPath = path.join(tempDir, "custom.ts");
+			fs.writeFileSync(guardPath, "// guard", "utf-8");
+			fs.writeFileSync(customExtPath, "// custom", "utf-8");
+
+			const { args } = buildPiArgs({
+				baseArgs: ["-p"],
+				task: "hello",
+				sessionEnabled: false,
+				inheritProjectContext: false,
+				inheritSkills: false,
+				extensions: [customExtPath, guardPath], // includes guardPath
+				childAlwaysExtensions: [guardPath], // also includes guardPath
+			});
+
+			const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
+			// Count occurrences of guardPath
+			const guardOccurrences = extensionArgs.filter((arg) => arg === guardPath).length;
+			assert.equal(guardOccurrences, 1, "guard extension should appear only once (deduplicated)");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("readChildAlwaysExtensions", () => {
+	it("reads childAlwaysExtensions from settings file", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-read-"));
+		try {
+			const guardPath = path.join(tempDir, "guard.ts");
+			fs.writeFileSync(guardPath, "// guard", "utf-8");
+
+			const settingsPath = path.join(tempDir, "settings.json");
+			fs.writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					subagents: {
+						childAlwaysExtensions: [guardPath],
+					},
+				}),
+				"utf-8",
+			);
+
+			const result = readChildAlwaysExtensions(settingsPath);
+			assert.deepEqual(result, [guardPath], "should read extensions from settings");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("filters out nonexistent paths when reading from settings", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-read-"));
+		try {
+			const guardPath = path.join(tempDir, "guard.ts");
+			fs.writeFileSync(guardPath, "// guard", "utf-8");
+			const nonexistentPath = path.join(tempDir, "nonexistent.ts");
+
+			const settingsPath = path.join(tempDir, "settings.json");
+			fs.writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					subagents: {
+						childAlwaysExtensions: [guardPath, nonexistentPath],
+					},
+				}),
+				"utf-8",
+			);
+
+			const result = readChildAlwaysExtensions(settingsPath);
+			assert.deepEqual(result, [guardPath], "should filter out nonexistent paths");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("returns empty array when settings file does not exist", () => {
+		const nonexistentSettings = "/tmp/nonexistent-settings-" + Math.random() + ".json";
+		const result = readChildAlwaysExtensions(nonexistentSettings);
+		assert.deepEqual(result, [], "should return empty array for missing settings file");
+	});
+
+	it("returns empty array when settings file has malformed JSON", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-read-"));
+		try {
+			const settingsPath = path.join(tempDir, "settings.json");
+			fs.writeFileSync(settingsPath, "{ invalid json }", "utf-8");
+
+			const result = readChildAlwaysExtensions(settingsPath);
+			assert.deepEqual(result, [], "should return empty array for malformed JSON");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("returns empty array when childAlwaysExtensions is not an array", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-read-"));
+		try {
+			const settingsPath = path.join(tempDir, "settings.json");
+			fs.writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					subagents: {
+						childAlwaysExtensions: "not-an-array",
+					},
+				}),
+				"utf-8",
+			);
+
+			const result = readChildAlwaysExtensions(settingsPath);
+			assert.deepEqual(result, [], "should return empty array when value is not an array");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("filters out non-string entries from childAlwaysExtensions", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-read-"));
+		try {
+			const guardPath = path.join(tempDir, "guard.ts");
+			fs.writeFileSync(guardPath, "// guard", "utf-8");
+
+			const settingsPath = path.join(tempDir, "settings.json");
+			fs.writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					subagents: {
+						childAlwaysExtensions: [guardPath, 123, null, { path: "obj" }, "not-exist.ts"],
+					},
+				}),
+				"utf-8",
+			);
+
+			const result = readChildAlwaysExtensions(settingsPath);
+			assert.deepEqual(result, [guardPath], "should only include string entries that exist on disk");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses default settings path when settingsPath is not provided", () => {
+		// Reads the REAL ~/.pi/agent/settings.json on this machine. Every code
+		// path returns an array (existing entries, [] on missing/malformed), so
+		// we only assert shape + that it does not throw — never the contents.
+		const result = readChildAlwaysExtensions();
+		assert.ok(Array.isArray(result), "should return an array");
+	});
+
+	it("merges user and project settings when cwd is provided (Fix 3)", () => {
+		// Fix 3: When both user and project settings are provided, merge them additively
+		// (user first, then project), deduplicate, and filter to existing files.
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-merge-"));
+		try {
+			// Create a project structure with .pi directory
+			const projectDir = path.join(tempDir, "project");
+			const piDir = path.join(projectDir, ".pi");
+			fs.mkdirSync(piDir, { recursive: true });
+
+			// Create extension files that will be referenced
+			const userExt = path.join(tempDir, "user-ext.ts");
+			const projectExt = path.join(tempDir, "project-ext.ts");
+			fs.writeFileSync(userExt, "// user extension", "utf-8");
+			fs.writeFileSync(projectExt, "// project extension", "utf-8");
+
+			// Create user settings
+			const userSettingsPath = path.join(tempDir, "user-settings.json");
+			fs.writeFileSync(
+				userSettingsPath,
+				JSON.stringify({
+					subagents: {
+						childAlwaysExtensions: [userExt],
+					},
+				}),
+				"utf-8",
+			);
+
+			// Create project settings
+			const projectSettingsPath = path.join(piDir, "settings.json");
+			fs.writeFileSync(
+				projectSettingsPath,
+				JSON.stringify({
+					subagents: {
+						childAlwaysExtensions: [projectExt],
+					},
+				}),
+				"utf-8",
+			);
+
+			// Call with both user settings and project cwd
+			const result = readChildAlwaysExtensions(userSettingsPath, projectDir);
+			assert.deepEqual(result, [userExt, projectExt], "should include both user and project extensions");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("deduplicates merged extensions (Fix 3)", () => {
+		// When user and project settings both reference the same extension, include it only once
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-dedup-"));
+		try {
+			const projectDir = path.join(tempDir, "project");
+			const piDir = path.join(projectDir, ".pi");
+			fs.mkdirSync(piDir, { recursive: true });
+
+			// Create a shared extension
+			const sharedExt = path.join(tempDir, "shared-ext.ts");
+			fs.writeFileSync(sharedExt, "// shared", "utf-8");
+
+			// Both user and project reference the same extension
+			const userSettingsPath = path.join(tempDir, "user-settings.json");
+			fs.writeFileSync(
+				userSettingsPath,
+				JSON.stringify({
+					subagents: {
+						childAlwaysExtensions: [sharedExt],
+					},
+				}),
+				"utf-8",
+			);
+
+			const projectSettingsPath = path.join(piDir, "settings.json");
+			fs.writeFileSync(
+				projectSettingsPath,
+				JSON.stringify({
+					subagents: {
+						childAlwaysExtensions: [sharedExt],
+					},
+				}),
+				"utf-8",
+			);
+
+			const result = readChildAlwaysExtensions(userSettingsPath, projectDir);
+			assert.deepEqual(result, [sharedExt], "should deduplicate the shared extension");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("reads only user settings when cwd is not provided (Fix 3)", () => {
+		// When cwd is not provided, only read user settings (don't search for project)
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-user-only-"));
+		try {
+			const userExt = path.join(tempDir, "user-ext.ts");
+			fs.writeFileSync(userExt, "// user", "utf-8");
+
+			const userSettingsPath = path.join(tempDir, "user-settings.json");
+			fs.writeFileSync(
+				userSettingsPath,
+				JSON.stringify({
+					subagents: {
+						childAlwaysExtensions: [userExt],
+					},
+				}),
+				"utf-8",
+			);
+
+			// Call with only user settings, no cwd
+			const result = readChildAlwaysExtensions(userSettingsPath, undefined);
+			assert.deepEqual(result, [userExt], "should read only user settings when cwd is undefined");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 });
