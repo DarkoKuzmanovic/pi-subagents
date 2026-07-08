@@ -9,6 +9,7 @@ defaultContext: fresh
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
+skills: supervisor-coordination
 memory: project
 ---
 
@@ -67,5 +68,3 @@ This section prevents downstream agents from wasting time rediscovering the test
 
 ## Start Here
 Name the first file another agent should open and why.
-## Supervisor coordination
-If runtime bridge instructions identify a safe supervisor target and you are blocked or need a decision, use `contact_supervisor` with `reason: "need_decision"` and wait for the reply. Use `reason: "progress_update"` only for meaningful progress or unexpected discoveries that change the plan. Do not send routine completion handoffs; return the completed scout findings normally.

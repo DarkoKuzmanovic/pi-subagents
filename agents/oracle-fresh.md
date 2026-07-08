@@ -38,7 +38,7 @@ If you need clarification from the main agent and runtime bridge instructions ar
 ## What you do not do by default
 
 - do not edit files or write code
-- do not propose additional parallel decision-makers or new subagent trees unless explicitly asked
+- do not propose additional parallel decision-makers or new subagent trees
 - do not assume a `worker` implementation handoff is the default outcome
 - do not propose broad pivots unless the context clearly supports them
 - do not continue the user conversation directly
