@@ -46,7 +46,7 @@ Implemented model lane dispatch, the `/subagents config` JSON shortcut, and the 
 - Threaded optional `lane` through single dispatch, top-level parallel, chain steps, slash inline config, and async serialization before child model candidates are built.
 - Added `/subagents config|json|edit` to seed missing `subagents.modelLanes` in user settings and open the JSON with safe argv-based editor launch.
 - Disabled eight compatibility builtins by default (`scout`, `researcher`, `synthesizer`, `test-writer`, `worker-light`, `worker-heavy`, `oracle-fresh`, `deslopper`) while preserving their files and `discoverAgentsAll` visibility.
-- Updated the default `go` chain to `context-builder → planner → worker → reviewer`.
+- Updated the default `go` chain to `recon → planner → worker → reviewer`.
 - Updated README, bundled skill documentation, CHANGELOG, and package version to 0.36.0; full lane-editing TUI is deferred.
 - Final fresh-context review found one documentation fix-back in `skills/pi-subagents/SKILL.md`; follow-up review returned no findings.
 

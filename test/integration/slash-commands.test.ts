@@ -297,10 +297,10 @@ describe("slash command custom message delivery", {
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands
 			.get("run")!
-			.handler("context-builder", createCommandContext({ sessionManager }));
+			.handler("recon", createCommandContext({ sessionManager }));
 
 		assert.deepEqual(requestedParams, {
-			agent: "context-builder",
+			agent: "recon",
 			task: "",
 			clarify: false,
 			agentScope: "both",
@@ -363,7 +363,7 @@ describe("slash command custom message delivery", {
 
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler(
-			"context-builder inspect this",
+			"recon inspect this",
 			createCommandContext({
 				hasUI: true,
 				setStatus: (_key, text) => {
@@ -446,7 +446,7 @@ describe("slash command custom message delivery", {
 
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler(
-			"context-builder inspect this",
+			"recon inspect this",
 			createCommandContext({
 				hasUI: true,
 				setToolsExpanded: (expanded) =>
@@ -498,7 +498,7 @@ describe("slash command custom message delivery", {
 
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler(
-			"context-builder inspect this",
+			"recon inspect this",
 			createCommandContext({
 				hasUI: true,
 				setStatus: (_key, text) => {
@@ -580,14 +580,14 @@ describe("slash command custom message delivery", {
 		await commands
 			.get("parallel")!
 			.handler(
-				"context-builder[output=x.md,outputMode=file-only,reads=a.md+b.md,progress] -- Review",
+				"recon[output=x.md,outputMode=file-only,reads=a.md+b.md,progress] -- Review",
 				createCommandContext(),
 			);
 
 		assert.deepEqual(requestedParams, {
 			tasks: [
 				{
-					agent: "context-builder",
+					agent: "recon",
 					task: "Review",
 					output: "x.md",
 					outputMode: "file-only",
@@ -694,7 +694,7 @@ describe("slash command custom message delivery", {
 		registerSlashCommands!(pi, createState(process.cwd()));
 		const args = Array.from(
 			{ length: 9 },
-			(_, index) => `context-builder "task ${index + 1}"`,
+			(_, index) => `recon "task ${index + 1}"`,
 		).join(" -> ");
 		await commands.get("parallel")!.handler(args, createCommandContext());
 
@@ -970,7 +970,7 @@ Triage
 				) as Array<{ value: string; label: string }>;
 				assert.deepEqual(
 					completions.map((completion) => completion.value).sort(),
-					["release-flow", "review-flow", "reviewer"],
+					["recon", "release-flow", "review-flow", "reviewer"],
 				);
 				const chainLabels = completions
 					.filter((c) => c.label.includes("(chain)"))

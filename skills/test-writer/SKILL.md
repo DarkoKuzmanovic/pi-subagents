@@ -97,7 +97,7 @@ Verify:
 
 ## Chain context
 
-If you received context from a prior chain step (scout, worker, context-builder), check it for:
+If you received context from a prior chain step (scout, worker, recon), check it for:
 - Test runner commands already discovered
 - Known test infrastructure quirks
 - Helper functions the prior step used

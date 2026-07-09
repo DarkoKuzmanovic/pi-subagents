@@ -646,7 +646,7 @@ function listMarkdownFilesRecursive(dir: string, predicate: (fileName: string) =
 function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
-	for (const filePath of listMarkdownFilesRecursive(dir, (fileName) => fileName.endsWith(".md") && !fileName.endsWith(".chain.md"))) {
+	for (const filePath of listMarkdownFilesRecursive(dir, (fileName) => fileName.endsWith(".md") && !fileName.endsWith(".chain.md") && fileName !== "SKILL.md")) {
 		let content: string;
 		try {
 			content = fs.readFileSync(filePath, "utf-8");

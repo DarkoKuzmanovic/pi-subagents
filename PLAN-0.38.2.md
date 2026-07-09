@@ -2,7 +2,7 @@
 
 Findings verified against source on 2026-06-12 (post-v0.38.1). Each item below
 was traced to code by the reviewer; disproven claims from the original
-context-builder reports are listed at the bottom so they are not re-litigated.
+recon reports are listed at the bottom so they are not re-litigated.
 
 ## 1. H2 — stringified-JSON tolerance for `chain` / `tasks` params (MEDIUM, the headline)
 

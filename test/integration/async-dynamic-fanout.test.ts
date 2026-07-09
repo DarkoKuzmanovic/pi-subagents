@@ -94,7 +94,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			const id = `async-fanout-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {
 				chain: [
-					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
 						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
 						parallel: { agent: "reviewer", task: "Review file {file}" },
@@ -102,7 +102,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 					},
 					{ agent: "planner", task: "Summarize {outputs.results}" },
 				],
-				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				agents: [makeAgent("recon"), makeAgent("reviewer"), makeAgent("planner")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,
@@ -148,7 +148,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			const id = `async-fanout-empty-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {
 				chain: [
-					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
 						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10, onEmpty: "skip" },
 						parallel: { agent: "reviewer", task: "Review file {file}" },
@@ -156,7 +156,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 					},
 					{ agent: "planner", task: "Summarize {outputs.results}" },
 				],
-				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				agents: [makeAgent("recon"), makeAgent("reviewer"), makeAgent("planner")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,
@@ -201,7 +201,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			const id = `async-fanout-logical-label-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {
 				chain: [
-					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
 						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
 						parallel: { agent: "reviewer", task: "Review file {file}" },
@@ -209,7 +209,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 					},
 					{ agent: "planner", task: "Summarize {outputs.results}" },
 				],
-				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				agents: [makeAgent("recon"), makeAgent("reviewer"), makeAgent("planner")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,
@@ -243,14 +243,14 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			const id = `async-fanout-final-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {
 				chain: [
-					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
 						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
 						parallel: { agent: "reviewer", task: "Review file {file}" },
 						collect: { as: "results" },
 					},
 				],
-				agents: [makeAgent("context-builder"), makeAgent("reviewer")],
+				agents: [makeAgent("recon"), makeAgent("reviewer")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,
@@ -287,7 +287,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			const id = `async-fanout-trailing-static-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {
 				chain: [
-					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
 						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
 						parallel: { agent: "reviewer", task: "Review file {file}" },
@@ -301,7 +301,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 					},
 					{ agent: "planner", task: "Summarize" },
 				],
-				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("worker-a"), makeAgent("worker-b"), makeAgent("planner")],
+				agents: [makeAgent("recon"), makeAgent("reviewer"), makeAgent("worker-a"), makeAgent("worker-b"), makeAgent("planner")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,
@@ -338,7 +338,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			const id = `async-fanout-readonly-progress-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {
 				chain: [
-					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
 						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
 						parallel: { agent: "reviewer", task: "Review-only file {file}: do not edit files. Return findings." },
@@ -346,7 +346,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 					},
 					{ agent: "planner", task: "Summarize {outputs.results}" },
 				],
-				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				agents: [makeAgent("recon"), makeAgent("reviewer"), makeAgent("planner")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,
@@ -397,7 +397,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			const id = `async-fanout-lane-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {
 				chain: [
-					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
 						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
 						parallel: { agent: "reviewer", task: "Review file {file}", lane: "fast" },
@@ -405,7 +405,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 					},
 					{ agent: "planner", task: "Summarize {outputs.results}" },
 				],
-				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				agents: [makeAgent("recon"), makeAgent("reviewer"), makeAgent("planner")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,
@@ -433,7 +433,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			const id = `async-fanout-empty-fail-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {
 				chain: [
-					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
 						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10, onEmpty: "fail" },
 						parallel: { agent: "reviewer", task: "Review file {file}" },
@@ -441,7 +441,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 					},
 					{ agent: "planner", task: "Summarize {outputs.results}" },
 				],
-				agents: [makeAgent("context-builder"), makeAgent("reviewer"), makeAgent("planner")],
+				agents: [makeAgent("recon"), makeAgent("reviewer"), makeAgent("planner")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,
@@ -470,7 +470,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			const id = `async-fanout-schema-fail-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {
 				chain: [
-					{ agent: "context-builder", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
 						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
 						parallel: { agent: "reviewer", task: "Review file {file}" },
@@ -485,7 +485,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 						},
 					},
 				],
-				agents: [makeAgent("context-builder"), makeAgent("reviewer")],
+				agents: [makeAgent("recon"), makeAgent("reviewer")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,

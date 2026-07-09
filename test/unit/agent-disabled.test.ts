@@ -213,7 +213,7 @@ describe("builtin agent disabling", () => {
 });
 
 describe("M1 six-role builtin roster", () => {
-	const DURABLE_SIX = ["context-builder", "janitor", "oracle", "planner", "reviewer", "worker"];
+	const DURABLE_SIX = ["janitor", "oracle", "planner", "recon", "reviewer", "worker"];
 	const DISABLED_COMPAT = ["deslopper", "oracle-fresh", "researcher", "scout", "synthesizer", "test-writer", "worker-heavy", "worker-light"];
 
 	beforeEach(() => {

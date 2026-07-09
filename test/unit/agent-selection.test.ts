@@ -90,7 +90,7 @@ describe("looksLikeModelId", () => {
 	it("does not flag real role names", () => {
 		assert.equal(looksLikeModelId("worker"), false);
 		assert.equal(looksLikeModelId("planner"), false);
-		assert.equal(looksLikeModelId("context-builder"), false);
+		assert.equal(looksLikeModelId("recon"), false);
 		assert.equal(looksLikeModelId("reviewer"), false);
 		assert.equal(looksLikeModelId("janitor"), false);
 	});

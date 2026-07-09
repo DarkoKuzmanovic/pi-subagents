@@ -39,6 +39,6 @@
 
 **Rationale:** Lane overrides keep model selection explicit at dispatch time while reducing the visible role roster to durable responsibilities. Compatibility agent files remain available for opt-in overrides and reference, but default discovery and list output should focus on six roles.
 
-**Implementation requirement:** Disabled compatibility agents stay parseable through `discoverAgentsAll`; normal `discoverAgents` and management list output hide them unless explicitly re-enabled. Public guidance should route local/web recon through `context-builder`, synthesis through `reviewer`, test-focused implementation through `worker`, and cleanup through `janitor`.
+**Implementation requirement:** Disabled compatibility agents stay parseable through `discoverAgentsAll`; normal `discoverAgents` and management list output hide them unless explicitly re-enabled. Public guidance should route local/web recon through `recon`, synthesis through `reviewer`, test-focused implementation through `worker`, and cleanup through `janitor`.
 
 **Future work:** A lane-editing TUI is deferred until the JSON control plane has baked in real use.

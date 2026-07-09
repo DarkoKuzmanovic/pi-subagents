@@ -762,3 +762,39 @@ Inspect project
 		}
 	});
 });
+
+describe("SKILL.md exclusion", () => {
+	it("ignores SKILL.md files in agent discovery directories (skills.sh namespace collision)", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-skill-exclusion-"));
+		tempDirs.push(dir);
+		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
+		fs.mkdirSync(path.join(dir, ".agents", "skills", "find-skills"), { recursive: true });
+
+		// Legitimate agent — should be discovered
+		fs.writeFileSync(path.join(dir, ".pi", "agents", "worker.md"), `---
+name: worker
+description: Implementation agent
+default-context: fork
+---
+
+Do work
+`, "utf-8");
+
+		// SKILL.md from Agent Skills standard — should be ignored
+		fs.writeFileSync(path.join(dir, ".agents", "skills", "find-skills", "SKILL.md"), `---
+name: find-skills
+description: Helps discover and install agent skills
+---
+
+# Find Skills
+
+Use npx skills find to search.
+`, "utf-8");
+
+		const result = discoverAgentsAll(dir);
+		const allAgents = [...result.builtin, ...result.user, ...result.project];
+
+		assert.ok(allAgents.find((a) => a.name === "worker"), "legitimate agent should be discovered");
+		assert.equal(allAgents.some((a) => a.name === "find-skills" && a.filePath?.includes("SKILL.md")), false, "SKILL.md should not be picked up as a subagent");
+	});
+});

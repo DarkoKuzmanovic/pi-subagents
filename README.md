@@ -55,7 +55,7 @@
 
 ## Features
 
-- **Six default builtin roles** — context-builder, planner, worker, reviewer, oracle, and janitor. Compatibility agents remain on disk but are disabled by default.
+- **Six default builtin roles** — recon, planner, worker, reviewer, oracle, and janitor. Compatibility agents remain on disk but are disabled by default.
 - **Chains** — sequential multi-step pipelines with `{task}`, `{previous}`, `{chain_dir}` template variables and fan-out/fan-in parallel groups
 - **Structured output** — a chain step can require schema-valid JSON from its child (`outputSchema` + a `structured_output` tool) and expose it to later steps as `{outputs.name}` (foreground and async)
 - **Dynamic fanout** — expand a prior step's structured array into N parallel tasks and `collect` the results into one named array (foreground)
@@ -91,7 +91,7 @@ Ask oracle for a second opinion on my current plan.
 ```
 
 ```text
-Use context-builder to understand this code based on our discussion then ask me clarification questions.
+Use recon to understand this code based on our discussion then ask me clarification questions.
 ```
 
 ```text
@@ -133,7 +133,7 @@ Have worker implement this approved plan. Afterward, run parallel reviewers, sum
 ```
 
 ```text
-Use context-builder to understand the auth flow, then have planner turn that into an implementation plan.
+Use recon to understand the auth flow, then have planner turn that into an implementation plan.
 ```
 
 Those are ordinary Pi requests. Pi decides whether to call `subagent`, which agent to use, and whether a chain or parallel run makes sense.
@@ -148,7 +148,7 @@ Those are ordinary Pi requests. Pi decides whether to call `subagent`, which age
 | Run parallel reviewers   | “Run reviewers for correctness, tests, and cleanup.”                                   |
 | Implement then review    | “Implement this, then review it.”                                                      |
 | Execute a plan carefully | “Have worker implement this approved plan, then run reviewers and apply the feedback.” |
-| Gather context before planning | “Use context-builder to inspect the auth flow before planning.”                         |
+| Gather context before planning | “Use recon to inspect the auth flow before planning.”                         |
 | Run in the background    | “Run this in the background.”                                                          |
 | Browse agents            | “Show me the available subagents.”                                                     |
 | Use a saved workflow     | “Run `/mesh-review` on this branch.”                                                  |
@@ -161,7 +161,7 @@ The extension ships with builtin agents you can use immediately.
 
 | Agent             | Use it when you want...                                                                                                                     |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `context-builder` | Local or external context before planning: relevant files, entry points, data flow, risks, source-backed notes, and handoff material.       |
+| `recon` | Local or external context before planning: relevant files, entry points, data flow, risks, source-backed notes, and handoff material.       |
 | `planner`         | A concrete implementation plan from existing context. It should read and plan, not edit code.                                               |
 | `worker`          | Implementation work, including lane-based easy/hard routing and approved oracle handoffs. It edits files, validates, and escalates decisions. |
 | `reviewer`        | Code review, synthesis, and small fix-back guidance. It checks the implementation against the task/plan, tests, edge cases, and simplicity. |
@@ -170,7 +170,7 @@ The extension ships with builtin agents you can use immediately.
 |
 | Compatibility agents | `scout`, `researcher`, `synthesizer`, `test-writer`, `worker-light`, `worker-heavy`, `oracle-fresh`, and `deslopper` are preserved but disabled by default; use the roles above plus `lane` or `context: "fresh"` instead. |
 
-A simple rule of thumb: use `context-builder` before you understand the code or external facts, `planner` before a bigger change, `worker` to implement, `reviewer` to check or synthesize, `oracle` when the decision itself feels risky, and `janitor` for cleanup.
+A simple rule of thumb: use `recon` before you understand the code or external facts, `planner` before a bigger change, `worker` to implement, `reviewer` to check or synthesize, `oracle` when the decision itself feels risky, and `janitor` for cleanup.
 
 ## Changing a builtin agent's model
 
@@ -247,9 +247,9 @@ The package includes reusable prompt templates for common workflows. You do not 
 | Prompt                        | Use it for                                                                                                  |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `/mesh-review`                | Launch fresh-context reviewers with distinct angles, then synthesize what to fix.                           |
-| `/mesh-recon`                 | Quick parallel context-builder recon; add `deep` for artifact-backed lane synthesis.                       |
-| `/mesh-handoff`               | Combine external research and `context-builder` passes into an implementation handoff plan and meta-prompt. |
-| `/mesh-context`               | Run parallel `context-builder` passes for planning or implementation handoff context.                       |
+| `/mesh-recon`                 | Quick parallel recon pass; add `deep` for artifact-backed lane synthesis.                        |
+| `/mesh-handoff`               | Combine external research and `recon` passes into an implementation handoff plan and meta-prompt. |
+| `/mesh-context`               | Run parallel `recon` passes for planning or implementation handoff context.                       |
 | `/mesh-cleanup`               | Run review-only cleanup passes after implementation; add `autofix` to apply only fixes worth doing now.     |
 | `/brainstorm`                 | Design-first exploration before any implementation, with clarifying questions and approach tradeoffs.       |
 | `/write-plan`                 | Author an implementation plan from a spec/intent with explicit validation commands and a placeholder scan.  |
@@ -311,28 +311,28 @@ Commands validate agent names locally, support tab completion, and send results 
 Use `->` to separate steps and give each step its own task:
 
 ```text
-/chain context-builder "scan the codebase" -> planner "create an implementation plan"
-/parallel context-builder "find security issues" -> reviewer "check code style"
+/chain recon "scan the codebase" -> planner "create an implementation plan"
+/parallel recon "find security issues" -> reviewer "check code style"
 ```
 
 Both double and single quotes work. You can also use `--` as a delimiter:
 
 ```text
-/chain context-builder -- scan code -> planner -- analyze auth
+/chain recon -- scan code -> planner -- analyze auth
 ```
 
 Steps without a task inherit behavior from the execution mode. Chain steps get `{previous}`, the prior step’s output. Parallel steps use the first available task as a fallback.
 
 ```text
-/chain context-builder "analyze auth" -> planner -> worker
-# context-builder gets "analyze auth"; planner gets context-builder output; worker gets planner output
+/chain recon "analyze auth" -> planner -> worker
+# recon gets "analyze auth"; planner gets recon output; worker gets planner output
 ```
 
 For a shared task, list agents and place one `--` before the task:
 
 ```text
-/chain context-builder planner -- analyze the auth system
-/parallel context-builder reviewer -- check for security issues
+/chain recon planner -- analyze the auth system
+/parallel recon reviewer -- check for security issues
 ```
 
 ### Inline per-step config
@@ -340,7 +340,7 @@ For a shared task, list agents and place one `--` before the task:
 Append `[key=value,...]` to an agent name to override defaults for that step:
 
 ```text
-/chain context-builder[output=context.md] "scan code" -> planner[reads=context.md] "analyze auth"
+/chain recon[output=context.md] "scan code" -> planner[reads=context.md] "analyze auth"
 /run worker[lane=hard] summarize this codebase
 /parallel reviewer[skills=code-review+security] "review backend" -> reviewer[model=openai/gpt-5-mini] "review frontend"
 ```
@@ -362,17 +362,17 @@ Set `output=false`, `reads=false`, or `skills=false` to disable that behavior ex
 Add `--bg` to run in the background:
 
 ```text
-/run context-builder "audit the codebase" --bg
-/chain context-builder "analyze auth" -> planner "design refactor" -> worker --bg
-/parallel context-builder "scan frontend" -> context-builder "scan backend" --bg
+/run recon "audit the codebase" --bg
+/chain recon "analyze auth" -> planner "design refactor" -> worker --bg
+/parallel recon "scan frontend" -> recon "scan backend" --bg
 ```
 
 Add `--fork` to start each child from a real branched session created from the parent’s current leaf:
 
 ```text
 /run reviewer "review this diff" --fork
-/chain context-builder "analyze this branch" -> planner "plan next steps" --fork
-/parallel context-builder "audit frontend" -> reviewer "audit backend" --fork
+/chain recon "analyze this branch" -> planner "plan next steps" --fork
+/parallel recon "audit frontend" -> reviewer "audit backend" --fork
 ```
 
 You can combine them in either order:
@@ -421,7 +421,7 @@ Project discovery also reads legacy `.agents/**/*.md` files. Nested subdirectori
 
 Builtin agents load at the lowest priority, so a user or project agent with the same name overrides them. They do not pin a provider model; they inherit your current Pi default model unless you set `subagents.agentOverrides.<name>.model`. `oracle` is an advisory reviewer that critiques direction and proposes an execution prompt without editing files. `worker` is the implementation agent for normal tasks and approved oracle handoffs.
 
-For web-backed research, use `context-builder` with a clear web-research prompt and make sure the parent Pi session has web tools available. Common options include:
+For web-backed research, use `recon` with a clear web-research prompt and make sure the parent Pi session has web tools available. Common options include:
 
 - [pi-web-access](https://github.com/nicobailon/pi-web-access) for `web_search`, `fetch_content`, and `get_search_content`.
 - [`@counterposition/pi-web-search`](https://www.npmjs.com/package/@counterposition/pi-web-search) for `web_search` and `web_fetch`.
@@ -566,7 +566,7 @@ name: context-plan
 description: Gather context then plan implementation
 ---
 
-## context-builder
+## recon
 
 output: context.md
 
@@ -595,7 +595,7 @@ Create chains by writing `.chain.md` files directly or with the `subagent({ acti
 
 | Chain | Steps                                                        | Description                                                                         |
 | ----- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `go`  | context-builder → planner → worker → reviewer | Full implementation pipeline: gather context, plan, implement, and review. |
+| `go`  | recon → planner → worker → reviewer | Full implementation pipeline: gather context, plan, implement, and review. |
 
 The former `review` chain has been retired. Use `/mesh-review` for model-diverse review plus synthesis.
 
@@ -630,7 +630,7 @@ Expose a step's result with `as`, then reference it from a later step with `{out
 {
   chain: [
     {
-      agent: "context-builder",
+      agent: "recon",
       task: "List the changed source files as JSON.",
       as: "changed",
       outputSchema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] },
@@ -650,7 +650,7 @@ A chain step can expand an array from a prior step's structured output into N pa
 {
   chain: [
     {
-      agent: "context-builder",
+      agent: "recon",
       task: "Return JSON: a list of files to refactor.",
       as: "plan",
       outputSchema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] },
@@ -733,21 +733,21 @@ These are the parameters the LLM passes when it calls the `subagent` tool. Most 
 ```ts
 // Single agent
 { agent: "worker", task: "refactor auth" }
-{ agent: "context-builder", task: "find todos", output: "reports/context.md", outputMode: "file-only" }
-{ agent: "context-builder", task: "investigate", output: false }
+{ agent: "recon", task: "find todos", output: "reports/context.md", outputMode: "file-only" }
+{ agent: "recon", task: "investigate", output: false }
 { agent: "worker", task: "write a large report", output: "reports/worker.md", outputMode: "file-only" }
 
 // Forked context
 { agent: "worker", task: "continue this thread", context: "fork" }
 
 // Parallel
-{ tasks: [{ agent: "context-builder", task: "a" }, { agent: "reviewer", task: "b" }] }
-{ tasks: [{ agent: "context-builder", task: "audit auth", count: 3 }] }
-{ tasks: [{ agent: "context-builder", task: "audit frontend" }, { agent: "reviewer", task: "audit backend" }], context: "fork" }
+{ tasks: [{ agent: "recon", task: "a" }, { agent: "reviewer", task: "b" }] }
+{ tasks: [{ agent: "recon", task: "audit auth", count: 3 }] }
+{ tasks: [{ agent: "recon", task: "audit frontend" }, { agent: "reviewer", task: "audit backend" }], context: "fork" }
 
 // Chain
 { chain: [
-  { agent: "context-builder", task: "Gather context for auth refactor" },
+  { agent: "recon", task: "Gather context for auth refactor" },
   { agent: "planner" },
   { agent: "worker" },
   { agent: "reviewer" }
@@ -758,7 +758,7 @@ These are the parameters the LLM passes when it calls the `subagent` tool. Most 
 
 // Chain with fan-out/fan-in
 { chain: [
-  { agent: "context-builder", task: "Gather context" },
+  { agent: "recon", task: "Gather context" },
   { parallel: [
     { agent: "worker", task: "Implement feature A from {previous}" },
     { agent: "worker", task: "Implement feature B from {previous}" }
@@ -768,14 +768,14 @@ These are the parameters the LLM passes when it calls the `subagent` tool. Most 
 
 // Chain with structured output + named references
 { chain: [
-  { agent: "context-builder", task: "List changed files as JSON", as: "files",
+  { agent: "recon", task: "List changed files as JSON", as: "files",
     outputSchema: { type: "object", properties: { files: { type: "array", items: { type: "string" } } }, required: ["files"] } },
   { agent: "worker", task: "Refactor each file in {outputs.files}" }
 ]}
 
 // Dynamic fanout: expand a prior step's array into N parallel tasks (foreground)
 { chain: [
-  { agent: "context-builder", task: "List modules as JSON", as: "mods",
+  { agent: "recon", task: "List modules as JSON", as: "mods",
     outputSchema: { type: "object", properties: { mods: { type: "array", items: { type: "string" } } }, required: ["mods"] } },
   { expand: { from: { output: "mods", path: "/mods" }, maxItems: 10 },
     parallel: { agent: "worker", task: "Document module {item}" },
@@ -797,7 +797,7 @@ Agent definitions are not loaded into context by default. Management actions let
 ```ts
 { action: "list" }
 { action: "list", agentScope: "project" }
-{ action: "get", agent: "context-builder" }
+{ action: "get", agent: "recon" }
 { action: "get", agent: "code-analysis.helper" }
 { action: "get", chainName: "review-pipeline" }
 
@@ -826,7 +826,7 @@ Agent definitions are not loaded into context by default. Management actions let
   description: "Context then review",
   scope: "project",
   steps: [
-    { agent: "context-builder", task: "Scan {task}", output: "context.md" },
+    { agent: "recon", task: "Scan {task}", output: "context.md" },
     { agent: "reviewer", task: "Review {previous}", reads: ["context.md"] }
   ]
 }}
@@ -905,7 +905,7 @@ Parallel agents can clobber each other if they edit the same checkout. `worktree
 ], worktree: true }
 
 { chain: [
-  { agent: "context-builder", task: "Gather context" },
+  { agent: "recon", task: "Gather context" },
   { parallel: [
     { agent: "worker", task: "Implement feature A from {previous}" },
     { agent: "worker", task: "Implement feature B from {previous}" }
@@ -986,14 +986,14 @@ Foreground runs show compact live progress for single, chain, and parallel modes
 
 Press `Ctrl+O` to expand the full streaming view with complete output per step.
 
-Sequential chains show a flow line like `done context-builder → running planner`. Chains with parallel steps show per-step cards instead.
+Sequential chains show a flow line like `done recon → running planner`. Chains with parallel steps show per-step cards instead.
 
 ## Session sharing
 
 Pass `share: true` to export a full session to HTML, upload it to a secret GitHub Gist through your `gh` credentials, and return a `https://shittycodingagent.ai/session/?<gistId>` URL.
 
 ```ts
-{ agent: "context-builder", task: "...", share: true }
+{ agent: "recon", task: "...", share: true }
 ```
 
 This is disabled by default. Session data may contain source code, paths, environment variables, credentials, or other sensitive output. You need `gh` installed and authenticated.
@@ -1081,7 +1081,7 @@ Features:
 - **Config-exposed `inlineReadMaxBytes`**: The 200KB inline-read cap is now configurable via `inlineReadMaxBytes` in extension config, with a `[1024, 8MB]` range guard.
 - **Token-economy footer**: Fresh-context results append `[mode=fresh, in=…, out=…, cache_read=…, cache_write=…]` so savings are observable without digging into JSONL.
 - **Recovery telemetry**: When Fix 1's output-recovery triggers, a structured `subagent_recovery` event (with `runId`, `agent`, `exitCode`, `recoveredChars`, `elapsedMs`) is emitted into the parent's session JSONL (`display: false`).
-- **Compatibility agents preserved disabled-by-default**: Legacy roles such as `oracle-fresh` remain on disk for explicit opt-in, while the default visible roster stays focused on context-builder, planner, worker, reviewer, oracle, and janitor.
+- **Compatibility agents preserved disabled-by-default**: Legacy roles such as `oracle-fresh` remain on disk for explicit opt-in, while the default visible roster stays focused on recon, planner, worker, reviewer, oracle, and janitor.
 - **`planner` flipped to `defaultContext: fresh`**: The bundled planner now defaults to fresh context with curated `defaultReads`, routing every existing caller through the cheaper path without code changes.
 - **`--no-context-files` for fresh children**: Fresh-context children now get `--no-context-files` in their spawn args, preventing `AGENTS.md`/`CLAUDE.md` from leaking into the child's system prompt. Forked children keep their normal context loading.
 

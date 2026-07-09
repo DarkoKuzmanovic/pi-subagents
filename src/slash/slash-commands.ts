@@ -601,7 +601,7 @@ export function registerSlashCommands(
 	});
 
 	// Merged /chain: supports both inline chain syntax and saved chain files.
-	// Inline: /chain context-builder "task" -> planner
+	// Inline: /chain recon "task" -> planner
 	// Saved:  /chain go -- "fix the bug"
 	// Detection: if the first token (before any ` -> ` or quote) matches a saved chain name
 	//           AND " -- " is present, treat as saved-chain mode. Otherwise parse inline.
@@ -697,7 +697,7 @@ export function registerSlashCommands(
 
 	pi.registerCommand("chain", {
 		description:
-			'Run agents in sequence: /chain context-builder "task" -> planner  OR  /chain chainName -- task [--bg] [--fork]',
+			'Run agents in sequence: /chain recon "task" -> planner  OR  /chain chainName -- task [--bg] [--fork]',
 		getArgumentCompletions: makeAgentCompletions(state, true, true),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
@@ -711,7 +711,7 @@ export function registerSlashCommands(
 
 	pi.registerCommand("parallel", {
 		description:
-			'Run agents in parallel: /parallel context-builder "task1" -> reviewer "task2" [--bg] [--fork]',
+			'Run agents in parallel: /parallel recon "task1" -> reviewer "task2" [--bg] [--fork]',
 		getArgumentCompletions: makeAgentCompletions(state, true),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);

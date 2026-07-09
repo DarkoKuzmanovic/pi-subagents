@@ -1,5 +1,5 @@
 ---
-name: context-builder
+name: recon
 description: Analyzes requirements and codebase, generates context and meta-prompt
 tools: read, grep, find, ls, bash, write, web_search, web_fetch, fetch_content, get_search_content, contact_supervisor, intercom
 thinking: high

@@ -525,14 +525,14 @@ describe("renderSubagentResult fork indicator", () => {
 				mode: "parallel",
 				results: [
 					{ agent: "scout", task: "scan", exitCode: 0, messages: [], usage: emptyUsage, model: "deepseek/deepseek-v4-pro:high" },
-					{ agent: "context-builder", task: "map", exitCode: 0, messages: [], usage: emptyUsage, model: "zai/glm-5.1" },
+					{ agent: "recon", task: "map", exitCode: 0, messages: [], usage: emptyUsage, model: "zai/glm-5.1" },
 				],
 			},
 		}, { expanded: false }, theme);
 
 		const text = widget.render(160).join("\n");
 		assert.match(text, /scout \[deepseek\/deepseek-v4-pro:high\]/);
-		assert.match(text, /context-builder \[zai\/glm-5\.1\]/);
+		assert.match(text, /recon \[zai\/glm-5\.1\]/);
 	});
 
 	it("keeps serial chain wording for non-parallel steps", () => {

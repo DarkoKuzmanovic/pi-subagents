@@ -263,7 +263,7 @@ export interface Details {
 		artifactPath?: string;
 	};
 	// Chain metadata for observability
-	chainAgents?: string[];      // Agent names in order, e.g., ["context-builder", "planner"]
+	chainAgents?: string[];      // Agent names in order, e.g., ["recon", "planner"]
 	totalSteps?: number;         // Total steps in chain
 	currentStepIndex?: number;   // 0-indexed current step (for running chains)
 }

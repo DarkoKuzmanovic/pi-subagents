@@ -231,21 +231,21 @@ describe("subagent async widget rendering", () => {
 				asyncDir: "/tmp/1",
 				status: "running",
 				mode: "parallel",
-				agents: ["scout", "context-builder"],
+				agents: ["scout", "recon"],
 				activeParallelGroup: true,
 				runningSteps: 1,
 				completedSteps: 1,
 				stepsTotal: 2,
 				steps: [
 					{ agent: "scout", status: "complete", model: "deepseek/deepseek-v4-pro:high", tokens: { input: 30_000, output: 10_000, cache: 4_000, total: 49_000 } },
-					{ agent: "context-builder", status: "running", model: "zai/glm-5.1", lastActivityAt: now, turnCount: 3, toolCount: 7 },
+					{ agent: "recon", status: "running", model: "zai/glm-5.1", lastActivityAt: now, turnCount: 3, toolCount: 7 },
 				],
 			},
 		], theme, 200);
 
 		const text = lines.join("\n");
 		assert.match(text, /Agent 1\/2: scout \[deepseek\/deepseek-v4-pro:high\]/);
-		assert.match(text, /Agent 2\/2: context-builder \[zai\/glm-5\.1\]/);
+		assert.match(text, /Agent 2\/2: recon \[zai\/glm-5\.1\]/);
 	});
 
 	it("shows inline live detail for expanded async parallel widget rows", () => {

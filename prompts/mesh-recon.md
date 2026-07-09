@@ -1,10 +1,10 @@
 ---
-description: Mesh recon: quick parallel context-builder research by default; use deep for artifact-backed reviewer synthesis
+description: Mesh recon: quick parallel recon research by default; use deep for artifact-backed reviewer synthesis
 ---
 
 Run a fresh-context mesh recon pass on the question or decision below.
 
-Default mode is **simple recon**: use a small set of parallel `context-builder` subagents with distinct lane prompts, then synthesize their answers in this parent conversation.
+Default mode is **simple recon**: use a small set of parallel `recon` subagents with distinct lane prompts, then synthesize their answers in this parent conversation.
 
 Deep mode is enabled when the invocation contains the exact word `deep` or `--deep`. Treat that word as workflow control, not part of the research scope. Deep mode uses partitioned lane artifacts plus a dedicated `reviewer` synthesis step so the parent receives only the synthesis.
 
@@ -20,13 +20,13 @@ Use **fresh context**, not forked, unless I explicitly ask otherwise. Context bu
 
 Use two or three strong lanes. Pick only the lanes that fit the question:
 
-1. **External evidence** — `context-builder` with a web-research prompt
+1. **External evidence** — `recon` with a web-research prompt
    - Official docs, specs, release notes, benchmarks, issue threads, recent changes, or primary-source explanations.
 
-2. **Local code context** — `context-builder` with a local-recon prompt
+2. **Local code context** — `recon` with a local-recon prompt
    - Repository files, existing patterns, constraints, tests, likely integration points, and local risks.
 
-3. **Practical tradeoffs** — `context-builder` with a decision-analysis prompt
+3. **Practical tradeoffs** — `recon` with a decision-analysis prompt
    - Options, risks, edge cases, maintenance cost, validation strategy, and decision implications.
 
 Adapt the lanes when the question calls for it:
@@ -59,13 +59,13 @@ Use deep mode only when the invocation contains `deep` or `--deep`, or when I ex
 
 Run a partitioned, model-diverse recon pass, then have a dedicated `reviewer` subagent fuse the findings so this conversation stays lean. The parent should receive only the synthesis plus file paths, not the raw briefs.
 
-Use a single `subagent` chain: a parallel group of `context-builder` lanes, then a sequential `reviewer` step. Each lane writes a tight brief to its own file; the reviewer reads those files.
+Use a single `subagent` chain: a parallel group of `recon` lanes, then a sequential `reviewer` step. Each lane writes a tight brief to its own file; the reviewer reads those files.
 
 Split the question into 2–5 distinct lanes — never run identical prompts. Choose lanes that fit the question. Defaults:
-- **Local code** → `context-builder` — repo files, patterns, constraints, integration points, tests.
-- **Official sources** → `context-builder` — docs, specs, release notes, primary references.
-- **Ecosystem / practice** → `context-builder` — benchmarks, issue threads, real-world usage, gotchas.
-- **Tradeoffs / alternatives** → `context-builder` — options, risks, migration cost.
+- **Local code** → `recon` — repo files, patterns, constraints, integration points, tests.
+- **Official sources** → `recon` — docs, specs, release notes, primary references.
+- **Ecosystem / practice** → `recon` — benchmarks, issue threads, real-world usage, gotchas.
+- **Tradeoffs / alternatives** → `recon` — options, risks, migration cost.
 
 Suggested shape:
 
@@ -73,10 +73,10 @@ Suggested shape:
 subagent({
   chain: [
     { parallel: [
-        { agent: "context-builder", model: "minimax/MiniMax-M2.7-highspeed", output: "mesh-recon/lane-1-localcode.md", outputMode: "file-only", task: "Lane: local code. <angle>. Write ≤20 lines with exact file:line citations and no preamble." },
-        { agent: "context-builder", model: "zai/glm-5.1",                    output: "mesh-recon/lane-2-official.md",  outputMode: "file-only", task: "Lane: official sources. <angle>. Write ≤20 lines with source links, confidence, and gaps." },
-        { agent: "context-builder", model: "mimo/mimo-v2.5-pro",              output: "mesh-recon/lane-3-practice.md",  outputMode: "file-only", task: "Lane: ecosystem/practice. <angle>. Write ≤20 lines with source links, confidence, and gaps." },
-        { agent: "context-builder", model: "openai-codex/gpt-5.5",            output: "mesh-recon/lane-4-risks.md",     outputMode: "file-only", task: "Lane: risks/alternatives. <angle>. Write ≤20 lines with key risks, tradeoffs, migration costs, and no speculation without evidence." }
+        { agent: "recon", model: "minimax/MiniMax-M2.7-highspeed", output: "mesh-recon/lane-1-localcode.md", outputMode: "file-only", task: "Lane: local code. <angle>. Write ≤20 lines with exact file:line citations and no preamble." },
+        { agent: "recon", model: "zai/glm-5.1",                    output: "mesh-recon/lane-2-official.md",  outputMode: "file-only", task: "Lane: official sources. <angle>. Write ≤20 lines with source links, confidence, and gaps." },
+        { agent: "recon", model: "mimo/mimo-v2.5-pro",              output: "mesh-recon/lane-3-practice.md",  outputMode: "file-only", task: "Lane: ecosystem/practice. <angle>. Write ≤20 lines with source links, confidence, and gaps." },
+        { agent: "recon", model: "openai-codex/gpt-5.5",            output: "mesh-recon/lane-4-risks.md",     outputMode: "file-only", task: "Lane: risks/alternatives. <angle>. Write ≤20 lines with key risks, tradeoffs, migration costs, and no speculation without evidence." }
     ] },
     { agent: "reviewer", model: "minimax/MiniMax-M2.7-highspeed", output: "mesh-recon/synthesis.md", outputMode: "file-only",
       task: "Read mesh-recon/lane-*.md. Fuse into one decision-ready synthesis: verdict, consensus, conflicts (surface, don't smooth), key evidence with file:line/URLs preserved, gaps. Original question: {task}" }

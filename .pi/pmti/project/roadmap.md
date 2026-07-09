@@ -14,7 +14,7 @@ Exposed `thinking` level as a per-dispatch override in the `subagent` tool and `
 
 ### M1 — Model lanes, JSON shortcut, and six-role roster
 
-Added named model lanes, lane dispatch propagation, `/subagents config|json|edit`, and the six-role visible builtin roster (`context-builder`, `planner`, `worker`, `reviewer`, `oracle`, `janitor`). Compatibility agent files remain preserved but disabled by default.
+Added named model lanes, lane dispatch propagation, `/subagents config|json|edit`, and the six-role visible builtin roster (`recon`, `planner`, `worker`, `reviewer`, `oracle`, `janitor`). Compatibility agent files remain preserved but disabled by default.
 
 **Source:** PMTI continuation requested 2026-06-05 from session 019e97b9-50a5-79a0-bd2c-11d80a0ca406.
 

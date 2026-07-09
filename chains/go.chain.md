@@ -3,7 +3,7 @@ name: go
 description: Build codebase context → create implementation plan → worker implements → reviewer validates
 ---
 
-## context-builder
+## recon
 output: context.md
 progress: true
 
