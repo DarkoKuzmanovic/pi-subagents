@@ -500,6 +500,8 @@ maxSubagentDepth: 1
 Your system prompt goes here.
 ```
 
+`maxSubagentDepth: 1` above is an example of an individual agent tightening the inherited/global limit; the default global limit is documented in the configuration table below.
+
 Important fields:
 
 | Field                   | Notes                                                                                                                                                                      |
