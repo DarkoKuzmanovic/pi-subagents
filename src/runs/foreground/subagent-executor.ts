@@ -131,6 +131,7 @@ export interface SubagentParamsLike {
 	sessionDir?: string;
 	cwd?: string;
 	maxOutput?: MaxOutputConfig;
+	budget?: number;
 	artifacts?: boolean;
 	includeProgress?: boolean;
 	model?: string;

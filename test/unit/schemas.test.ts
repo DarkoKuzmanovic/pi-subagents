@@ -142,6 +142,15 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(String(concurrencySchema.description ?? ""), /parallel/i);
 	});
 
+	it("includes per-run output token budget override", () => {
+		const budgetSchema = SubagentParams?.properties?.budget;
+		assert.ok(budgetSchema, "budget schema should exist");
+		assert.equal(budgetSchema.type, "integer");
+		assert.equal(budgetSchema.minimum, 1);
+		assert.match(String(budgetSchema.description ?? ""), /output token/i);
+		assert.match(String(budgetSchema.description ?? ""), /per-run/i);
+	});
+
 	it("includes lane selectors on single, parallel, and chain execution inputs", () => {
 		const singleLaneSchema = SubagentParams?.properties?.lane as JsonSchemaNode | undefined;
 		assert.ok(singleLaneSchema, "single lane schema should exist");

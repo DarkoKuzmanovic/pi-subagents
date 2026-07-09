@@ -557,6 +557,8 @@ export interface ExtensionConfig {
 	forceTopLevelAsync?: boolean;
 	defaultSessionDir?: string;
 	maxSubagentDepth?: number;
+	/** Default per-run output-token launch budget. Prevents new children from starting once spent output tokens reach the ceiling; in-flight children are never killed. */
+	sessionTokenBudget?: number;
 	control?: ControlConfig;
 	parallel?: TopLevelParallelConfig;
 	worktreeSetupHook?: string;

@@ -178,6 +178,7 @@ export const SubagentParams = Type.Object({
 	cwd: Type.Optional(Type.String()),
 	artifacts: Type.Optional(Type.Boolean({ description: "Write debug artifacts (default: true)" })),
 	includeProgress: Type.Optional(Type.Boolean({ description: "Include full progress in result (default: false)" })),
+	budget: Type.Optional(Type.Integer({ minimum: 1, description: "Per-run output token budget override. Stops launching new subagents once completed children have produced this many output tokens; already-running children are not killed, so overshoot is possible." })),
 	share: Type.Optional(Type.Boolean({ description: "Upload session to GitHub Gist for sharing (default: false)" })),
 	sessionDir: Type.Optional(
 		Type.String({ description: "Directory to store session logs (default: temp; enables sessions even if share=false)" }),
