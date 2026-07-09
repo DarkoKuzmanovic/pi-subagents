@@ -4,6 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
+import { buildCompletionOutbox, publishCompletionOutbox, resolveOmOutboxPath } from "../../src/runs/background/async-om-outbox.ts";
+import { resolveOmReceiptPath, resolveOmReceiptsDir } from "../../src/runs/background/async-om-retention.ts";
+import { hasDeliveredIntercomMarker } from "../../src/runs/background/async-om-delivery-marker.ts";
+import { computeCanonicalSha256 } from "../../src/shared/durable-json.ts";
 import type { SubagentState } from "../../src/shared/types.ts";
 
 function createState(): SubagentState {
@@ -553,5 +557,440 @@ describe("result watcher", () => {
 		} finally {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 		}
+	});
+
+	describe("M6.1 durable OM outbox retention", () => {
+		it("retains result.json (post-intercom eager-unlink point) while an OM outbox has no receipt", async () => {
+			const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-"));
+			const asyncRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-runs-"));
+			try {
+				const asyncDir = path.join(asyncRunsDir, "om-run-1");
+				const outbox = buildCompletionOutbox(
+					{
+						deliveryId: "om-async-v1:nonce-abc:c000001",
+						runId: "om-run-1",
+						runNonce: "nonce-abc",
+						childId: "c000001",
+						consumer: {
+							consumerId: "observational-memory",
+							contractVersion: 1,
+							originParent: { sessionFile: "/tmp/parent.jsonl", sessionHeaderId: "h", rootEntryId: "r", launchLeafId: "l", launchCwd: "/repo" },
+						},
+					},
+					[{ type: "a" }],
+				);
+				publishCompletionOutbox(asyncDir, outbox);
+
+				const pi = { events: { on: () => () => {}, emit() {} } };
+				const state = createState();
+				const resultPath = path.join(resultsDir, "om-run-1.json");
+				fs.writeFileSync(resultPath, JSON.stringify({ id: "om-run-1", success: true, summary: "done", cwd: "/repo", asyncDir }), "utf-8");
+
+				const watcher = createResultWatcher(pi, state, resultsDir, 60_000, { asyncRunsDir });
+				try {
+					watcher.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				} finally {
+					watcher.stopResultWatcher();
+				}
+
+				assert.equal(fs.existsSync(resultPath), true, "result.json must survive the post-intercom eager-unlink point until a receipt lands");
+				assert.equal(fs.existsSync(resolveOmOutboxPath(asyncDir, "c000001")), true, "outbox must be retained without a matching receipt");
+			} finally {
+				fs.rmSync(resultsDir, { recursive: true, force: true });
+				fs.rmSync(asyncRunsDir, { recursive: true, force: true });
+			}
+		});
+
+		it("prunes a retained outbox once a valid receipt appears, discovered on the next startup/poll rescan", async () => {
+			const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-"));
+			const asyncRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-runs-"));
+			try {
+				const asyncDir = path.join(asyncRunsDir, "om-run-2");
+				const delivery = {
+					deliveryId: "om-async-v1:nonce-abc:c000001",
+					runId: "om-run-2",
+					runNonce: "nonce-abc",
+					childId: "c000001",
+					consumer: {
+						consumerId: "observational-memory" as const,
+						contractVersion: 1 as const,
+						originParent: { sessionFile: "/tmp/parent.jsonl", sessionHeaderId: "h", rootEntryId: "r", launchLeafId: "l", launchCwd: "/repo" },
+					},
+				};
+				const outbox = buildCompletionOutbox(delivery, [{ type: "a" }]);
+				publishCompletionOutbox(asyncDir, outbox);
+
+				const pi = { events: { on: () => () => {}, emit() {} } };
+				const state = createState();
+				const watcher = createResultWatcher(pi, state, resultsDir, 60_000, { asyncRunsDir });
+				try {
+					// No receipt yet: startup rescan must retain it.
+					watcher.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+					assert.equal(fs.existsSync(resolveOmOutboxPath(asyncDir, "c000001")), true);
+
+					const outboxOnDisk = JSON.parse(fs.readFileSync(resolveOmOutboxPath(asyncDir, "c000001"), "utf-8"));
+					const outboxCanonicalSha256 = computeCanonicalSha256(outboxOnDisk).sha256;
+					const withoutHash = {
+						schemaVersion: 1 as const,
+						consumerId: "observational-memory" as const,
+						contractVersion: 1 as const,
+						delivery,
+						importedAt: new Date().toISOString(),
+						snapshotSha256: outbox.snapshot.sha256,
+						snapshotByteLength: outbox.snapshot.byteLength,
+						outboxSha256: outboxCanonicalSha256,
+						inboxSha256: "d".repeat(64),
+					};
+					const receipt = { ...withoutHash, receiptSha256: computeCanonicalSha256(withoutHash).sha256 };
+					fs.mkdirSync(resolveOmReceiptsDir(asyncDir), { recursive: true });
+					fs.writeFileSync(resolveOmReceiptPath(asyncDir, "c000001"), JSON.stringify(receipt), "utf-8");
+
+					// Next rescan (startup or poll) must discover and prune it — with no result.json involved at all.
+					watcher.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+					assert.equal(fs.existsSync(resolveOmOutboxPath(asyncDir, "c000001")), false, "outbox must be pruned once acknowledged");
+				} finally {
+					watcher.stopResultWatcher();
+				}
+			} finally {
+				fs.rmSync(resultsDir, { recursive: true, force: true });
+				fs.rmSync(asyncRunsDir, { recursive: true, force: true });
+			}
+		});
+	});
+
+	describe("M6.1 Phase 2B durable result-delivery retention", () => {
+		function createAckingIntercomPi(): { pi: { events: { on: (event: string, handler: (payload: unknown) => void) => () => void; emit: (event: string, data: unknown) => void } }; emitted: Array<{ event: string; data: unknown }> } {
+			const emitted: Array<{ event: string; data: unknown }> = [];
+			const listeners = new Map<string, Set<(payload: unknown) => void>>();
+			const pi = {
+				events: {
+					on(event: string, handler: (payload: unknown) => void) {
+						const eventListeners = listeners.get(event) ?? new Set();
+						eventListeners.add(handler);
+						listeners.set(event, eventListeners);
+						return () => eventListeners.delete(handler);
+					},
+					emit(event: string, data: unknown) {
+						emitted.push({ event, data });
+						for (const handler of listeners.get(event) ?? []) handler(data);
+						if (event === "subagent:result-intercom") {
+							const requestId = data && typeof data === "object" ? (data as { requestId?: unknown }).requestId : undefined;
+							if (typeof requestId === "string") {
+								setImmediate(() => pi.events.emit("subagent:result-intercom-delivery", { requestId, delivered: true }));
+							}
+						}
+					},
+				},
+			};
+			return { pi, emitted };
+		}
+
+		function createDecliningIntercomPi(): { pi: { events: { on: (event: string, handler: (payload: unknown) => void) => () => void; emit: (event: string, data: unknown) => void } }; emitted: Array<{ event: string; data: unknown }> } {
+			// Simulates an intercom bus that always reports delivery failure (e.g. no listener
+			// acknowledged the request) — the promise resolves with `delivered: false` immediately,
+			// rather than relying on the 500ms default timeout fallback.
+			const emitted: Array<{ event: string; data: unknown }> = [];
+			const listeners = new Map<string, Set<(payload: unknown) => void>>();
+			const pi = {
+				events: {
+					on(event: string, handler: (payload: unknown) => void) {
+						const eventListeners = listeners.get(event) ?? new Set();
+						eventListeners.add(handler);
+						listeners.set(event, eventListeners);
+						return () => eventListeners.delete(handler);
+					},
+					emit(event: string, data: unknown) {
+						emitted.push({ event, data });
+						for (const handler of listeners.get(event) ?? []) handler(data);
+						if (event === "subagent:result-intercom") {
+							const requestId = data && typeof data === "object" ? (data as { requestId?: unknown }).requestId : undefined;
+							if (typeof requestId === "string") {
+								setImmediate(() => pi.events.emit("subagent:result-intercom-delivery", { requestId, delivered: false }));
+							}
+						}
+					},
+				},
+			};
+			return { pi, emitted };
+		}
+
+		function makeOmOutbox(runId: string) {
+			return buildCompletionOutbox(
+				{
+					deliveryId: `om-async-v1:nonce-abc:c000001`,
+					runId,
+					runNonce: "nonce-abc",
+					childId: "c000001",
+					consumer: {
+						consumerId: "observational-memory" as const,
+						contractVersion: 1 as const,
+						originParent: { sessionFile: "/tmp/parent.jsonl", sessionHeaderId: "h", rootEntryId: "r", launchLeafId: "l", launchCwd: "/repo" },
+					},
+				},
+				[{ type: "a" }],
+			);
+		}
+
+		function writeValidReceipt(asyncDir: string, delivery: ReturnType<typeof makeOmOutbox>["delivery"], outboxOnDisk: unknown) {
+			const outboxCanonicalSha256 = computeCanonicalSha256(outboxOnDisk).sha256;
+			const withoutHash = {
+				schemaVersion: 1 as const,
+				consumerId: "observational-memory" as const,
+				contractVersion: 1 as const,
+				delivery,
+				importedAt: new Date().toISOString(),
+				snapshotSha256: (outboxOnDisk as { snapshot: { sha256: string } }).snapshot.sha256,
+				snapshotByteLength: (outboxOnDisk as { snapshot: { byteLength: number } }).snapshot.byteLength,
+				outboxSha256: outboxCanonicalSha256,
+				inboxSha256: "d".repeat(64),
+			};
+			const receipt = { ...withoutHash, receiptSha256: computeCanonicalSha256(withoutHash).sha256 };
+			fs.mkdirSync(resolveOmReceiptsDir(asyncDir), { recursive: true });
+			fs.writeFileSync(resolveOmReceiptPath(asyncDir, "c000001"), JSON.stringify(receipt), "utf-8");
+		}
+
+		it("1. successful intercom + pending OM outbox retains the original result file and a durable marker", async () => {
+			const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-1-"));
+			const asyncRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-1-runs-"));
+			try {
+				const asyncDir = path.join(asyncRunsDir, "om-run-1");
+				publishCompletionOutbox(asyncDir, makeOmOutbox("om-run-1"));
+
+				const { pi, emitted } = createAckingIntercomPi();
+				const state = createState();
+				const resultPath = path.join(resultsDir, "om-run-1.json");
+				fs.writeFileSync(
+					resultPath,
+					JSON.stringify({ id: "om-run-1", success: true, summary: "done", cwd: "/repo", asyncDir, intercomTarget: "target-x" }),
+					"utf-8",
+				);
+
+				const watcher = createResultWatcher(pi, state, resultsDir, 60_000, { asyncRunsDir });
+				try {
+					watcher.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				} finally {
+					watcher.stopResultWatcher();
+				}
+
+				assert.ok(emitted.some((entry) => entry.event === "subagent:result-intercom"), "intercom delivery must have been attempted");
+				assert.equal(fs.existsSync(resultPath), true, "result.json must be retained while the OM outbox is pending");
+				assert.equal(fs.existsSync(resolveOmOutboxPath(asyncDir, "c000001")), true, "outbox must be retained");
+				assert.equal(hasDeliveredIntercomMarker(fs, asyncDir), true, "a durable delivery marker must exist");
+			} finally {
+				fs.rmSync(resultsDir, { recursive: true, force: true });
+				fs.rmSync(asyncRunsDir, { recursive: true, force: true });
+			}
+		});
+
+		it("2. restart/startup scan sees the retained result but does not redeliver intercom", async () => {
+			const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-2-"));
+			const asyncRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-2-runs-"));
+			try {
+				const asyncDir = path.join(asyncRunsDir, "om-run-2");
+				publishCompletionOutbox(asyncDir, makeOmOutbox("om-run-2"));
+				const resultPath = path.join(resultsDir, "om-run-2.json");
+				fs.writeFileSync(
+					resultPath,
+					JSON.stringify({ id: "om-run-2", success: true, summary: "done", cwd: "/repo", asyncDir, intercomTarget: "target-x" }),
+					"utf-8",
+				);
+
+				// First watcher instance: delivers intercom once and retains (no receipt yet).
+				const first = createAckingIntercomPi();
+				const watcherFirst = createResultWatcher(first.pi, createState(), resultsDir, 60_000, { asyncRunsDir });
+				try {
+					watcherFirst.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				} finally {
+					watcherFirst.stopResultWatcher();
+				}
+				assert.equal(first.emitted.filter((entry) => entry.event === "subagent:result-intercom").length, 1, "first pass must deliver intercom once");
+
+				// Simulate a restart: a fresh state (in-memory dedupe reset) and a fresh watcher instance,
+				// same on-disk state (retained result.json + marker + outbox).
+				const second = createAckingIntercomPi();
+				const watcherSecond = createResultWatcher(second.pi, createState(), resultsDir, 60_000, { asyncRunsDir });
+				try {
+					watcherSecond.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				} finally {
+					watcherSecond.stopResultWatcher();
+				}
+
+				assert.equal(
+					second.emitted.filter((entry) => entry.event === "subagent:result-intercom").length,
+					0,
+					"restart must not redeliver intercom for an already-delivered retained result",
+				);
+				assert.equal(fs.existsSync(resultPath), true, "result.json remains retained (outbox still has no receipt)");
+				assert.equal(fs.existsSync(resolveOmOutboxPath(asyncDir, "c000001")), true);
+				assert.equal(hasDeliveredIntercomMarker(fs, asyncDir), true);
+			} finally {
+				fs.rmSync(resultsDir, { recursive: true, force: true });
+				fs.rmSync(asyncRunsDir, { recursive: true, force: true });
+			}
+		});
+
+		it("3. an absent or invalid receipt retains the result, marker, and outbox across a rescan", async () => {
+			const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-3-"));
+			const asyncRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-3-runs-"));
+			try {
+				const asyncDir = path.join(asyncRunsDir, "om-run-3");
+				publishCompletionOutbox(asyncDir, makeOmOutbox("om-run-3"));
+				const resultPath = path.join(resultsDir, "om-run-3.json");
+				fs.writeFileSync(
+					resultPath,
+					JSON.stringify({ id: "om-run-3", success: true, summary: "done", cwd: "/repo", asyncDir, intercomTarget: "target-x" }),
+					"utf-8",
+				);
+
+				const { pi } = createAckingIntercomPi();
+				const watcher = createResultWatcher(pi, createState(), resultsDir, 60_000, { asyncRunsDir });
+				try {
+					watcher.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+
+					// Write a tampered (invalid) receipt and rescan.
+					fs.mkdirSync(resolveOmReceiptsDir(asyncDir), { recursive: true });
+					fs.writeFileSync(resolveOmReceiptPath(asyncDir, "c000001"), JSON.stringify({ schemaVersion: 1, tampered: true }), "utf-8");
+					watcher.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				} finally {
+					watcher.stopResultWatcher();
+				}
+
+				assert.equal(fs.existsSync(resultPath), true, "result.json must remain retained when the receipt is invalid");
+				assert.equal(fs.existsSync(resolveOmOutboxPath(asyncDir, "c000001")), true, "outbox must remain retained");
+				assert.equal(hasDeliveredIntercomMarker(fs, asyncDir), true, "delivery marker must remain");
+			} finally {
+				fs.rmSync(resultsDir, { recursive: true, force: true });
+				fs.rmSync(asyncRunsDir, { recursive: true, force: true });
+			}
+		});
+
+		it("4. a valid receipt prunes the result, marker, and outbox", async () => {
+			const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-4-"));
+			const asyncRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-4-runs-"));
+			try {
+				const asyncDir = path.join(asyncRunsDir, "om-run-4");
+				const outbox = makeOmOutbox("om-run-4");
+				publishCompletionOutbox(asyncDir, outbox);
+				const resultPath = path.join(resultsDir, "om-run-4.json");
+				fs.writeFileSync(
+					resultPath,
+					JSON.stringify({ id: "om-run-4", success: true, summary: "done", cwd: "/repo", asyncDir, intercomTarget: "target-x" }),
+					"utf-8",
+				);
+
+				const { pi } = createAckingIntercomPi();
+				const watcher = createResultWatcher(pi, createState(), resultsDir, 60_000, { asyncRunsDir });
+				try {
+					watcher.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+					assert.equal(fs.existsSync(resultPath), true, "precondition: result.json retained before the receipt lands");
+
+					const outboxOnDisk = JSON.parse(fs.readFileSync(resolveOmOutboxPath(asyncDir, "c000001"), "utf-8"));
+					writeValidReceipt(asyncDir, outbox.delivery, outboxOnDisk);
+
+					watcher.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				} finally {
+					watcher.stopResultWatcher();
+				}
+
+				assert.equal(fs.existsSync(resultPath), false, "result.json must be pruned once the receipt is validated");
+				assert.equal(fs.existsSync(resolveOmOutboxPath(asyncDir, "c000001")), false, "outbox must be pruned");
+				assert.equal(hasDeliveredIntercomMarker(fs, asyncDir), false, "delivery marker must be pruned");
+			} finally {
+				fs.rmSync(resultsDir, { recursive: true, force: true });
+				fs.rmSync(asyncRunsDir, { recursive: true, force: true });
+			}
+		});
+
+		it("5. a non-OM run retains existing immediate cleanup behavior", async () => {
+			const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-5-"));
+			const asyncRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-5-runs-"));
+			try {
+				// No OM outbox is ever published for this run: it never participated in OM registration.
+				const asyncDir = path.join(asyncRunsDir, "plain-run-1");
+				const resultPath = path.join(resultsDir, "plain-run-1.json");
+				fs.writeFileSync(
+					resultPath,
+					JSON.stringify({ id: "plain-run-1", success: true, summary: "done", cwd: "/repo", asyncDir, intercomTarget: "target-x" }),
+					"utf-8",
+				);
+
+				const { pi, emitted } = createAckingIntercomPi();
+				const watcher = createResultWatcher(pi, createState(), resultsDir, 60_000, { asyncRunsDir });
+				try {
+					watcher.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				} finally {
+					watcher.stopResultWatcher();
+				}
+
+				assert.ok(emitted.some((entry) => entry.event === "subagent:result-intercom"), "intercom delivery must still have been attempted");
+				assert.equal(fs.existsSync(resultPath), false, "non-OM runs must still be unlinked immediately after processing");
+				assert.equal(hasDeliveredIntercomMarker(fs, asyncDir), false, "no delivery marker should be created for a non-OM run");
+			} finally {
+				fs.rmSync(resultsDir, { recursive: true, force: true });
+				fs.rmSync(asyncRunsDir, { recursive: true, force: true });
+			}
+		});
+
+		it("6. a failed intercom delivery must never create a durable delivered marker, and remains eligible for retry", async () => {
+			const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-6-"));
+			const asyncRunsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-om-6-runs-"));
+			try {
+				const asyncDir = path.join(asyncRunsDir, "om-run-6");
+				publishCompletionOutbox(asyncDir, makeOmOutbox("om-run-6"));
+				const resultPath = path.join(resultsDir, "om-run-6.json");
+				fs.writeFileSync(
+					resultPath,
+					JSON.stringify({ id: "om-run-6", success: true, summary: "done", cwd: "/repo", asyncDir, intercomTarget: "target-x" }),
+					"utf-8",
+				);
+
+				// First pass: intercom delivery is never acknowledged (delivered: false).
+				const first = createDecliningIntercomPi();
+				const watcherFirst = createResultWatcher(first.pi, createState(), resultsDir, 60_000, { asyncRunsDir });
+				try {
+					watcherFirst.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				} finally {
+					watcherFirst.stopResultWatcher();
+				}
+
+				assert.ok(first.emitted.some((entry) => entry.event === "subagent:result-intercom"), "intercom delivery must have been attempted");
+				assert.equal(fs.existsSync(resultPath), true, "result.json must remain retained while the OM outbox is pending");
+				assert.equal(fs.existsSync(resolveOmOutboxPath(asyncDir, "c000001")), true, "outbox must remain retained");
+				assert.equal(hasDeliveredIntercomMarker(fs, asyncDir), false, "a failed delivery must never create a durable delivered marker");
+
+				// Second pass (e.g. after a watcher restart): since no marker was written, delivery must
+				// be retried rather than skipped.
+				const second = createAckingIntercomPi();
+				const watcherSecond = createResultWatcher(second.pi, createState(), resultsDir, 60_000, { asyncRunsDir });
+				try {
+					watcherSecond.primeExistingResults();
+					await new Promise((resolve) => setTimeout(resolve, 100));
+				} finally {
+					watcherSecond.stopResultWatcher();
+				}
+
+				assert.equal(
+					second.emitted.filter((entry) => entry.event === "subagent:result-intercom").length,
+					1,
+					"retry after a failed delivery must re-attempt intercom delivery",
+				);
+				assert.equal(hasDeliveredIntercomMarker(fs, asyncDir), true, "a successful retry must now create the durable delivered marker");
+			} finally {
+				fs.rmSync(resultsDir, { recursive: true, force: true });
+				fs.rmSync(asyncRunsDir, { recursive: true, force: true });
+			}
+		});
 	});
 });

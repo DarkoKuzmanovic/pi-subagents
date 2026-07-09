@@ -1,8 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { hasDeliveredIntercomMarker, removeDeliveredIntercomMarker, writeDeliveredIntercomMarker } from "./async-om-delivery-marker.ts";
+import { hasPendingOmOutboxes, hasPendingOmOutboxesOrReceipts, reconcileOmOutboxesForRun, scanAsyncRunsWithPendingOutboxes } from "./async-om-retention.ts";
 import { buildCompletionKey, markSeenWithTtl } from "./completion-dedupe.ts";
 import { createFileCoalescer } from "../../shared/file-coalescer.ts";
 import {
+	ASYNC_DIR,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_BUDGET_EXHAUSTED_EVENT,
 	type IntercomEventBus,
@@ -30,6 +33,8 @@ type ResultWatcherTimers = {
 
 type ResultWatcherDeps = {
 	fs?: ResultWatcherFs;
+	/** Root directory containing per-run async directories. Defaults to ASYNC_DIR; overridable for tests. */
+	asyncRunsDir?: string;
 	timers?: ResultWatcherTimers;
 };
 
@@ -60,6 +65,7 @@ export function createResultWatcher(
 	stopResultWatcher: () => void;
 } {
 	const fsApi = deps.fs ?? fs;
+	const asyncRunsDir = deps.asyncRunsDir ?? ASYNC_DIR;
 	const timers = deps.timers ?? { setTimeout, clearTimeout, setInterval, clearInterval };
 
 	const handleResult = async (file: string) => {
@@ -99,13 +105,25 @@ export function createResultWatcher(
 			const now = Date.now();
 			completionKey = buildCompletionKey(data, `result:${file}`);
 			if (markSeenWithTtl(state.completionSeen, completionKey, now, completionTtlMs)) {
+				// Same-process rescan of an already-delivered result: never unlink out from under a
+				// still-pending OM outbox — leave the OM reconcile loop (see reconcilePendingOmOutboxes)
+				// to finish the job once every outbox for this run has a validated receipt.
+				if (data.asyncDir && hasPendingOmOutboxes(fsApi, data.asyncDir)) return;
 				fsApi.unlinkSync(resultPath);
 				return;
 			}
 			completionMarkedNow = true;
 
 			const intercomTarget = data.intercomTarget?.trim();
-			if (intercomTarget) {
+			// M6.1 Phase 2B: a durable marker means intercom for this run already succeeded in a
+			// prior (possibly since-restarted) watcher process — never redeliver it.
+			const alreadyDeliveredForOm = data.asyncDir ? hasDeliveredIntercomMarker(fsApi, data.asyncDir) : false;
+			// Tracks whether intercom delivery for this run has actually been confirmed (either just
+			// now, or in a prior watcher process via the durable marker). Only a confirmed delivery may
+			// ever cause a delivered marker to be (re)written below — a failed delivery must remain
+			// eligible for retry on the next pass/restart.
+			let intercomDeliveredForOm = alreadyDeliveredForOm;
+			if (intercomTarget && !alreadyDeliveredForOm) {
 				const childResults = Array.isArray(data.results) && data.results.length > 0
 					? data.results
 					: [{
@@ -147,6 +165,7 @@ export function createResultWatcher(
 					asyncDir: data.asyncDir,
 				});
 				const delivered = await deliverSubagentResultIntercomEvent(pi.events, payload);
+				intercomDeliveredForOm = delivered;
 				if (!delivered) {
 					console.error(`Subagent async grouped result intercom delivery was not acknowledged for '${resultPath}'.`);
 				}
@@ -162,7 +181,37 @@ export function createResultWatcher(
 			}
 
 			pi.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, data);
-			fsApi.unlinkSync(resultPath);
+			// M6.1 Phase 2B: retain result.json (and a durable delivery marker) past this eager-unlink
+			// point until every OM outbox for this run has a validated receipt. Gate on
+			// hasPendingOmOutboxesOrReceipts first so a run that was never OM-registered takes exactly
+			// the same immediate-unlink path as before OM registration existed.
+			let retainForOm = false;
+			if (data.asyncDir && hasPendingOmOutboxesOrReceipts(fsApi, data.asyncDir)) {
+				try {
+					reconcileOmOutboxesForRun(fsApi, data.asyncDir);
+				} catch (reconcileError) {
+					console.error(`Async OM outbox reconciliation failed for '${data.asyncDir}':`, reconcileError);
+				}
+				try {
+					if (hasPendingOmOutboxes(fsApi, data.asyncDir)) {
+						retainForOm = true;
+						if (intercomTarget && intercomDeliveredForOm) {
+							writeDeliveredIntercomMarker(
+								data.asyncDir,
+								{ runId: data.runId ?? data.id ?? file.replace(/\.json$/i, ""), deliveredAt: new Date().toISOString() },
+								{ mkdirSync: fsApi.mkdirSync },
+							);
+						}
+					} else if (hasDeliveredIntercomMarker(fsApi, data.asyncDir)) {
+						removeDeliveredIntercomMarker(fsApi, data.asyncDir);
+					}
+				} catch (omError) {
+					console.error(`Async OM retention bookkeeping failed for '${data.asyncDir}':`, omError);
+				}
+			}
+			if (!retainForOm) {
+				fsApi.unlinkSync(resultPath);
+			}
 		} catch (error) {
 			if (isNotFoundError(error)) return;
 			// Delivery failed after the completion key was marked seen. Unmark it,
@@ -178,15 +227,53 @@ export function createResultWatcher(
 		void handleResult(file);
 	}, 50);
 
+	// M6.1: durable, restart-safe retry for outboxes that were retained past a first reconcile
+	// attempt (no receipt yet). Scans `asyncRunsDir` directly — independent of result.json, whose
+	// dedupe state does not survive a watcher restart (see async-om-retention.ts header).
+	const reconcilePendingOmOutboxes = () => {
+		try {
+			for (const pendingAsyncDir of scanAsyncRunsWithPendingOutboxes(fsApi, asyncRunsDir)) {
+				reconcileOmOutboxesForRun(fsApi, pendingAsyncDir);
+				if (!hasPendingOmOutboxes(fsApi, pendingAsyncDir)) {
+					finalizeResolvedOmRun(pendingAsyncDir);
+				}
+			}
+		} catch (error) {
+			console.error(`Failed to reconcile pending async OM outboxes under '${asyncRunsDir}':`, error);
+		}
+	};
+
+	// M6.1 Phase 2B: once every outbox for a run has a validated receipt, prune whatever was
+	// retained on its behalf: the result.json (looked up by the run-id convention shared with
+	// async-execution.ts: `<resultsDir>/<basename(asyncDir)>.json`) and the delivery marker.
+	// Independent of handleResult's own prune-on-first-pass path — this is what finishes the job
+	// for a receipt that lands only after result.json was already retained on a prior pass.
+	const finalizeResolvedOmRun = (asyncDir: string) => {
+		try {
+			const retainedResultPath = path.join(resultsDir, `${path.basename(asyncDir)}.json`);
+			if (fsApi.existsSync(retainedResultPath)) fsApi.unlinkSync(retainedResultPath);
+		} catch (error) {
+			console.error(`Failed to prune retained result for resolved async OM run '${asyncDir}':`, error);
+		}
+		try {
+			if (hasDeliveredIntercomMarker(fsApi, asyncDir)) removeDeliveredIntercomMarker(fsApi, asyncDir);
+		} catch (error) {
+			console.error(`Failed to remove delivery marker for resolved async OM run '${asyncDir}':`, error);
+		}
+	};
+
 	const primeExistingResults = () => {
 		try {
 			fsApi.readdirSync(resultsDir)
-				.filter((f) => f.endsWith(".json"))
-				.forEach((file) => state.resultFileCoalescer.schedule(file, 0));
+				.filter((file) => file.endsWith(".json"))
+				.forEach((file) => {
+					state.resultFileCoalescer.schedule(file, 0);
+				});
 		} catch (error) {
 			if (isNotFoundError(error)) return;
 			console.error(`Failed to scan subagent result directory '${resultsDir}':`, error);
 		}
+		reconcilePendingOmOutboxes();
 	};
 
 	const startPollingFallback = (reason: unknown) => {
@@ -221,7 +308,25 @@ export function createResultWatcher(
 		state.watcherRestartTimer.unref?.();
 	};
 
+	// M6.1: independent of native-watch vs. polling-fallback mode, retained OM outboxes need a
+	// periodic rescan even when no new result ever completes (fs.watch mode otherwise never
+	// revisits `asyncRunsDir` on its own). Local to this closure — not state.watcherRestartTimer,
+	// which polling-fallback already reuses for a different purpose.
+	let omRetentionTimer: ReturnType<ResultWatcherTimers["setInterval"]> | null = null;
+	const startOmRetentionPolling = () => {
+		if (omRetentionTimer) return;
+		omRetentionTimer = timers.setInterval(reconcilePendingOmOutboxes, WATCHER_POLL_INTERVAL_MS);
+		omRetentionTimer.unref?.();
+	};
+	const stopOmRetentionPolling = () => {
+		if (omRetentionTimer) {
+			timers.clearInterval(omRetentionTimer);
+			omRetentionTimer = null;
+		}
+	};
+
 	const startResultWatcher = () => {
+		startOmRetentionPolling();
 		if (state.watcher) return;
 		if (state.watcherRestartTimer) {
 			timers.clearTimeout(state.watcherRestartTimer);
@@ -258,6 +363,7 @@ export function createResultWatcher(
 	};
 
 	const stopResultWatcher = () => {
+		stopOmRetentionPolling();
 		state.watcher?.close();
 		state.watcher = null;
 		if (state.watcherRestartTimer) {

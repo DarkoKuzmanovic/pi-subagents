@@ -31,6 +31,7 @@ import { resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, resolveModelCandidate, type AvailableModelInfo } from "../shared/model-fallback.ts";
 import { resolveExpectedWorktreeAgentCwd } from "../shared/worktree.ts";
 import { persistLaunchManifest } from "./async-launch-binding.ts";
+import { staticParallelOmChildKey, staticSequentialOmChildKey } from "../shared/om-logical-keys.ts";
 import {
 	type ArtifactConfig,
 	type AsyncOmLaunchManifestV1,
@@ -379,7 +380,7 @@ export function executeAsyncChain(
 			...(s.thinking ? { thinking: s.thinking } : {}),
 		};
 	};
-	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior) => {
+	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior, omLogicalChildKey?: string) => {
 		const a = agents.find((x) => x.name === s.agent)!;
 		const stepCwd = resolveChildCwd(runnerCwd, s.cwd);
 		const instructionCwd = behaviorCwd ?? stepCwd;
@@ -428,6 +429,7 @@ export function executeAsyncChain(
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
 			outputSchema: s.outputSchema,
 			as: s.as,
+			...(omLogicalChildKey ? { omLogicalChildKey } : {}),
 		};
 	};
 
@@ -528,14 +530,21 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 								behaviorCwd = undefined;
 							}
 						}
-						return buildSeqStep(t, nextSessionFile(), behaviorCwd, progressPrecreated, parallelBehaviors[taskIndex]);
+						return buildSeqStep(
+							t,
+							nextSessionFile(),
+							behaviorCwd,
+							progressPrecreated,
+							parallelBehaviors[taskIndex],
+							omLaunchManifestPath ? staticParallelOmChildKey(stepIndex, taskIndex) : undefined,
+						);
 					}),
 					concurrency: s.concurrency,
 					failFast: s.failFast,
 					worktree: s.worktree,
 				};
 			}
-			return buildSeqStep(s as SequentialStep, nextSessionFile());
+			return buildSeqStep(s as SequentialStep, nextSessionFile(), undefined, false, undefined, omLaunchManifestPath ? staticSequentialOmChildKey(stepIndex) : undefined);
 		});
 	} catch (error) {
 		if (error instanceof UnavailableSubagentSkillError || error instanceof AsyncStartValidationError) return formatAsyncStartError(resultMode, error.message);

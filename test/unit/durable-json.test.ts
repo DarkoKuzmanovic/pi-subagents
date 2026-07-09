@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
+	computeCanonicalSha256,
 	resolveDurableRootPath,
 	validateDurableRoot,
 	writeDurableJson,
@@ -40,6 +41,27 @@ describe("durable json", () => {
 		);
 		assert.equal(result.byteLength, Buffer.byteLength(fs.readFileSync(filePath, "utf-8"), "utf-8"));
 		assert.match(result.sha256, /^[a-f0-9]{64}$/);
+	});
+
+	it("computeCanonicalSha256 matches the hash writeDurableJson commits for the same value", () => {
+		const rootDir = path.join(tempDir, "outbox");
+		fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
+		const root = validateDurableRoot(rootDir);
+		const filePath = resolveDurableRootPath(root, "record.json");
+		const value = { zebra: 1, alpha: { delta: 4, bravo: 2 }, items: [3, { beta: true, alpha: false }] };
+
+		const written = writeDurableJson(filePath, value);
+		const computed = computeCanonicalSha256(value);
+
+		assert.equal(computed.sha256, written.sha256);
+		assert.equal(computed.byteLength, written.byteLength);
+	});
+
+	it("computeCanonicalSha256 is order-independent for object keys, matching writeDurableJson", () => {
+		const a = computeCanonicalSha256({ z: 1, a: { one: 1, two: 2 } });
+		const b = computeCanonicalSha256({ a: { two: 2, one: 1 }, z: 1 });
+		assert.equal(a.sha256, b.sha256);
+		assert.equal(a.byteLength, b.byteLength);
 	});
 
 	it("uses locale-independent code-unit ordering for canonical object keys", () => {

@@ -43,6 +43,8 @@ import {
 	aggregateParallelOutputs,
 } from "../shared/parallel-utils.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
+import { allocateDynamicOmSlots, loadOmManifest, publishChildOmOutbox } from "./async-om-outbox.ts";
+import { dynamicOmChildKey } from "../shared/om-logical-keys.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput, resetStructuredOutputCapture, type StructuredOutputRuntime } from "../shared/structured-output.ts";
 import { isStorableStepResult, outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
@@ -979,6 +981,10 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const overallStartTime = Date.now();
 	const shareEnabled = config.share === true;
 	const asyncDir = config.asyncDir;
+	// M6.1: best-effort durable OM registration. `omManifest` starts from the pre-detach
+	// manifest (if any) and is refreshed in-memory whenever a dynamic-fanout batch durably
+	// mints new slots, so publishChildOmOutbox always sees every registered child's slot.
+	let omManifest = loadOmManifest(config.omLaunchManifestPath);
 	const statusPath = path.join(asyncDir, "status.json");
 	const eventsPath = path.join(asyncDir, "events.jsonl");
 	const logPath = path.join(asyncDir, `subagent-log-${id}.md`);
@@ -1668,7 +1674,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					console.error("Parallel token accounting failed (non-fatal):", tokenErr);
 				}
 
-				for (const pr of parallelResults) {
+				parallelResults.forEach((pr, prIndex) => {
 					results.push({
 						agent: pr.agent,
 						output: pr.output,
@@ -1682,7 +1688,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						modelAttempts: pr.modelAttempts,
 						artifactPaths: pr.artifactPaths,
 					});
-				}
+					// M6.1: best-effort durable OM outbox publish for this registered child, if any.
+					publishChildOmOutbox(omManifest, group.parallel[prIndex]?.omLogicalChildKey, pr.sessionFile, asyncDir);
+				});
 
 				previousOutput = aggregateParallelOutputs(
 					parallelResults.map((r) => ({
@@ -1782,6 +1790,20 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				continue;
 			}
 
+			// M6.1: durably reopen and update the launch manifest to mint a stable structural slot
+			// for every materialized item BEFORE any of them start (allocated as one synchronous
+			// batch write, never per-item, so there is no partial-batch race). Failure (missing/
+			// corrupt manifest, or a durable write that doesn't commit) means the whole batch runs
+			// WITHOUT OM registration — never blocks or corrupts ordinary dynamic-fanout execution.
+			const omDynamicSlots = omManifest && config.omLaunchManifestPath
+				? allocateDynamicOmSlots(
+					config.omLaunchManifestPath,
+					materialized.parallel.map((_task, itemIndex) => dynamicOmChildKey(dynStepIndex, itemIndex)),
+					dyn.template.agent,
+				)
+				: undefined;
+			if (omDynamicSlots) omManifest = omDynamicSlots.manifest;
+
 			// Clone the pre-resolved template per item, swapping the sentinel for the item task.
 			// Recompute read-only progress suppression per item so async behavior matches the
 			// foreground path (which resolves against the real per-item task text).
@@ -1797,10 +1819,18 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 					itemTask = itemTask.replace(/\*\*Output:\*\* Write your findings to: .+$/m, `**Output:** Write your findings to: ${outputPath}`);
 				}
+				// M6.1: a registered dynamic child must have an explicit session file so its outbox
+				// snapshot is a real session-entry snapshot, not just final output text (existing
+				// dynamic-fanout items otherwise get no session file at all — see PLAN-structured-
+				// output-fanout.md's per-item resume/share gap).
+				const omSlot = omDynamicSlots?.slots[itemIndex];
+				const omSessionFile = omSlot ? path.join(asyncDir, "om-sessions", `${dynStepIndex}-${itemIndex}.jsonl`) : undefined;
+				if (omSessionFile) fs.mkdirSync(path.dirname(omSessionFile), { recursive: true });
 				return {
 					...dyn.template,
 					...(outputPath ? { outputPath } : {}),
 					task: itemTask,
+					...(omSlot ? { omLogicalChildKey: omSlot.logicalChildKey, sessionFile: omSessionFile } : {}),
 				};
 			});
 			const count = materializedSteps.length;
@@ -1906,6 +1936,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				modelAttempts: singleResult.modelAttempts,
 				artifactPaths: singleResult.artifactPaths,
 			});
+			// M6.1: best-effort durable OM outbox publish for this registered child, if any.
+			publishChildOmOutbox(omManifest, seqStep.omLogicalChildKey, singleResult.sessionFile, asyncDir);
 
 			const stepEndTime = Date.now();
 

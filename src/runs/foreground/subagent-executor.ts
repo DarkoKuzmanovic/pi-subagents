@@ -35,6 +35,7 @@ import {
 import { discoverAvailableSkills, normalizeSkillInput } from "../../agents/skills.ts";
 import { executeAsyncChain, executeAsyncSingle, formatAsyncStartedMessage, isAsyncAvailable } from "../background/async-execution.ts";
 import { buildLaunchManifest, type StaticAsyncChildDescriptor } from "../background/async-launch-binding.ts";
+import { staticParallelOmChildKey, staticSequentialOmChildKey } from "../shared/om-logical-keys.ts";
 import type { AsyncOmLaunchManifestV1 } from "../../shared/types.ts";
 import { createSubagentContextResolver } from "../../shared/fork-context.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
@@ -1203,11 +1204,11 @@ function collectStaticAsyncOmChildren(chain: ChainStep[]): StaticAsyncChildDescr
 		if (isDynamicParallelStep(step)) continue;
 		if (isParallelStep(step)) {
 			for (const [taskIndex, task] of step.parallel.entries()) {
-				children.push({ logicalChildKey: `root/${stepIndex}/parallel/${taskIndex}`, agentName: task.agent });
+				children.push({ logicalChildKey: staticParallelOmChildKey(stepIndex, taskIndex), agentName: task.agent });
 			}
 			continue;
 		}
-		children.push({ logicalChildKey: `root/${stepIndex}/sequential/0`, agentName: (step as SequentialStep).agent });
+		children.push({ logicalChildKey: staticSequentialOmChildKey(stepIndex), agentName: (step as SequentialStep).agent });
 	}
 	return children;
 }
