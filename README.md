@@ -47,6 +47,7 @@
 - [Live progress](#live-progress)
 - [Session sharing](#session-sharing)
 - [Recursion guard](#recursion-guard)
+- [Runaway stream guard](#runaway-stream-guard)
 - [Events](#events)
 - [Prompt-template integration](#prompt-template-integration)
 - [Changes from upstream](#changes-from-upstream)
@@ -1016,6 +1017,16 @@ export PI_SUBAGENT_MAX_DEPTH=0
 ```
 
 `PI_SUBAGENT_DEPTH` is internal and propagated automatically. Do not set it manually.
+
+## Runaway stream guard
+
+Each child process is spawned with `--mode json`, and its event stream is watched for runaway output. When any guard below trips, the child is aborted (SIGINT, then SIGTERM after 1s) and the step fails with a `runaway output aborted: ...` error that names the cause; async runs record it in `status.json` and `events.jsonl`.
+
+- **Degenerate streaming loops.** A model can get stuck repeating a fragment forever — e.g. reissuing the trailing key-value pair of a tool call's JSON arguments (`, "timeout": 60000, "timeout": 60000, ...`) and never closing the object. A periodic-suffix scan over the normalized per-content-block delta tail detects this within seconds and aborts with the repeated fragment named. It is tolerant of cycling values and shifting chunk boundaries (numeric literals and whitespace are normalized), and tracks each content block independently so loops that interleave concurrent tool calls are still caught.
+- **No-progress thinking floods.** A child that streams past 30 MB of raw stdout without ever emitting assistant text or a tool call (a thinking loop) is aborted.
+- **Hard cap.** A backstop bounds total output even when the stream shows progress. It counts *delta-aware* bytes — the payload each `message_update` actually adds, not the full re-serialized snapshot — so verbose-but-honest runs are not killed by the quadratic amplification of snapshot streaming. A separate 1 GB raw-byte backstop bounds any other flood shape.
+
+These guards are internal and not configurable; they sit below the per-step inactivity timeout and overall run wall-clock timeout, which govern liveness.
 
 ## Events
 
