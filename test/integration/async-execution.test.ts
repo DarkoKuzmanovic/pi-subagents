@@ -27,7 +27,9 @@ interface AsyncResultPayload {
 	sessionId?: string;
 	mode?: string;
 	summary?: string;
-	results: Array<{ output?: string; success?: boolean; error?: string; model?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }> }>;
+	budget?: { limit: number; spentOutput: number; exhausted: boolean; overshootOutput?: number };
+	budgetExhausted?: boolean;
+	results: Array<{ output?: string; success?: boolean; skipped?: boolean; error?: string; exitCode?: number; model?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }> }>;
 }
 
 interface AsyncStatusPayload {
@@ -243,6 +245,45 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(chainResult.content[0]?.text ?? "", /Async chain:/);
 		assert.match(chainResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
 		await waitForAsyncResultFile(chainId, 10_000);
+	});
+
+	it("async chain stops launching later steps after the output token budget is exhausted", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "First async result" });
+		mockPi.onCall({ output: "Second async result should not run" });
+
+		const id = `async-budget-${Date.now().toString(36)}`;
+		executeAsyncChain!(id, {
+			chain: [
+				{ agent: "worker", task: "First async step" },
+				{ agent: "reviewer", task: "Second async step" },
+			],
+			agents: [makeAgent("worker"), makeAgent("reviewer")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+			budget: 50,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 10_000);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+
+		assert.equal(mockPi.callCount(), 1);
+		assert.equal(payload.success, true, `run should succeed with skipped step: ${JSON.stringify(payload.results)}`);
+		assert.equal(payload.results.length, 2);
+		assert.equal(payload.results[0]?.output, "First async result");
+		assert.equal(payload.results[1]?.skipped, true);
+		assert.equal(payload.results[1]?.error, "budget-exhausted");
+		assert.equal(payload.budget?.limit, 50);
+		assert.equal(payload.budget?.spentOutput, 50);
+		assert.equal(payload.budget?.exhausted, true);
+		assert.equal(payload.budgetExhausted, true);
+		assert.match(payload.summary ?? "", /\[budget: 50\/50 output tokens, exhausted\]/);
+		assert.equal(status.steps?.[1]?.status, "failed");
+		assert.equal(status.steps?.[1]?.exitCode, -1);
+		assert.equal(status.steps?.[1]?.error, "budget-exhausted");
 	});
 
 	it("top-level async parallel conversion preserves output, reads, and progress", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
