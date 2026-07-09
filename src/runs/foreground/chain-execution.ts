@@ -38,7 +38,7 @@ import { buildChainSummary } from "../../shared/formatters.ts";
 import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd, substituteTemplateVars } from "../../shared/utils.ts";
 import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings } from "../shared/chain-outputs.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection, type DynamicCollectedResult } from "../shared/dynamic-fanout.ts";
-import type { ChainOutputMap } from "../../shared/types.ts";
+import { SUBAGENT_BUDGET_EXHAUSTED_EVENT, type BudgetExhaustedEvent, type BudgetSummary, type ChainOutputMap } from "../../shared/types.ts";
 import { recordRun } from "../shared/run-history.ts";
 import {
 	cleanupWorktrees,
@@ -66,7 +66,7 @@ import {
 import { resolveModelCandidate } from "../shared/model-fallback.ts";
 import { validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { emptyUsage } from "../shared/usage.ts";
-import { createSessionTokenBudget, recordBudgetUsage, shouldDispatchWithBudget, type SessionTokenBudget } from "../shared/session-tokens.ts";
+import { budgetSummary, createSessionTokenBudget, recordBudgetUsage, shouldDispatchWithBudget, type SessionTokenBudget } from "../shared/session-tokens.ts";
 
 function formatChainStepStatus(agent: string, stepIndex: number, totalSteps: number, progress?: AgentProgress): string {
 	const step = `[${stepIndex + 1}/${totalSteps}] ${agent}`;
@@ -91,6 +91,7 @@ interface ChainExecutionDetailsInput {
 	chainAgents: string[];
 	totalSteps: number;
 	currentStepIndex?: number;
+	budget?: BudgetSummary;
 }
 
 interface ParallelChainRunInput {
@@ -151,6 +152,7 @@ function buildChainExecutionDetails(input: ChainExecutionDetailsInput): Details 
 		chainAgents: input.chainAgents,
 		totalSteps: input.totalSteps,
 		currentStepIndex: input.currentStepIndex,
+		budget: input.budget,
 	});
 }
 
@@ -418,6 +420,21 @@ function recordResultBudgetUsage(budget: SessionTokenBudget, result: SingleResul
 	recordBudgetUsage(budget, result.usage);
 }
 
+function emitBudgetExhausted(input: {
+	intercomEvents?: IntercomEventBus;
+	runId: string;
+	budget: BudgetSummary;
+	skippedFromStepIndex: number;
+}): void {
+	const payload: BudgetExhaustedEvent = {
+		runId: input.runId,
+		mode: "chain",
+		budget: input.budget,
+		skippedFromStepIndex: input.skippedFromStepIndex,
+	};
+	input.intercomEvents?.emit(SUBAGENT_BUDGET_EXHAUSTED_EVENT, payload);
+}
+
 /**
  * Execute a chain of subagent steps
  */
@@ -577,6 +594,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	let globalTaskIndex = 0;
 	let progressCreated = false;
 	const tokenBudget = createSessionTokenBudget(runId, params.budget);
+	const currentBudgetSummary = () => budgetSummary(tokenBudget);
 
 	if (onUpdate) {
 		const stepNames = chainSteps
@@ -595,6 +613,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				chainAgents,
 				totalSteps,
 				currentStepIndex: 0,
+				budget: currentBudgetSummary(),
 			},
 		});
 	}
@@ -602,6 +621,15 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	for (let stepIndex = 0; stepIndex < chainSteps.length; stepIndex++) {
 		const step = chainSteps[stepIndex]!;
 		if (!shouldDispatchWithBudget(tokenBudget)) {
+			const exhaustedBudget = currentBudgetSummary();
+			if (exhaustedBudget) {
+				emitBudgetExhausted({
+					intercomEvents,
+					runId,
+					budget: exhaustedBudget,
+					skippedFromStepIndex: stepIndex,
+				});
+			}
 			appendBudgetSkippedChainSteps(results, chainSteps, stepIndex);
 			break;
 		}
@@ -1220,6 +1248,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			artifactsDir,
 			chainAgents,
 			totalSteps,
+			budget: currentBudgetSummary(),
 		}),
 	};
 }

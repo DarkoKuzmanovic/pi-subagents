@@ -23,7 +23,7 @@ import {
 	tryImport,
 	events,
 } from "../support/helpers.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT } from "../../src/shared/types.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT, SUBAGENT_BUDGET_EXHAUSTED_EVENT, type BudgetExhaustedEvent } from "../../src/shared/types.ts";
 
 interface TestSequentialStep {
 	agent: string;
@@ -172,6 +172,11 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 	it("stops launching sequential chain steps once the output token budget is exhausted", async () => {
 		mockPi.onCall({ output: "First result" });
 		mockPi.onCall({ output: "Second result should not run" });
+		const intercomEvents = createEventBus();
+		let exhaustedEvent: BudgetExhaustedEvent | undefined;
+		intercomEvents.on(SUBAGENT_BUDGET_EXHAUSTED_EVENT, (payload) => {
+			exhaustedEvent = payload as BudgetExhaustedEvent;
+		});
 
 		const result = await executeChain!(makeChainParams(
 			[
@@ -179,7 +184,7 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 				{ agent: "reviewer", task: "Second" },
 			],
 			[makeAgent("scout"), makeAgent("reviewer")],
-			{ budget: 50 },
+			{ budget: 50, intercomEvents },
 		));
 
 		assert.equal(result.isError, undefined);
@@ -189,6 +194,11 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		assert.equal(result.details.results[1]?.agent, "reviewer");
 		assert.equal(result.details.results[1]?.exitCode, -1);
 		assert.match(result.details.results[1]?.finalOutput ?? "", /budget-exhausted/);
+		assert.equal(result.details.budget?.limit, 50);
+		assert.equal(result.details.budget?.exhausted, true);
+		assert.equal(exhaustedEvent?.budget.limit, 50);
+		assert.equal(exhaustedEvent?.mode, "chain");
+		assert.equal(exhaustedEvent?.skippedFromStepIndex, 1);
 	});
 
 	it("lets an already-launched parallel group finish before budget exhaustion skips later steps", async () => {

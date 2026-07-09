@@ -4,7 +4,10 @@ import { buildCompletionKey, markSeenWithTtl } from "./completion-dedupe.ts";
 import { createFileCoalescer } from "../../shared/file-coalescer.ts";
 import {
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
+	SUBAGENT_BUDGET_EXHAUSTED_EVENT,
 	type IntercomEventBus,
+	type BudgetExhaustedEvent,
+	type BudgetSummary,
 	type SubagentState,
 } from "../../shared/types.ts";
 import {
@@ -87,6 +90,8 @@ export function createResultWatcher(
 				sessionFile?: string;
 				asyncDir?: string;
 				intercomTarget?: string;
+				budget?: BudgetSummary;
+				budgetExhausted?: boolean;
 			};
 			if (data.sessionId && data.sessionId !== state.currentSessionId) return;
 			if (!data.sessionId && data.cwd && data.cwd !== state.baseCwd) return;
@@ -145,6 +150,15 @@ export function createResultWatcher(
 				if (!delivered) {
 					console.error(`Subagent async grouped result intercom delivery was not acknowledged for '${resultPath}'.`);
 				}
+			}
+
+			if (data.budgetExhausted && data.budget) {
+				const payload: BudgetExhaustedEvent = {
+					runId: data.runId ?? data.id ?? file.replace(/\.json$/i, ""),
+					mode: data.mode === "single" || data.mode === "parallel" || data.mode === "chain" ? data.mode : "chain",
+					budget: data.budget,
+				};
+				pi.events.emit(SUBAGENT_BUDGET_EXHAUSTED_EVENT, payload);
 			}
 
 			pi.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, data);

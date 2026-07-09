@@ -1,4 +1,4 @@
-import type { TokenUsage } from "../../shared/types.ts";
+import type { BudgetSummary, TokenUsage } from "../../shared/types.ts";
 
 export interface SessionTokenBudget {
 	key: string;
@@ -44,4 +44,15 @@ export function recordBudgetUsage(
 	if (budget.limit !== undefined) {
 		budget.overshootOutput = Math.max(0, budget.spentOutput - budget.limit);
 	}
+}
+
+export function budgetSummary(budget: SessionTokenBudget): BudgetSummary | undefined {
+	if (budget.limit === undefined) return undefined;
+	return {
+		limit: budget.limit,
+		spentOutput: budget.spentOutput,
+		remainingOutput: remainingOutputTokens(budget) ?? 0,
+		exhausted: isBudgetExhausted(budget),
+		overshootOutput: budget.overshootOutput,
+	};
 }

@@ -3,7 +3,7 @@
  */
 import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatTokenFooter, appendTokenFooter } from "../../src/shared/token-footer.ts";
+import { appendTokenFooter, formatBudgetFooter, formatTokenFooter } from "../../src/shared/token-footer.ts";
 import type { Usage } from "../../src/shared/types.ts";
 
 const makeUsage = (input: number, output: number, cacheRead: number, cacheWrite: number): Usage => ({
@@ -84,6 +84,17 @@ describe("formatTokenFooter", () => {
 		const footer = formatTokenFooter(details, { mode: "fresh", hasError: false });
 		assert.ok(footer!.includes("in=1.5M"));
 	});
+
+	it("formats a budget footer when budget details are present", () => {
+		const footer = formatBudgetFooter({
+			spentOutput: 120,
+			limit: 100,
+			remainingOutput: 0,
+			exhausted: true,
+			overshootOutput: 20,
+		});
+		assert.equal(footer, "[budget: 120/100 output tokens, exhausted]");
+	});
 });
 
 describe("appendTokenFooter", () => {
@@ -98,5 +109,14 @@ describe("appendTokenFooter", () => {
 		const details = { results: [{ usage: makeUsage(1000, 100, 5000, 0) }] };
 		const result = appendTokenFooter("Hello", details, { mode: "fork", hasError: false });
 		assert.equal(result, "Hello");
+	});
+
+	it("appends the budget footer even when fresh-context token footer is omitted", () => {
+		const details = {
+			results: [{ usage: makeUsage(0, 120, 0, 0) }],
+			budget: { spentOutput: 120, limit: 100, remainingOutput: 0, exhausted: true, overshootOutput: 20 },
+		};
+		const result = appendTokenFooter("Hello", details, { mode: "fork", hasError: false });
+		assert.equal(result, "Hello\n\n[budget: 120/100 output tokens, exhausted]");
 	});
 });

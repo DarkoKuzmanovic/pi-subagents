@@ -242,6 +242,21 @@ export interface SingleResult {
 	structuredOutput?: unknown;
 }
 
+export interface BudgetSummary {
+	limit: number;
+	spentOutput: number;
+	remainingOutput: number;
+	exhausted: boolean;
+	overshootOutput: number;
+}
+
+export interface BudgetExhaustedEvent {
+	runId: string;
+	mode: "single" | "parallel" | "chain";
+	budget: BudgetSummary;
+	skippedFromStepIndex?: number;
+}
+
 export interface Details {
 	mode: SubagentRunMode | "management";
 	runId?: string;
@@ -262,6 +277,8 @@ export interface Details {
 		originalLines?: number;
 		artifactPath?: string;
 	};
+	budget?: BudgetSummary;
+	budgetExhausted?: boolean;
 	// Chain metadata for observability
 	chainAgents?: string[];      // Agent names in order, e.g., ["recon", "planner"]
 	totalSteps?: number;         // Total steps in chain
@@ -494,6 +511,7 @@ export const SUBAGENT_CONTROL_EVENT = "subagent:control-event";
 export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 export const SUBAGENT_RESULT_INTERCOM_EVENT = "subagent:result-intercom";
 export const SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT = "subagent:result-intercom-delivery";
+export const SUBAGENT_BUDGET_EXHAUSTED_EVENT = "subagent:budget-exhausted";
 
 // ============================================================================
 // Execution Options

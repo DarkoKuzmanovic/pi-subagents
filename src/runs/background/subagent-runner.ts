@@ -77,7 +77,8 @@ import {
 } from "../shared/worktree.ts";
 import { resolveParallelItemOutputPath, suppressProgressForReadOnlyTask, writeInitialProgressFile } from "../../shared/settings.ts";
 import { emptyUsage, tokenUsageFromAttempts } from "../shared/usage.ts";
-import { createSessionTokenBudget, recordBudgetUsage, shouldDispatchWithBudget, type SessionTokenBudget } from "../shared/session-tokens.ts";
+import { appendTokenFooter } from "../../shared/token-footer.ts";
+import { budgetSummary, createSessionTokenBudget, recordBudgetUsage, shouldDispatchWithBudget, type SessionTokenBudget } from "../shared/session-tokens.ts";
 import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
@@ -1090,6 +1091,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		outputFile: path.join(asyncDir, "output-0.log"),
 	};
 	const tokenBudget = createSessionTokenBudget(id, config.budget);
+	const currentBudgetSummary = () => budgetSummary(tokenBudget);
 
 	fs.mkdirSync(asyncDir, { recursive: true });
 	writeAtomicJson(statusPath, statusPayload);
@@ -2061,6 +2063,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	}
 
 	const resultMode = config.resultMode ?? statusPayload.mode;
+	const finalBudgetSummary = currentBudgetSummary();
+	summary = appendTokenFooter(summary, { budget: finalBudgetSummary }, {
+		mode: resultMode ?? "fresh",
+		hasError: results.some((r) => !r.success),
+	});
 	const agentName = flatSteps.length === 1
 		? flatSteps[0].agent
 		: resultMode === "parallel"
@@ -2112,6 +2119,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		shareUrl: extra.shareUrl,
 		gistUrl: extra.gistUrl,
 		shareError: extra.shareError,
+		budget: finalBudgetSummary,
+		budgetExhausted: finalBudgetSummary?.exhausted || undefined,
 		...(taskIndex !== undefined && { taskIndex }),
 		...(totalTasks !== undefined && { totalTasks }),
 	});

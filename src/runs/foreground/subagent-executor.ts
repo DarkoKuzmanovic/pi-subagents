@@ -40,6 +40,7 @@ import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBrid
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "../shared/subagent-control.ts";
 import { finalizeSingleOutput, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { coerceJsonArrayParam, compactForegroundDetails, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd } from "../../shared/utils.ts";
+import { appendTokenFooter } from "../../shared/token-footer.ts";
 import {
 	attachNestedChildrenToResultChildren,
 	buildSubagentResultIntercomPayload,
@@ -1034,6 +1035,27 @@ function withContextDetails(
 			context,
 		},
 	};
+}
+
+function withFinalResultPresentation(
+	result: AgentToolResult<Details>,
+	context: SubagentParamsLike["context"],
+): AgentToolResult<Details> {
+	const withContext = withContextDetails(result, context);
+	if (!withContext.details) return withContext;
+	let footerAppended = false;
+	const content = withContext.content.map((item) => {
+		if (footerAppended || item.type !== "text") return item;
+		footerAppended = true;
+		return {
+			...item,
+			text: appendTokenFooter(item.text, withContext.details, {
+				mode: context ?? "fresh",
+				hasError: withContext.isError === true,
+			}),
+		};
+	});
+	return { ...withContext, content };
 }
 
 function toExecutionErrorResult(params: SubagentParamsLike, error: unknown): AgentToolResult<Details> {
@@ -2698,7 +2720,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		let nestedForegroundStarted = false;
 		try {
 			const asyncResult = runAsyncPath(execData, deps);
-			if (asyncResult) return withContextDetails(asyncResult, effectiveParams.context);
+			if (asyncResult) return withFinalResultPresentation(asyncResult, effectiveParams.context);
 			if (foregroundControl) {
 				writeNestedForegroundEvent("subagent.nested.started");
 				nestedForegroundStarted = true;
@@ -2706,17 +2728,17 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			if (hasChain && effectiveParams.chain) {
 				const result = await runChainPath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return withContextDetails(result, effectiveParams.context);
+				return withFinalResultPresentation(result, effectiveParams.context);
 			}
 			if (hasTasks && effectiveParams.tasks) {
 				const result = await runParallelPath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return withContextDetails(result, effectiveParams.context);
+				return withFinalResultPresentation(result, effectiveParams.context);
 			}
 			if (hasSingle) {
 				const result = await runSinglePath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return withContextDetails(result, effectiveParams.context);
+				return withFinalResultPresentation(result, effectiveParams.context);
 			}
 		} catch (error) {
 			const errorResult = toExecutionErrorResult(effectiveParams, error);

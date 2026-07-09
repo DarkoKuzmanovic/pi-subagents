@@ -3,7 +3,7 @@
  * Appends a one-line summary showing fresh-context token savings.
  */
 
-import type { Usage } from "./types.ts";
+import type { BudgetSummary, Usage } from "./types.ts";
 
 interface TokenFooterOptions {
 	mode: string;
@@ -49,7 +49,7 @@ function isZeroUsage(u: Usage): boolean {
  * Returns null if the footer should be omitted (non-fresh mode, error, missing details, zero usage).
  */
 export function formatTokenFooter(
-	details: { results?: { usage: Usage }[] } | undefined,
+	details: { results?: { usage: Usage }[]; budget?: BudgetSummary } | undefined,
 	options: TokenFooterOptions,
 ): string | null {
 	if (!details) return null;
@@ -65,16 +65,22 @@ export function formatTokenFooter(
 	return `[mode=fresh, in=${fmt(usage.input)}, out=${fmt(usage.output)}, cache_read=${fmt(usage.cacheRead)}, cache_write=${fmt(usage.cacheWrite)}]`;
 }
 
+export function formatBudgetFooter(budget: BudgetSummary | undefined): string | null {
+	if (!budget) return null;
+	const state = budget.exhausted ? ", exhausted" : "";
+	return `[budget: ${fmt(budget.spentOutput)}/${fmt(budget.limit)} output tokens${state}]`;
+}
+
 /**
  * Append a token-economy footer to the result text if applicable.
  * Returns the (possibly modified) text.
  */
 export function appendTokenFooter(
 	text: string,
-	details: { results?: { usage: Usage }[] } | undefined,
+	details: { results?: { usage: Usage }[]; budget?: BudgetSummary } | undefined,
 	options: TokenFooterOptions,
 ): string {
-	const footer = formatTokenFooter(details, options);
-	if (!footer) return text;
-	return `${text}\n\n${footer}`;
+	const footers = [formatTokenFooter(details, options), formatBudgetFooter(details?.budget)].filter(Boolean);
+	if (footers.length === 0) return text;
+	return `${text}\n\n${footers.join("\n")}`;
 }
