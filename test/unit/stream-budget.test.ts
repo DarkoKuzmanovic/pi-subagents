@@ -1,14 +1,22 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+	DELTA_EVENT_OVERHEAD_BYTES,
 	EVENTS_CAPPED_EVENT_TYPE,
 	EVENTS_JSONL_BYTE_BUDGET,
+	LOOP_MAX_PERIOD_CHARS,
+	LOOP_SUFFIX_CHARS,
+	LOOP_SUSTAIN_CHARS,
 	RUNAWAY_HARD_CAP_BYTES,
 	RUNAWAY_NO_PROGRESS_BYTES,
+	RUNAWAY_RAW_HARD_CAP_BYTES,
 	createRunEventAppender,
 	createStreamWatchdog,
 	eventShowsProgress,
+	extractStreamingDelta,
 	isPassthroughEventType,
+	normalizeForLoopDetection,
+	periodicTailPeriod,
 } from "../../src/runs/shared/stream-budget.js";
 
 const MB = 1024 * 1024;
@@ -27,11 +35,69 @@ function textEvent(text = "hello"): Record<string, unknown> {
 	};
 }
 
+/** A streaming `message_update` event carrying one content delta. */
+function deltaEvent(kind: string, contentIndex: number, delta: string): Record<string, unknown> {
+	return {
+		type: "message_update",
+		assistantMessageEvent: { type: kind, contentIndex, delta },
+	};
+}
+
+/**
+ * Degenerate tool-call loop fixture modeled on captured production stream
+ * 7aaa139c (MiniMax-M3): the model repeats the trailing key-value pair of a
+ * tool call's JSON arguments with CYCLING values (30000/60000/10000) and
+ * VARYING chunk boundaries (one or two fragment copies per delta). Exact-match
+ * consecutive-delta detection never fires on this shape — the real streams
+ * max out at 9 consecutive identical deltas.
+ */
+function m3TimeoutLoopDeltas(count: number): Array<Record<string, unknown>> {
+	const values = [30000, 60000, 10000];
+	const events: Array<Record<string, unknown>> = [];
+	for (let i = 0; i < count; i++) {
+		const copies = i % 3 === 0 ? 2 : 1;
+		let delta = "";
+		for (let c = 0; c < copies; c++) {
+			delta += `, "timeout": ${values[(i + c) % values.length]}`;
+		}
+		events.push(deltaEvent("toolcall_delta", 1, delta));
+	}
+	return events;
+}
+
+/**
+ * Interleaved two-block loop fixture modeled on captured production stream
+ * a44b411f (MiniMax-M3): TWO tool calls stream concurrently and their looping
+ * deltas alternate contentIndex 0/1 on every event, so any single-block
+ * detector state resets on each delta.
+ */
+function m3InterleavedLoopDeltas(count: number): Array<Record<string, unknown>> {
+	const events: Array<Record<string, unknown>> = [];
+	for (let i = 0; i < count; i++) {
+		if (i % 2 === 0) {
+			const copies = i % 4 === 0 ? 2 : 1;
+			events.push(deltaEvent("toolcall_delta", 0, ', "glob": "", "summary": false'.repeat(copies)));
+		} else {
+			const copies = i % 3 === 0 ? 3 : 1;
+			events.push(deltaEvent("toolcall_delta", 1, ', "map": true'.repeat(copies)));
+		}
+	}
+	return events;
+}
+
 describe("stream-budget constants", () => {
-	it("uses 50 MB events budget, 30 MB no-progress trip, 200 MB hard cap", () => {
+	it("uses 50 MB events budget, 30 MB no-progress trip, 200 MB accounted hard cap, 1 GB raw backstop", () => {
 		assert.equal(EVENTS_JSONL_BYTE_BUDGET, 50 * MB);
 		assert.equal(RUNAWAY_NO_PROGRESS_BYTES, 30 * MB);
 		assert.equal(RUNAWAY_HARD_CAP_BYTES, 200 * MB);
+		assert.equal(RUNAWAY_RAW_HARD_CAP_BYTES, 1024 * MB);
+	});
+
+	it("loop detector tuning stays at the calibrated values", () => {
+		assert.equal(LOOP_SUFFIX_CHARS, 1024);
+		assert.equal(LOOP_MAX_PERIOD_CHARS, 128);
+		assert.equal(LOOP_SUSTAIN_CHARS, 8192);
+		assert.equal(DELTA_EVENT_OVERHEAD_BYTES, 64);
 	});
 });
 
@@ -74,7 +140,57 @@ describe("eventShowsProgress", () => {
 	});
 });
 
-describe("createStreamWatchdog", () => {
+describe("extractStreamingDelta", () => {
+	it("extracts kind, contentIndex and delta from message_update events", () => {
+		const extracted = extractStreamingDelta(deltaEvent("toolcall_delta", 1, ', "timeout": 60000'));
+		assert.deepEqual(extracted, { kind: "toolcall_delta", contentIndex: 1, delta: ', "timeout": 60000' });
+	});
+
+	it("falls back to assistantEvent when assistantMessageEvent is absent", () => {
+		const extracted = extractStreamingDelta({
+			type: "message_update",
+			assistantEvent: { type: "text_delta", contentIndex: 0, delta: "hi" },
+		});
+		assert.equal(extracted?.delta, "hi");
+	});
+
+	it("returns undefined for non-update events, empty deltas, and malformed shapes", () => {
+		assert.equal(extractStreamingDelta(textEvent()), undefined);
+		assert.equal(extractStreamingDelta(deltaEvent("text_delta", 0, "")), undefined);
+		assert.equal(extractStreamingDelta({ type: "message_update" }), undefined);
+		assert.equal(extractStreamingDelta({ type: "message_update", assistantMessageEvent: { delta: 42 } }), undefined);
+		assert.equal(extractStreamingDelta(null), undefined);
+	});
+});
+
+describe("normalizeForLoopDetection", () => {
+	it("collapses cycling numeric literals into one pattern", () => {
+		assert.equal(normalizeForLoopDetection(', "timeout": 30000'), normalizeForLoopDetection(', "timeout": 60000'));
+	});
+
+	it("collapses whitespace runs", () => {
+		assert.equal(normalizeForLoopDetection("a  \n\tb"), "a b");
+	});
+});
+
+describe("periodicTailPeriod", () => {
+	it("finds the smallest period of a periodic suffix", () => {
+		assert.equal(periodicTailPeriod("abc".repeat(20), 32, 8), 3);
+	});
+
+	it("returns 0 for non-periodic or too-short tails", () => {
+		assert.equal(periodicTailPeriod("the quick brown fox jumps over the lazy dog".repeat(2), 32, 8), 0);
+		assert.equal(periodicTailPeriod("abcabc", 32, 8), 0, "tail shorter than the suffix window");
+	});
+
+	it("respects the max period bound", () => {
+		const fragment = "abcdefghijklmnopqrst"; // 20 distinct chars: smallest period 20
+		assert.equal(periodicTailPeriod(fragment.repeat(10), 100, 8), 0, "period 20 > max 8");
+		assert.equal(periodicTailPeriod(fragment.repeat(10), 100, 32), 20);
+	});
+});
+
+describe("createStreamWatchdog: raw-byte guards (addBytes)", () => {
 	it("accounts bytes cumulatively and ignores bogus counts", () => {
 		const watchdog = createStreamWatchdog();
 		watchdog.addBytes(100);
@@ -133,13 +249,13 @@ describe("createStreamWatchdog", () => {
 		assert.ok(watchdog.addBytes(RUNAWAY_NO_PROGRESS_BYTES + 1));
 	});
 
-	it("hard cap trips past 200 MB even with progress", () => {
+	it("raw backstop trips past 1 GB even with progress", () => {
 		const watchdog = createStreamWatchdog();
 		watchdog.observeEvent(textEvent("real output"));
-		assert.equal(watchdog.addBytes(RUNAWAY_HARD_CAP_BYTES), undefined, "exactly at the hard cap must not trip");
+		assert.equal(watchdog.addBytes(RUNAWAY_RAW_HARD_CAP_BYTES), undefined, "exactly at the backstop must not trip");
 		const message = watchdog.addBytes(1);
 		assert.ok(message);
-		assert.match(message!, /^runaway output aborted: 200 MB of model events exceeded the 200 MB hard output cap$/);
+		assert.match(message!, /raw output backstop/);
 		assert.equal(watchdog.tripped, true);
 	});
 
@@ -155,11 +271,150 @@ describe("createStreamWatchdog", () => {
 		assert.equal(watchdog.addBytes(100), undefined);
 		assert.ok(watchdog.addBytes(1));
 	});
+});
+
+describe("createStreamWatchdog: delta-aware accounted hard cap (observeEvent)", () => {
+	it("accounts streaming deltas at delta size + flat overhead, NOT full snapshot size", () => {
+		const watchdog = createStreamWatchdog();
+		// A snapshot-heavy 100 KB serialized line whose actual delta is 5 chars.
+		watchdog.observeEvent(deltaEvent("text_delta", 0, "hello"), 100_000);
+		assert.equal(watchdog.accountedBytes, 5 + DELTA_EVENT_OVERHEAD_BYTES);
+	});
+
+	it("never accounts more than the serialized line for tiny events", () => {
+		const watchdog = createStreamWatchdog();
+		watchdog.observeEvent(deltaEvent("text_delta", 0, "hi"), 20);
+		assert.equal(watchdog.accountedBytes, 20);
+	});
+
+	it("accounts non-delta events at full serialized size", () => {
+		const watchdog = createStreamWatchdog();
+		watchdog.observeEvent(textEvent("done"), 500);
+		assert.equal(watchdog.accountedBytes, 500);
+	});
+
+	it("trips the hard cap on accounted bytes even with progress", () => {
+		const watchdog = createStreamWatchdog({ hardCapBytes: 1000 });
+		watchdog.observeEvent(textEvent("progress"));
+		assert.equal(watchdog.observeEvent(thinkingEvent(), 1000), undefined, "exactly at the cap must not trip");
+		const message = watchdog.observeEvent(thinkingEvent(), 1);
+		assert.ok(message);
+		assert.match(message!, /hard output cap/);
+		assert.equal(watchdog.tripped, true);
+	});
+
+	it("quadratic snapshot amplification does NOT trip the cap (the false-positive fix)", () => {
+		// Simulate a growing message streamed as full snapshots: N updates whose
+		// serialized size grows linearly, but each carrying a tiny delta. Under
+		// raw accounting this sums quadratically; delta-aware accounting keeps
+		// it proportional to actual generated content.
+		const watchdog = createStreamWatchdog({ hardCapBytes: 1 * MB });
+		let rawTotal = 0;
+		const alpha = (n: number): string => n.toString(36).replace(/[0-9]/g, (c) => "ghijklmnopq"[Number(c)] ?? "z");
+		for (let i = 1; i <= 2000; i++) {
+			const serialized = i * 100; // snapshot grows every delta
+			rawTotal += serialized;
+			// Aperiodic letters-only content: honest generation, not a loop.
+			const error = watchdog.observeEvent(deltaEvent("thinking_delta", 0, ` word${alpha(i)}`), serialized);
+			assert.equal(error, undefined, `must not trip at update ${i}`);
+		}
+		assert.ok(rawTotal > 100 * MB, "raw stream would have blown a 100 MB raw cap");
+		assert.ok(watchdog.accountedBytes < 1 * MB, "accounted bytes stay proportional to content");
+	});
+});
+
+describe("createStreamWatchdog: degenerate-loop detector", () => {
+	it("trips on the captured M3 timeout-loop shape (cycling values, varying chunks)", () => {
+		const watchdog = createStreamWatchdog();
+		let message: string | undefined;
+		let atEvent = 0;
+		for (const [i, event] of m3TimeoutLoopDeltas(1500).entries()) {
+			message = watchdog.observeEvent(event, 1000);
+			if (message) {
+				atEvent = i;
+				break;
+			}
+		}
+		assert.ok(message, "loop must trip");
+		assert.match(message!, /degenerate streaming loop detected \(toolcall_delta repeating a ~\d+-char fragment/);
+		assert.ok(atEvent < 600, `must trip early in the loop, tripped at ${atEvent}`);
+		assert.equal(watchdog.tripped, true);
+	});
+
+	it("trips on the captured M3 interleaved two-block loop shape", () => {
+		const watchdog = createStreamWatchdog();
+		let message: string | undefined;
+		for (const event of m3InterleavedLoopDeltas(3000)) {
+			message = watchdog.observeEvent(event, 1000);
+			if (message) break;
+		}
+		assert.ok(message, "interleaved loop must trip despite alternating contentIndex");
+		assert.match(message!, /degenerate streaming loop detected/);
+	});
+
+	it("does NOT trip on varied healthy prose deltas", () => {
+		const watchdog = createStreamWatchdog();
+		// Letters-only unique token per delta (digits would be collapsed by
+		// normalization): genuinely aperiodic, like real prose. A cyclic word
+		// list would itself be a repetition loop and rightly trip the detector.
+		const alpha = (n: number): string => n.toString(36).replace(/[0-9]/g, (c) => "ghijklmnopq"[Number(c)] ?? "z");
+		for (let i = 0; i < 5000; i++) {
+			const delta = ` word${alpha(i)}${i % 7 === 0 ? "." : ""}`;
+			assert.equal(watchdog.observeEvent(deltaEvent("text_delta", 0, delta), 500), undefined, `false positive at delta ${i}`);
+		}
+		assert.equal(watchdog.tripped, false);
+	});
+
+	it("DOES trip on a long cyclic word pattern — cyclic output IS a repetition loop", () => {
+		const watchdog = createStreamWatchdog();
+		const words = "the quick brown fox jumps over one lazy dog".split(" ");
+		let message: string | undefined;
+		for (let i = 0; i < 5000 && !message; i++) {
+			message = watchdog.observeEvent(deltaEvent("text_delta", 0, ` ${words[i % words.length]}`), 500);
+		}
+		assert.ok(message, "a short cyclic pattern sustained for ~9 KB is a degenerate loop");
+	});
+
+	it("a message boundary resets loop state", () => {
+		const watchdog = createStreamWatchdog({ loopSuffixChars: 64, loopMaxPeriodChars: 16, loopSustainChars: 128 });
+		// Feed just under the sustain threshold, break with a non-delta event,
+		// then feed just under it again: no trip.
+		const halfLoop = () => {
+			for (let i = 0; i < 12; i++) {
+				const error = watchdog.observeEvent(deltaEvent("toolcall_delta", 0, ', "map": true'), 200);
+				assert.equal(error, undefined);
+			}
+		};
+		halfLoop();
+		watchdog.observeEvent(thinkingEvent(), 200);
+		halfLoop();
+		assert.equal(watchdog.tripped, false);
+	});
+
+	it("honors custom loop limits (compact trip)", () => {
+		const watchdog = createStreamWatchdog({ loopSuffixChars: 64, loopMaxPeriodChars: 16, loopSustainChars: 128 });
+		let message: string | undefined;
+		for (let i = 0; i < 100 && !message; i++) {
+			message = watchdog.observeEvent(deltaEvent("toolcall_delta", 0, ', "map": true'), 200);
+		}
+		assert.ok(message);
+		assert.match(message!, /degenerate streaming loop detected/);
+	});
+
+	it("returns the trip message exactly once, and further events are ignored", () => {
+		const watchdog = createStreamWatchdog({ loopSuffixChars: 64, loopMaxPeriodChars: 16, loopSustainChars: 128 });
+		let trips = 0;
+		for (let i = 0; i < 200; i++) {
+			if (watchdog.observeEvent(deltaEvent("toolcall_delta", 0, ', "map": true'), 200)) trips++;
+		}
+		assert.equal(trips, 1);
+	});
 
 	it("observeEvent never throws on hostile inputs", () => {
 		const watchdog = createStreamWatchdog();
 		const hostile = { get message() { throw new Error("boom"); } };
-		watchdog.observeEvent(hostile);
+		assert.equal(watchdog.observeEvent(hostile), undefined);
+		assert.equal(watchdog.observeEvent(hostile, 100), undefined);
 		assert.equal(watchdog.hasProgress, false);
 	});
 });

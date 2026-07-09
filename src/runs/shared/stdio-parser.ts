@@ -5,8 +5,11 @@ export interface LineProcessor {
 }
 
 export interface LineProcessorCallbacks {
-	/** Called for each successfully parsed JSON line. */
-	onJson: (parsed: Record<string, unknown>) => void;
+	/**
+	 * Called for each successfully parsed JSON line. Receives the raw line so
+	 * callers can do byte accounting without re-serializing the parsed event.
+	 */
+	onJson: (parsed: Record<string, unknown>, line: string) => void;
 	/**
 	 * Called for non-JSON lines (parse errors). Optional.
 	 * Foreground ignores non-JSON; background writes to output file and event log.
@@ -20,7 +23,7 @@ export function createLineProcessor(callbacks: LineProcessorCallbacks): LineProc
 			if (!line.trim()) return;
 			try {
 				const parsed = JSON.parse(line) as Record<string, unknown>;
-				callbacks.onJson(parsed);
+				callbacks.onJson(parsed, line);
 			} catch {
 				callbacks.onRaw?.(line);
 			}

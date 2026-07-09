@@ -487,9 +487,12 @@ async function runSingleAttempt(
 		};
 
 		const lineProcessor = createLineProcessor({
-			onJson: (parsed) => {
+			onJson: (parsed, line) => {
 				const evt = parsed as { type?: string; message?: Message; toolName?: string; args?: unknown };
-				streamWatchdog.observeEvent(evt);
+				// Delta-aware byte accounting + degenerate-loop detection over the
+				// parsed event stream (raw-byte guards live in the stdout handler).
+				const runawayError = streamWatchdog.observeEvent(evt, line.length);
+				if (runawayError) handleRunawayError(runawayError);
 				const now = Date.now();
 				progress.durationMs = now - startTime;
 				progress.lastActivityAt = now;
@@ -618,19 +621,23 @@ async function runSingleAttempt(
 
 		let stderrBuf = "";
 
+		// Runaway child: record the failure and kill it, mirroring the
+		// timeout-kill escalation (SIGINT, then SIGTERM after 1s). Reached from
+		// both the raw-byte guards (stdout handler) and the parsed-event guards
+		// (loop detector / accounted hard cap in onJson).
+		function handleRunawayError(runawayError: string): void {
+			result.error = runawayError;
+			errorFromChildMessage = false;
+			trySignalChild(proc, "SIGINT");
+			setTimeout(() => {
+				if (!processClosed && !settled) trySignalChild(proc, "SIGTERM");
+			}, 1000).unref?.();
+		}
+
 		const clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
 		proc.stdout.on("data", (d) => {
 			const runawayError = streamWatchdog.addBytes(Buffer.isBuffer(d) ? d.length : Buffer.byteLength(String(d)));
-			if (runawayError) {
-				// Runaway child: record the failure and kill it, mirroring the
-				// timeout-kill escalation (SIGINT, then SIGTERM after 1s).
-				result.error = runawayError;
-				errorFromChildMessage = false;
-				trySignalChild(proc, "SIGINT");
-				setTimeout(() => {
-					if (!processClosed && !settled) trySignalChild(proc, "SIGTERM");
-				}, 1000).unref?.();
-			}
+			if (runawayError) handleRunawayError(runawayError);
 			// Once tripped, stop relaying/parsing the flood entirely.
 			if (streamWatchdog.tripped) return;
 			buf += d.toString();

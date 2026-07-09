@@ -269,10 +269,26 @@ function runPiStreaming(
 			appendChildEvent({ type, line });
 		};
 
+		// Runaway child: record the failure and kill it, mirroring the
+		// timeout-kill escalation (SIGINT, then SIGTERM after 1s). Reached from
+		// both the raw-byte guards (stdout handler) and the parsed-event guards
+		// (loop detector / accounted hard cap in onJson).
+		const handleRunawayError = (runawayError: string): void => {
+			error = runawayError;
+			errorFromChildMessage = false;
+			trySignalChild(child, "SIGINT");
+			setTimeout(() => {
+				if (!settled) trySignalChild(child, "SIGTERM");
+			}, 1000).unref?.();
+		};
+
 		const lineProcessor = createLineProcessor({
-			onJson: (parsed) => {
+			onJson: (parsed, line) => {
 				const event = parsed as ChildEvent;
-				streamWatchdog.observeEvent(event);
+				// Delta-aware byte accounting + degenerate-loop detection over the
+				// parsed event stream (raw-byte guards live in the stdout handler).
+				const runawayError = streamWatchdog.observeEvent(event, line.length);
+				if (runawayError) handleRunawayError(runawayError);
 				appendChildEvent(event);
 				onChildEvent?.(event);
 
@@ -354,16 +370,7 @@ function runPiStreaming(
 		const clearStdioGuard = attachPostExitStdioGuard(child, { idleMs: 2000, hardMs: 8000 });
 		child.stdout.on("data", (chunk: Buffer) => {
 			const runawayError = streamWatchdog.addBytes(chunk.length);
-			if (runawayError) {
-				// Runaway child: record the failure and kill it, mirroring the
-				// timeout-kill escalation (SIGINT, then SIGTERM after 1s).
-				error = runawayError;
-				errorFromChildMessage = false;
-				trySignalChild(child, "SIGINT");
-				setTimeout(() => {
-					if (!settled) trySignalChild(child, "SIGTERM");
-				}, 1000).unref?.();
-			}
+			if (runawayError) handleRunawayError(runawayError);
 			// Once tripped, stop relaying/parsing the flood entirely.
 			if (streamWatchdog.tripped) return;
 			const text = chunk.toString();
