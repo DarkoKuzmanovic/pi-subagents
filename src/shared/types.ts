@@ -149,6 +149,56 @@ export interface SubagentResultIntercomPayload {
 }
 
 // ============================================================================
+// Durable Async OM Protocol (M6.1 foundation)
+// ============================================================================
+
+export interface OriginParentBindingV1 {
+	sessionFile: string;
+	sessionHeaderId: string;
+	rootEntryId: string;
+	launchLeafId: string;
+	launchCwd: string;
+}
+
+export interface AsyncOmConsumerRegistrationV1 {
+	consumerId: typeof ASYNC_OM_CONSUMER_ID;
+	contractVersion: typeof ASYNC_OM_CONTRACT_VERSION;
+	originParent: OriginParentBindingV1;
+}
+
+export interface AsyncChildDeliveryBindingV1 {
+	deliveryId: string;
+	runId: string;
+	runNonce: string;
+	childId: string;
+	consumer: AsyncOmConsumerRegistrationV1;
+}
+
+export interface AsyncOmCompletionOutboxV1 {
+	schemaVersion: typeof ASYNC_OM_COMPLETION_OUTBOX_SCHEMA_VERSION;
+	delivery: AsyncChildDeliveryBindingV1;
+	completedAt: string;
+	snapshot: {
+		entries: unknown[];
+		sha256: string;
+		byteLength: number;
+	};
+}
+
+export interface AsyncOmCompletionReceiptV1 {
+	schemaVersion: typeof ASYNC_OM_COMPLETION_RECEIPT_SCHEMA_VERSION;
+	consumerId: typeof ASYNC_OM_CONSUMER_ID;
+	contractVersion: typeof ASYNC_OM_CONTRACT_VERSION;
+	delivery: AsyncChildDeliveryBindingV1;
+	importedAt: string;
+	snapshotSha256: string;
+	snapshotByteLength: number;
+	outboxSha256: string;
+	inboxSha256: string;
+	receiptSha256: string;
+}
+
+// ============================================================================
 // Progress Tracking
 // ============================================================================
 
@@ -512,6 +562,11 @@ export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 export const SUBAGENT_RESULT_INTERCOM_EVENT = "subagent:result-intercom";
 export const SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT = "subagent:result-intercom-delivery";
 export const SUBAGENT_BUDGET_EXHAUSTED_EVENT = "subagent:budget-exhausted";
+export const ASYNC_OM_CONSUMER_ID = "observational-memory";
+export const ASYNC_OM_CONTRACT_VERSION = 1;
+export const ASYNC_OM_COMPLETION_OUTBOX_SCHEMA_VERSION = 1;
+export const ASYNC_OM_COMPLETION_RECEIPT_SCHEMA_VERSION = 1;
+export const ASYNC_OM_DELIVERY_PREFIX = "om-async-v1";
 
 // ============================================================================
 // Execution Options
