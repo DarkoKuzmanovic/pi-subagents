@@ -84,6 +84,7 @@ import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
 import { getStderrTail } from "../shared/stderr-tail.ts";
 import { createRunEventAppender, createStreamWatchdog } from "../shared/stream-budget.ts";
+import { appendBudgetSkippedRunnerSteps } from "./budget-skip.ts";
 
 // All events.jsonl writes in this runner funnel through a per-run byte budget
 // (default 50 MB): once exceeded, high-volume passthrough relays (child
@@ -138,55 +139,6 @@ interface StepResult {
 	truncated?: boolean;
 }
 
-function budgetSkippedStepResult(agent: string): StepResult {
-	return {
-		agent,
-		output: "skipped(budget-exhausted)",
-		success: true,
-		skipped: true,
-		error: "budget-exhausted",
-	};
-}
-
-function markStatusStepBudgetSkipped(step: RunnerStatusStep | undefined, skippedAt: number): void {
-	if (!step) return;
-	step.status = "failed";
-	step.error = "budget-exhausted";
-	step.startedAt = skippedAt;
-	step.endedAt = skippedAt;
-	step.durationMs = 0;
-	step.exitCode = -1;
-	step.activityState = undefined;
-	step.recentOutput = ["skipped(budget-exhausted)"];
-}
-
-function appendBudgetSkippedRunnerSteps(input: {
-	results: StepResult[];
-	statusPayload: RunnerStatusPayload;
-	steps: RunnerStep[];
-	startStepIndex: number;
-	startFlatIndex: number;
-	skippedAt: number;
-}): void {
-	let cursor = input.startFlatIndex;
-	for (let i = input.startStepIndex; i < input.steps.length; i++) {
-		const step = input.steps[i]!;
-		if (isParallelGroup(step)) {
-			for (const task of step.parallel) {
-				markStatusStepBudgetSkipped(input.statusPayload.steps[cursor], input.skippedAt);
-				input.results.push(budgetSkippedStepResult(task.agent));
-				cursor++;
-			}
-		} else if (isRunnerDynamicStep(step)) {
-			input.results.push(budgetSkippedStepResult(step.dynamic.template.agent));
-		} else {
-			markStatusStepBudgetSkipped(input.statusPayload.steps[cursor], input.skippedAt);
-			input.results.push(budgetSkippedStepResult(step.agent));
-			cursor++;
-		}
-	}
-	input.statusPayload.lastUpdate = input.skippedAt;
-}
 
 const require = createRequire(import.meta.url);
 const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
