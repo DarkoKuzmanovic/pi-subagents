@@ -174,6 +174,22 @@ export interface AsyncChildDeliveryBindingV1 {
 	consumer: AsyncOmConsumerRegistrationV1;
 }
 
+export interface AsyncChildSlotV1 {
+	logicalChildKey: string;
+	childId: string;
+	agentName: string;
+	allocation: "static" | "dynamic";
+}
+
+export interface AsyncOmLaunchManifestV1 {
+	schemaVersion: typeof ASYNC_OM_LAUNCH_MANIFEST_SCHEMA_VERSION;
+	runId: string;
+	runNonce: string;
+	consumer: AsyncOmConsumerRegistrationV1;
+	nextChildSequence: number;
+	childSlots: Record<string, AsyncChildSlotV1>;
+}
+
 export interface AsyncOmCompletionOutboxV1 {
 	schemaVersion: typeof ASYNC_OM_COMPLETION_OUTBOX_SCHEMA_VERSION;
 	delivery: AsyncChildDeliveryBindingV1;
@@ -567,6 +583,7 @@ export const ASYNC_OM_CONTRACT_VERSION = 1;
 export const ASYNC_OM_COMPLETION_OUTBOX_SCHEMA_VERSION = 1;
 export const ASYNC_OM_COMPLETION_RECEIPT_SCHEMA_VERSION = 1;
 export const ASYNC_OM_DELIVERY_PREFIX = "om-async-v1";
+export const ASYNC_OM_LAUNCH_MANIFEST_SCHEMA_VERSION = 1;
 
 // ============================================================================
 // Execution Options

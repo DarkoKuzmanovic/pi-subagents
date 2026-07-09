@@ -30,8 +30,10 @@ import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } f
 import { resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, resolveModelCandidate, type AvailableModelInfo } from "../shared/model-fallback.ts";
 import { resolveExpectedWorktreeAgentCwd } from "../shared/worktree.ts";
+import { persistLaunchManifest } from "./async-launch-binding.ts";
 import {
 	type ArtifactConfig,
+	type AsyncOmLaunchManifestV1,
 	type Details,
 	type MaxOutputConfig,
 	type ResolvedControlConfig,
@@ -140,6 +142,7 @@ interface AsyncChainParams {
 	controlIntercomTarget?: string;
 	nestedRoute?: import("../../shared/types.ts").NestedRouteInfo;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
+	omLaunchManifest?: AsyncOmLaunchManifestV1;
 }
 
 interface AsyncSingleParams {
@@ -167,6 +170,7 @@ interface AsyncSingleParams {
 	nestedRoute?: import("../../shared/types.ts").NestedRouteInfo;
 	controlIntercomTarget?: string;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
+	omLaunchManifest?: AsyncOmLaunchManifestV1;
 }
 
 interface AsyncExecutionResult {
@@ -353,6 +357,13 @@ export function executeAsyncChain(
 			isError: true,
 			details: { mode: resultMode, results: [] },
 		};
+	}
+
+	const omLaunchManifestPath = params.omLaunchManifest
+		? persistLaunchManifest(asyncDir, params.omLaunchManifest)
+		: undefined;
+	if (params.omLaunchManifest && !omLaunchManifestPath) {
+		console.warn(`[pi-subagents] async OM registration declined for run ${id}: manifest persistence was not durable`);
 	}
 
 	let progressInstructionCreated = false;
@@ -566,6 +577,7 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 				childIntercomTargets,
 				resultMode,
 				nestedRoute: params.nestedRoute,
+				...(omLaunchManifestPath ? { omLaunchManifestPath } : {}),
 			},
 			id,
 			runnerCwd,
@@ -662,6 +674,7 @@ export function executeAsyncSingle(
 
 	return executeAsyncChain(id, {
 		chain: [step],
+		omLaunchManifest: params.omLaunchManifest,
 		task: params.task,
 		resultMode: "single",
 		agents: [agentConfig],

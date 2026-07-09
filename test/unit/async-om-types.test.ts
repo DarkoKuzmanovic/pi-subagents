@@ -6,7 +6,10 @@ import {
 	ASYNC_OM_CONSUMER_ID,
 	ASYNC_OM_CONTRACT_VERSION,
 	ASYNC_OM_DELIVERY_PREFIX,
+	ASYNC_OM_LAUNCH_MANIFEST_SCHEMA_VERSION,
 	type AsyncChildDeliveryBindingV1,
+	type AsyncChildSlotV1,
+	type AsyncOmLaunchManifestV1,
 	type AsyncOmCompletionOutboxV1,
 	type AsyncOmCompletionReceiptV1,
 	type AsyncOmConsumerRegistrationV1,
@@ -20,6 +23,7 @@ describe("async OM durable-completion protocol types", () => {
 		assert.equal(ASYNC_OM_COMPLETION_OUTBOX_SCHEMA_VERSION, 1);
 		assert.equal(ASYNC_OM_COMPLETION_RECEIPT_SCHEMA_VERSION, 1);
 		assert.equal(ASYNC_OM_DELIVERY_PREFIX, "om-async-v1");
+		assert.equal(ASYNC_OM_LAUNCH_MANIFEST_SCHEMA_VERSION, 1);
 	});
 
 	it("supports parent binding, delivery binding, outbox, and receipt shapes", () => {
@@ -34,6 +38,20 @@ describe("async OM durable-completion protocol types", () => {
 			consumerId: ASYNC_OM_CONSUMER_ID,
 			contractVersion: ASYNC_OM_CONTRACT_VERSION,
 			originParent,
+		};
+		const childSlot: AsyncChildSlotV1 = {
+			logicalChildKey: "root/0/parallel/0",
+			childId: "c000001",
+			agentName: "worker",
+			allocation: "static",
+		};
+		const launchManifest: AsyncOmLaunchManifestV1 = {
+			schemaVersion: ASYNC_OM_LAUNCH_MANIFEST_SCHEMA_VERSION,
+			runId: "run-7",
+			runNonce: "550e8400-e29b-41d4-a716-446655440000",
+			consumer,
+			nextChildSequence: 2,
+			childSlots: { [childSlot.logicalChildKey]: childSlot },
 		};
 		const delivery: AsyncChildDeliveryBindingV1 = {
 			deliveryId: `${ASYNC_OM_DELIVERY_PREFIX}:550e8400-e29b-41d4-a716-446655440000:child-7`,
@@ -69,5 +87,6 @@ describe("async OM durable-completion protocol types", () => {
 		assert.equal(receipt.snapshotSha256, outbox.snapshot.sha256);
 		assert.equal(receipt.snapshotByteLength, outbox.snapshot.byteLength);
 		assert.equal(receipt.inboxSha256, "d".repeat(64));
+		assert.equal(launchManifest.childSlots["root/0/parallel/0"]?.childId, "c000001");
 	});
 });

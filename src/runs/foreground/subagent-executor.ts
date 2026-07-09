@@ -34,6 +34,8 @@ import {
 } from "../../shared/settings.ts";
 import { discoverAvailableSkills, normalizeSkillInput } from "../../agents/skills.ts";
 import { executeAsyncChain, executeAsyncSingle, formatAsyncStartedMessage, isAsyncAvailable } from "../background/async-execution.ts";
+import { buildLaunchManifest, type StaticAsyncChildDescriptor } from "../background/async-launch-binding.ts";
+import type { AsyncOmLaunchManifestV1 } from "../../shared/types.ts";
 import { createSubagentContextResolver } from "../../shared/fork-context.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "../../intercom/intercom-bridge.ts";
@@ -143,6 +145,8 @@ export interface SubagentParamsLike {
 	outputMode?: "inline" | "file-only";
 	agentScope?: string;
 	chainDir?: string;
+	/** Internal only: injected by the observational-memory tool_call hook. */
+	__asyncCompletionConsumers?: string[];
 }
 
 interface ExecutorDeps {
@@ -176,6 +180,7 @@ interface ExecutionContextData {
 	controlConfig: ResolvedControlConfig;
 	intercomBridge: IntercomBridgeState;
 	nestedRoute?: NestedRouteInfo;
+	inheritedNestedRoute?: NestedRouteInfo;
 }
 
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
@@ -1192,6 +1197,40 @@ function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["
 	});
 }
 
+function collectStaticAsyncOmChildren(chain: ChainStep[]): StaticAsyncChildDescriptor[] {
+	const children: StaticAsyncChildDescriptor[] = [];
+	for (const [stepIndex, step] of chain.entries()) {
+		if (isDynamicParallelStep(step)) continue;
+		if (isParallelStep(step)) {
+			for (const [taskIndex, task] of step.parallel.entries()) {
+				children.push({ logicalChildKey: `root/${stepIndex}/parallel/${taskIndex}`, agentName: task.agent });
+			}
+			continue;
+		}
+		children.push({ logicalChildKey: `root/${stepIndex}/sequential/0`, agentName: (step as SequentialStep).agent });
+	}
+	return children;
+}
+
+export function resolveAsyncOmLaunchManifest(
+	params: SubagentParamsLike,
+	inheritedNestedRoute: NestedRouteInfo | undefined,
+	ctx: ExtensionContext,
+	cwd: string,
+	runId: string,
+	chain: ChainStep[],
+): AsyncOmLaunchManifestV1 | undefined {
+	if (inheritedNestedRoute || params.__asyncCompletionConsumers?.length !== 1 || params.__asyncCompletionConsumers[0] !== "observational-memory") {
+		return undefined;
+	}
+	try {
+		return buildLaunchManifest({ cwd, sessionManager: ctx.sessionManager }, runId, collectStaticAsyncOmChildren(chain)) ?? undefined;
+	} catch (error) {
+		console.warn(`[pi-subagents] unable to bind async OM manifest for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+		return undefined;
+	}
+}
+
 function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
 	const {
 		params,
@@ -1207,6 +1246,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		controlConfig,
 		intercomBridge,
 		nestedRoute,
+		inheritedNestedRoute,
 	} = data;
 	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -1275,12 +1315,15 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			...(task.progress !== undefined ? { progress: task.progress } : {}),
 			...(task.thinking ? { thinking: task.thinking } : {}),
 		}));
+		const asyncChain: ChainStep[] = [{
+			parallel: parallelTasks,
+			concurrency: resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency),
+			worktree: params.worktree,
+		}];
+		const omLaunchManifest = resolveAsyncOmLaunchManifest(params, inheritedNestedRoute, ctx, effectiveCwd, id, asyncChain);
 		return executeAsyncChain(id, {
-			chain: [{
-				parallel: parallelTasks,
-				concurrency: resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency),
-				worktree: params.worktree,
-			}],
+			chain: asyncChain,
+			omLaunchManifest,
 			resultMode: "parallel",
 			agents,
 			ctx: asyncCtx,
@@ -1308,8 +1351,10 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const normalized = normalizeSkillInput(params.skill);
 		const chainSkills = normalized === false ? [] : (normalized ?? []);
 		const chain = wrapChainTasksForFork(params.chain as ChainStep[], params.context);
+		const omLaunchManifest = resolveAsyncOmLaunchManifest(params, inheritedNestedRoute, ctx, effectiveCwd, id, chain);
 		return executeAsyncChain(id, {
 			chain,
+			omLaunchManifest,
 			task: params.task,
 			agents,
 			ctx: asyncCtx,
@@ -1350,10 +1395,15 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
 		const modelOverride = resolveModelCandidate((params.model as string | undefined) ?? a.model, availableModels, currentProvider) ?? (params.thinking ? currentModelFullId(ctx.model) : undefined);
+		const omLaunchManifest = resolveAsyncOmLaunchManifest(params, inheritedNestedRoute, ctx, effectiveCwd, id, [{
+			agent: params.agent!,
+			task: params.task,
+		}]);
 		return executeAsyncSingle(id, {
 			agent: params.agent!,
 			task: params.context === "fork" ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			agentConfig: a,
+			omLaunchManifest,
 			ctx: asyncCtx,
 			availableModels,
 			cwd: effectiveCwd,
@@ -1454,8 +1504,10 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			currentModel: currentModelFullId(ctx.model),
 		};
 		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
+		const omLaunchManifest = resolveAsyncOmLaunchManifest(params, data.inheritedNestedRoute, ctx, effectiveCwd, id, asyncChain);
 		return executeAsyncChain(id, {
 			chain: asyncChain,
+			omLaunchManifest,
 			task: params.task,
 			agents,
 			ctx: asyncCtx,
@@ -1895,8 +1947,11 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 					...(behavior?.thinking !== undefined ? { thinking: behavior.thinking } : {}),
 				};
 			});
+			const asyncChain: ChainStep[] = [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }];
+			const omLaunchManifest = resolveAsyncOmLaunchManifest(params, data.inheritedNestedRoute, ctx, effectiveCwd, id, asyncChain);
 			return executeAsyncChain(id, {
-				chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
+				chain: asyncChain,
+				omLaunchManifest,
 				resultMode: "parallel",
 				agents,
 				ctx: asyncCtx,
@@ -2167,11 +2222,16 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				currentModelProvider: ctx.model?.provider,
 				currentModel: currentModelFullId(ctx.model),
 			};
+			const omLaunchManifest = resolveAsyncOmLaunchManifest(params, data.inheritedNestedRoute, ctx, effectiveCwd, id, [{
+				agent: params.agent!,
+				task,
+			}]);
 			return executeAsyncSingle(id, {
 				agent: params.agent!,
 				task: params.context === "fork" ? wrapForkTask(task) : task,
 				agentConfig,
 				ctx: asyncCtx,
+				omLaunchManifest,
 				availableModels,
 				cwd: effectiveCwd,
 				maxOutput: params.maxOutput,
@@ -2637,6 +2697,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			controlConfig,
 			intercomBridge,
 			nestedRoute,
+			inheritedNestedRoute,
 		};
 
 		const foregroundMode: "single" | "parallel" | "chain" = hasChain ? "chain" : hasTasks ? "parallel" : "single";
