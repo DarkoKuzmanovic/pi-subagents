@@ -100,6 +100,7 @@ interface SubagentRunConfig {
 	id: string;
 	steps: RunnerStep[];
 	resultPath: string;
+	omLaunchManifestPath?: string;
 	cwd: string;
 	placeholder: string;
 	taskIndex?: number;
