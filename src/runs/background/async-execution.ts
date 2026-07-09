@@ -15,7 +15,7 @@ import { resolveModelLaneOverrides } from "../../agents/model-lanes.ts";
 import type { ThinkingLevel } from "../../shared/model-info.ts";
 import { applyEffectiveThinkingSuffix } from "../shared/pi-args.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type DynamicParallelStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import { buildChainInstructions, createParallelDirs, isDynamicParallelStep, isParallelStep, resolveParallelBehaviors, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type DynamicParallelStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerDynamicStep, RunnerStep } from "../shared/parallel-utils.ts";
 
 /**
@@ -479,14 +479,32 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 		steps = chain.map((s, stepIndex) => {
 			if (isDynamicParallelStep(s)) return buildDynamicStep(s, stepIndex);
 			if (isParallelStep(s)) {
-				const parallelBehaviors = s.parallel.map((task) => {
-					const agent = agents.find((candidate) => candidate.name === task.agent)!;
-					return suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(task), chainSkills), task.task, originalTask);
-				});
+				const parallelBehaviors = resultMode === "parallel"
+					? s.parallel.map((task) => {
+						const agent = agents.find((candidate) => candidate.name === task.agent)!;
+						return suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(task), chainSkills), task.task, originalTask);
+					})
+					: resolveParallelBehaviors(s.parallel, agents, stepIndex, chainSkills)
+						.map((behavior, taskIndex) => suppressProgressForReadOnlyTask(behavior, s.parallel[taskIndex]?.task, originalTask));
 				const progressPrecreated = parallelBehaviors.some((behavior) => behavior.progress);
 				if (progressPrecreated) {
 					if (!s.worktree) writeInitialProgressFile(runnerCwd);
 					progressInstructionCreated = true;
+				}
+				if (resultMode !== "parallel") {
+					const agentNames = s.parallel.map((task) => task.agent);
+					if (s.worktree) {
+						for (let taskIndex = 0; taskIndex < agentNames.length; taskIndex++) {
+							try {
+								const taskCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, taskIndex);
+								fs.mkdirSync(path.join(taskCwd, `parallel-${stepIndex}`, `${taskIndex}-${agentNames[taskIndex]}`), { recursive: true });
+							} catch (error) {
+								console.warn(`[pi-subagents] Unable to pre-create async worktree parallel output directory for run ${id} step ${stepIndex} task ${taskIndex}: ${error instanceof Error ? error.message : String(error)}`);
+							}
+						}
+					} else {
+						createParallelDirs(runnerCwd, stepIndex, s.parallel.length, agentNames);
+					}
 				}
 				return {
 					parallel: s.parallel.map((t, taskIndex) => {

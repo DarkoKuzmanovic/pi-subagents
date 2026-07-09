@@ -7,6 +7,8 @@ interface MockPiResponse {
 	output?: string;
 	stderr?: string;
 	exitCode?: number;
+	writeOutput?: string;
+	structured?: unknown;
 	delay?: number;
 	keepAliveAfterFinalMessageMs?: number;
 	jsonl?: unknown[];

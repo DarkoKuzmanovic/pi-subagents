@@ -304,6 +304,38 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), true);
 	});
 
+	it("namespaces inherited default outputs for async chain parallel tasks", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "fallback one", writeOutput: "child one" });
+		mockPi.onCall({ output: "fallback two", writeOutput: "child two" });
+
+		const id = `async-chain-parallel-output-${Date.now().toString(36)}`;
+		executeAsyncChain!(id, {
+			chain: [
+				{
+					parallel: [
+						{ agent: "writer", task: "Write one" },
+						{ agent: "writer", task: "Write two" },
+					],
+				},
+			],
+			agents: [makeAgent("writer", { output: "context.md" })],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 10_000);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, true, `run should succeed: ${JSON.stringify(payload.results)}`);
+
+		const firstOutput = path.join(tempDir, "parallel-0", "0-writer", "context.md");
+		const secondOutput = path.join(tempDir, "parallel-0", "1-writer", "context.md");
+		assert.equal(fs.readFileSync(firstOutput, "utf-8"), "child one");
+		assert.equal(fs.readFileSync(secondOutput, "utf-8"), "child two");
+	});
+
 	it("top-level async parallel lane keeps inline model while applying lane thinking", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Async lane report" });
 		writeProjectLaneSettings(tempDir, {

@@ -667,6 +667,18 @@ export function resolveParallelBehaviors(
 	});
 }
 
+export function resolveParallelItemOutputPath(
+	output: string | false | undefined,
+	chainDir: string,
+	stepIndex: number,
+	taskIndex: number,
+	agentName: string,
+): string | undefined {
+	if (typeof output !== "string" || !output) return undefined;
+	if (path.isAbsolute(output)) return output;
+	return path.join(chainDir, `parallel-${stepIndex}`, `${taskIndex}-${agentName}`, output);
+}
+
 /**
  * Create subdirectories for parallel step outputs
  */

@@ -107,6 +107,38 @@ function writeResponseEntries(entries, jsonMode) {
 	}
 }
 
+function resolveTaskText(args) {
+	const taskArg = args.at(-1) ?? "";
+	if (taskArg.startsWith("@")) {
+		try {
+			return fs.readFileSync(taskArg.slice(1), "utf-8");
+		} catch {
+			return taskArg;
+		}
+	}
+	return taskArg;
+}
+
+function extractOutputPath(args) {
+	const taskText = resolveTaskText(args);
+	const match = taskText.match(/\*\*Output:\*\* Write your findings to: (.+)$/m);
+	return match?.[1]?.trim();
+}
+
+function writeMockOutputIfRequested(response, args) {
+	if (typeof response.writeOutput !== "string") return;
+	const outputPath = extractOutputPath(args);
+	if (!outputPath) return;
+	try {
+		// Intentionally do not mkdir here. Real child output writes must rely on
+		// the parent pre-creating parallel output directories; otherwise tests
+		// should fall back to stdout persistence and fail marker-content assertions.
+		fs.writeFileSync(outputPath, response.writeOutput, "utf-8");
+	} catch (error) {
+		process.stderr.write(`mock pi failed to write requested output '${outputPath}': ${error instanceof Error ? error.message : String(error)}\n`);
+	}
+}
+
 async function main() {
 	if (!queueDir) fail("MOCK_PI_QUEUE_DIR is required.");
 	if (!fs.existsSync(queueDir)) fail(`Mock queue dir does not exist: ${queueDir}`);
@@ -126,6 +158,7 @@ async function main() {
 			fs.writeFileSync(capturePath, JSON.stringify(response.structured), "utf-8");
 		}
 	}
+	writeMockOutputIfRequested(response, args);
 	fs.writeFileSync(
 		path.join(queueDir, `call-${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}.json`),
 		JSON.stringify({ args }),

@@ -75,7 +75,7 @@ import {
 	formatWorktreeTaskCwdConflict,
 	type WorktreeSetup,
 } from "../shared/worktree.ts";
-import { suppressProgressForReadOnlyTask, writeInitialProgressFile } from "../../shared/settings.ts";
+import { resolveParallelItemOutputPath, suppressProgressForReadOnlyTask, writeInitialProgressFile } from "../../shared/settings.ts";
 import { emptyUsage, tokenUsageFromAttempts } from "../shared/usage.ts";
 import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
@@ -1764,15 +1764,21 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			// Clone the pre-resolved template per item, swapping the sentinel for the item task.
 			// Recompute read-only progress suppression per item so async behavior matches the
 			// foreground path (which resolves against the real per-item task text).
-			const materializedSteps: SubagentStep[] = materialized.parallel.map((task) => {
+			const materializedSteps: SubagentStep[] = materialized.parallel.map((task, itemIndex) => {
 				const resolvedTask = task.task ?? "{previous}";
 				const itemBehavior = suppressProgressForReadOnlyTask(dyn.behavior, resolvedTask, dyn.originalTask);
 				let itemTask = dyn.template.task.split(dyn.sentinel).join(resolvedTask);
 				if (!itemBehavior.progress && dyn.progressSuffix) {
 					itemTask = itemTask.replace(dyn.progressSuffix, "");
 				}
+				const outputPath = resolveParallelItemOutputPath(dyn.behavior.output, cwd, dyn.stepIndex, itemIndex, dyn.template.agent);
+				if (outputPath) {
+					fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+					itemTask = itemTask.replace(/\*\*Output:\*\* Write your findings to: .+$/m, `**Output:** Write your findings to: ${outputPath}`);
+				}
 				return {
 					...dyn.template,
+					...(outputPath ? { outputPath } : {}),
 					task: itemTask,
 				};
 			});

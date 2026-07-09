@@ -139,6 +139,44 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 	);
 
 	it(
+		"namespaces inherited default outputs for materialized fanout items",
+		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
+		async () => {
+			mockPi!.onCall({ structured: { files: ["alpha.ts", "beta.ts"] }, output: "listed files" });
+			mockPi!.onCall({ output: "fallback alpha", writeOutput: "child alpha" });
+			mockPi!.onCall({ output: "fallback beta", writeOutput: "child beta" });
+
+			const id = `async-fanout-output-${Date.now().toString(36)}`;
+			executeAsyncChain!(id, {
+				chain: [
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{
+						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
+						parallel: { agent: "reviewer", task: "Review file {file}" },
+						collect: { as: "results" },
+					},
+				],
+				agents: [makeAgent("recon"), makeAgent("reviewer", { output: "context.md" })],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig,
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
+			await waitForFile(resultPath);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+			assert.equal(payload.success, true, `run should succeed: ${JSON.stringify(payload.results)}`);
+
+			const firstOutput = path.join(tempDir, "parallel-1", "0-reviewer", "context.md");
+			const secondOutput = path.join(tempDir, "parallel-1", "1-reviewer", "context.md");
+			assert.equal(fs.readFileSync(firstOutput, "utf-8"), "child alpha");
+			assert.equal(fs.readFileSync(secondOutput, "utf-8"), "child beta");
+		},
+	);
+
+	it(
 		"skips an empty source array (onEmpty: skip) and continues the chain",
 		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
 		async () => {
