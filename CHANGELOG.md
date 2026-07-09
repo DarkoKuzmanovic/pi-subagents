@@ -6,10 +6,13 @@
 
 - **Dynamic fanout (`expand`/`collect`) now runs in async/background chains.** The v0.39.0 "foreground only" restriction is lifted. When a background chain reaches a dynamic-fanout step, the detached runner materializes the per-item tasks at runtime from the prior step's structured array, splices runtime flat-index slots into the status/session/escalation/intercom bookkeeping so downstream steps stay aligned, runs the items through the standard parallel executor, and collects them into `{outputs.<collect.as>}` for later steps. Verified end-to-end through the mock-`pi` runner harness (happy path + `onEmpty: skip`), including the downstream `{outputs}` consumer. Two async-only caveats: materialized items run without per-item session files or intercom targets (no individual resume/share/contact), so a `context: "fork"` dynamic template does not fork per item in the background.
 - **`subagent.fanout.materialized` event** is appended to an async run's `events.jsonl` when a dynamic step expands, recording the collect name and item count.
+- **Output-token budget ceilings for subagent runs.** Configure a JSON default with `sessionTokenBudget` or pass a per-call `budget` override. The budget counts child output tokens only, gates dispatch before launching the next chain/background step, marks remaining logical steps as `budget-exhausted`, preserves already-launched parallel children, reports overshoot, emits `subagent:budget-exhausted`, and appends a `[budget: spent/limit output tokens]` footer.
 
 ### Changed
 
 - **Async chains containing a dynamic-fanout step are no longer rejected.** This supersedes the v0.39.0 guard and its "run this chain in the foreground" error. The runner defers the dynamic step's flat-slot allocation (a new `RunnerDynamicStep` carries a pre-resolved per-item template with a task sentinel) and splices materialized slots in at runtime.
+- **Builtin `context-builder` role is renamed to `recon`.** The six-role roster now uses `recon`, `planner`, `worker`, `reviewer`, `oracle`, and `janitor`; compatibility agents remain disabled unless explicitly re-enabled.
+- **Completed release-plan notes are archived under `docs/plans/`.** Stale 0.38/0.40/structured-output planning files moved out of the project root, and transient recon audit artifacts were removed.
 
 ### Fixed
 
@@ -25,6 +28,12 @@
 - **`subagent.fanout.materialized` is also emitted on the empty-source (`onEmpty: "skip"`) path** with `count: 0`, so consumers relying on it as the fanout marker still observe it. The materialize-failure event now references the dynamic step's logical index.
 - **The dynamic-fanout task sentinel no longer contains NUL bytes**, so `src/runs/background/async-execution.ts` is a text file again and its diffs render normally.
 - **The `expand.maxItems` tool-schema description** now names the real flat `dynamicFanoutMaxItems` config setting instead of a non-existent nested key.
+
+- **Async parallel output files are now namespaced per child.** Relative inherited/default output paths for async static parallel and dynamic-fanout tasks resolve under per-task directories, preventing sibling children from racing on the same `context.md`/report path while preserving absolute output paths.
+
+### Tests
+
+- Added focused coverage for output-token budgets: accumulator unit tests, foreground fake-dispatcher enforcement, async runner result/status assertions for async-capable environments, and a local pure unit test for async skipped-step flat-index cursor behavior. Detached async integration tests still skip in local environments without `jiti`; the local gate covers those paths with typecheck plus pure helper/unit coverage.
 
 ## [0.39.0] - 2026-06-13
 
