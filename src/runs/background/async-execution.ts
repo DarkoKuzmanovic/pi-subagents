@@ -125,6 +125,7 @@ interface AsyncChainParams {
 	availableModels?: AvailableModelInfo[];
 	cwd?: string;
 	maxOutput?: MaxOutputConfig;
+	budget?: number;
 	artifactsDir?: string;
 	artifactConfig: ArtifactConfig;
 	shareEnabled: boolean;
@@ -548,6 +549,7 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 				cwd: runnerCwd,
 				placeholder: "{previous}",
 				maxOutput,
+				budget: params.budget,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
 				share: shareEnabled,

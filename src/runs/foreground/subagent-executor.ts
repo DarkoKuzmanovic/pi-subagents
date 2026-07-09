@@ -1268,6 +1268,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
 			shareEnabled,
+			budget: params.budget ?? deps.config.sessionTokenBudget,
 			sessionRoot,
 			chainSkills: [],
 			sessionFilesByFlatIndex: params.tasks.map((_, index) => sessionFileForIndex(index)),
@@ -1296,6 +1297,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
 			shareEnabled,
+			budget: params.budget ?? deps.config.sessionTokenBudget,
 			sessionRoot,
 			chainSkills,
 			sessionFilesByFlatIndex: collectChainSessionFiles(chain, sessionFileForIndex),
@@ -1406,6 +1408,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		nestedRoute: foregroundControl?.nestedRoute,
 		chainSkills,
 		chainDir: params.chainDir,
+		budget: params.budget ?? deps.config.sessionTokenBudget,
 		maxSubagentDepth: currentMaxSubagentDepth,
 		worktreeSetupHook: deps.config.worktreeSetupHook,
 		worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
@@ -1440,6 +1443,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
 			shareEnabled,
+			budget: params.budget ?? deps.config.sessionTokenBudget,
 			sessionRoot,
 			chainSkills: chainResult.requestedAsync.chainSkills,
 			sessionFilesByFlatIndex: collectChainSessionFiles(asyncChain, sessionFileForIndex),
@@ -1880,6 +1884,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
 				shareEnabled,
+				budget: params.budget ?? deps.config.sessionTokenBudget,
 				sessionRoot,
 				chainSkills: [],
 				sessionFilesByFlatIndex: tasks.map((_, index) => sessionFileForIndex(index)),
@@ -2549,7 +2554,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const backgroundRequestedWhileClarifying = (hasChain || hasTasks) && requestedAsync && effectiveParams.clarify === true;
 		const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
-
 		const artifactConfig: ArtifactConfig = {
 			...DEFAULT_ARTIFACT_CONFIG,
 			enabled: effectiveParams.artifacts !== false,

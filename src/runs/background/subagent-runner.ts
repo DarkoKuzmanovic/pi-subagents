@@ -77,6 +77,7 @@ import {
 } from "../shared/worktree.ts";
 import { resolveParallelItemOutputPath, suppressProgressForReadOnlyTask, writeInitialProgressFile } from "../../shared/settings.ts";
 import { emptyUsage, tokenUsageFromAttempts } from "../shared/usage.ts";
+import { createSessionTokenBudget, recordBudgetUsage, shouldDispatchWithBudget, type SessionTokenBudget } from "../shared/session-tokens.ts";
 import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
@@ -113,6 +114,7 @@ interface SubagentRunConfig {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	dynamicFanoutMaxItems?: number;
+	budget?: number;
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	childIntercomTargets?: Array<string | undefined>;
@@ -133,6 +135,56 @@ interface StepResult {
 	modelAttempts?: ModelAttempt[];
 	artifactPaths?: ArtifactPaths;
 	truncated?: boolean;
+}
+
+function budgetSkippedStepResult(agent: string): StepResult {
+	return {
+		agent,
+		output: "skipped(budget-exhausted)",
+		success: true,
+		skipped: true,
+		error: "budget-exhausted",
+	};
+}
+
+function markStatusStepBudgetSkipped(step: RunnerStatusStep | undefined, skippedAt: number): void {
+	if (!step) return;
+	step.status = "failed";
+	step.error = "budget-exhausted";
+	step.startedAt = skippedAt;
+	step.endedAt = skippedAt;
+	step.durationMs = 0;
+	step.exitCode = -1;
+	step.activityState = undefined;
+	step.recentOutput = ["skipped(budget-exhausted)"];
+}
+
+function appendBudgetSkippedRunnerSteps(input: {
+	results: StepResult[];
+	statusPayload: RunnerStatusPayload;
+	steps: RunnerStep[];
+	startStepIndex: number;
+	startFlatIndex: number;
+	skippedAt: number;
+}): void {
+	let cursor = input.startFlatIndex;
+	for (let i = input.startStepIndex; i < input.steps.length; i++) {
+		const step = input.steps[i]!;
+		if (isParallelGroup(step)) {
+			for (const task of step.parallel) {
+				markStatusStepBudgetSkipped(input.statusPayload.steps[cursor], input.skippedAt);
+				input.results.push(budgetSkippedStepResult(task.agent));
+				cursor++;
+			}
+		} else if (isRunnerDynamicStep(step)) {
+			input.results.push(budgetSkippedStepResult(step.dynamic.template.agent));
+		} else {
+			markStatusStepBudgetSkipped(input.statusPayload.steps[cursor], input.skippedAt);
+			input.results.push(budgetSkippedStepResult(step.agent));
+			cursor++;
+		}
+	}
+	input.statusPayload.lastUpdate = input.skippedAt;
 }
 
 const require = createRequire(import.meta.url);
@@ -1037,6 +1089,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		sessionDir: config.sessionDir,
 		outputFile: path.join(asyncDir, "output-0.log"),
 	};
+	const tokenBudget = createSessionTokenBudget(id, config.budget);
 
 	fs.mkdirSync(asyncDir, { recursive: true });
 	writeAtomicJson(statusPath, statusPayload);
@@ -1434,6 +1487,18 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 	for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
 		if (interrupted) break;
+		if (!shouldDispatchWithBudget(tokenBudget)) {
+			appendBudgetSkippedRunnerSteps({
+				results,
+				statusPayload,
+				steps,
+				startStepIndex: stepIndex,
+				startFlatIndex: flatIndex,
+				skippedAt: Date.now(),
+			});
+			writeAtomicJson(statusPath, statusPayload);
+			break;
+		}
 		const step = steps[stepIndex];
 
 		if (isParallelGroup(step)) {
@@ -1631,6 +1696,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							: null;
 						const taskTokens = sessionTokens ?? tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
 						if (!taskTokens) continue;
+						recordBudgetUsage(tokenBudget, taskTokens);
 						statusPayload.steps[fi].tokens = taskTokens;
 						previousCumulativeTokens = {
 							input: previousCumulativeTokens.input + taskTokens.input,
@@ -1940,6 +2006,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					}
 				}
 				if (stepTokens) {
+					recordBudgetUsage(tokenBudget, stepTokens);
 					statusPayload.steps[flatIndex].tokens = stepTokens;
 					statusPayload.totalTokens = { ...previousCumulativeTokens };
 					statusPayload.lastUpdate = Date.now();

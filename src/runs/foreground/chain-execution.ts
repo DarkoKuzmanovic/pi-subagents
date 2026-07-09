@@ -65,6 +65,8 @@ import {
 } from "../../shared/types.ts";
 import { resolveModelCandidate } from "../shared/model-fallback.ts";
 import { validateFileOnlyOutputMode } from "../shared/single-output.ts";
+import { emptyUsage } from "../shared/usage.ts";
+import { createSessionTokenBudget, recordBudgetUsage, shouldDispatchWithBudget, type SessionTokenBudget } from "../shared/session-tokens.ts";
 
 function formatChainStepStatus(agent: string, stepIndex: number, totalSteps: number, progress?: AgentProgress): string {
 	const step = `[${stepIndex + 1}/${totalSteps}] ${agent}`;
@@ -372,6 +374,7 @@ interface ChainExecutionParams {
 	inlineReads?: boolean;
 	nestedRoute?: NestedRouteInfo;
 	dynamicFanoutMaxItems?: number;
+	budget?: number;
 	}
 
 interface ChainExecutionResult {
@@ -383,6 +386,36 @@ interface ChainExecutionResult {
 		chain: ChainStep[];
 		chainSkills: string[];
 	};
+}
+
+function budgetSkippedResult(agent: string): SingleResult {
+	return {
+		agent,
+		task: "(skipped — budget-exhausted)",
+		exitCode: -1,
+		messages: [],
+		usage: emptyUsage(),
+		finalOutput: "skipped(budget-exhausted)",
+		error: "budget-exhausted",
+	};
+}
+
+function appendBudgetSkippedChainSteps(results: SingleResult[], steps: ChainStep[], startIndex: number): void {
+	for (let i = startIndex; i < steps.length; i++) {
+		const step = steps[i]!;
+		if (isParallelStep(step)) {
+			for (const task of step.parallel) results.push(budgetSkippedResult(task.agent));
+		} else if (isDynamicParallelStep(step)) {
+			results.push(budgetSkippedResult(step.parallel.agent));
+		} else {
+			results.push(budgetSkippedResult((step as SequentialStep).agent));
+		}
+	}
+}
+
+function recordResultBudgetUsage(budget: SessionTokenBudget, result: SingleResult): void {
+	if (result.exitCode === -1) return;
+	recordBudgetUsage(budget, result.usage);
 }
 
 /**
@@ -543,6 +576,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	let prev = "";
 	let globalTaskIndex = 0;
 	let progressCreated = false;
+	const tokenBudget = createSessionTokenBudget(runId, params.budget);
 
 	if (onUpdate) {
 		const stepNames = chainSteps
@@ -567,6 +601,10 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 	for (let stepIndex = 0; stepIndex < chainSteps.length; stepIndex++) {
 		const step = chainSteps[stepIndex]!;
+		if (!shouldDispatchWithBudget(tokenBudget)) {
+			appendBudgetSkippedChainSteps(results, chainSteps, stepIndex);
+			break;
+		}
 		const stepTemplates = templates[stepIndex]!;
 
 		if (isParallelStep(step)) {
@@ -678,6 +716,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					results.push(result);
 					if (result.progress) allProgress.push(result.progress);
 					if (result.artifactPaths) allArtifactPaths.push(result.artifactPaths);
+					recordResultBudgetUsage(tokenBudget, result);
 					const asName = step.parallel[i]?.as;
 					if (asName && result.exitCode === 0 && !result.error) {
 						outputs[asName] = outputEntryFromResult(result, stepIndex);
@@ -869,6 +908,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				results.push(result);
 				if (result.progress) allProgress.push(result.progress);
 				if (result.artifactPaths) allArtifactPaths.push(result.artifactPaths);
+				recordResultBudgetUsage(tokenBudget, result);
 			}
 
 			const interrupted = parallelResults.find((result) => result.interrupted);
@@ -1087,6 +1127,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 			globalTaskIndex++;
 			results.push(r);
+			recordResultBudgetUsage(tokenBudget, r);
 			if (r.progress) allProgress.push(r.progress);
 			if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
 

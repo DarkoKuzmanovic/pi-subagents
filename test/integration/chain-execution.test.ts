@@ -169,6 +169,57 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		assert.equal(result.details.results[1].agent, "reporter");
 	});
 
+	it("stops launching sequential chain steps once the output token budget is exhausted", async () => {
+		mockPi.onCall({ output: "First result" });
+		mockPi.onCall({ output: "Second result should not run" });
+
+		const result = await executeChain!(makeChainParams(
+			[
+				{ agent: "scout", task: "First" },
+				{ agent: "reviewer", task: "Second" },
+			],
+			[makeAgent("scout"), makeAgent("reviewer")],
+			{ budget: 50 },
+		));
+
+		assert.equal(result.isError, undefined);
+		assert.equal(mockPi.callCount(), 1);
+		assert.equal(result.details.results.length, 2);
+		assert.equal(result.details.results[0]?.agent, "scout");
+		assert.equal(result.details.results[1]?.agent, "reviewer");
+		assert.equal(result.details.results[1]?.exitCode, -1);
+		assert.match(result.details.results[1]?.finalOutput ?? "", /budget-exhausted/);
+	});
+
+	it("lets an already-launched parallel group finish before budget exhaustion skips later steps", async () => {
+		mockPi.onCall({ output: "Parallel one" });
+		mockPi.onCall({ output: "Parallel two" });
+		mockPi.onCall({ output: "Final step should not run" });
+
+		const result = await executeChain!(makeChainParams(
+			[
+				{
+					parallel: [
+						{ agent: "scout", task: "First parallel" },
+						{ agent: "reviewer", task: "Second parallel" },
+					],
+				},
+				{ agent: "reporter", task: "After parallel" },
+			],
+			[makeAgent("scout"), makeAgent("reviewer"), makeAgent("reporter")],
+			{ budget: 1 },
+		));
+
+		assert.equal(result.isError, undefined);
+		assert.equal(mockPi.callCount(), 2);
+		assert.equal(result.details.results.length, 3);
+		assert.equal(result.details.results[0]?.agent, "scout");
+		assert.equal(result.details.results[1]?.agent, "reviewer");
+		assert.equal(result.details.results[2]?.agent, "reporter");
+		assert.equal(result.details.results[2]?.exitCode, -1);
+		assert.match(result.details.results[2]?.finalOutput ?? "", /budget-exhausted/);
+	});
+
 	it("passes file-only saved-output references through {previous}", async () => {
 		mockPi.onCall({ output: "full chain output\nwith details" });
 		const agents = [makeAgent("analyst"), makeAgent("reporter")];
