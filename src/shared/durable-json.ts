@@ -195,6 +195,21 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return proto === Object.prototype || proto === null;
 }
 
+/**
+ * Compute the same canonical-JSON SHA-256 hash and byte length that {@link writeDurableJson}
+ * commits to disk, without performing a write. Used by producers/consumers of the M6.1 durable
+ * OM protocol to hash a value (e.g. a completion-snapshot payload) or to independently
+ * re-verify a previously written durable file's on-disk hash.
+ */
+export function computeCanonicalSha256(value: unknown): { sha256: string; byteLength: number; canonicalJson: string } {
+	const canonicalJson = canonicalJsonStringify(value);
+	return {
+		sha256: sha256Hex(canonicalJson),
+		byteLength: Buffer.byteLength(canonicalJson, "utf-8"),
+		canonicalJson,
+	};
+}
+
 function sha256Hex(content: string): string {
 	return createHash("sha256").update(content).digest("hex");
 }

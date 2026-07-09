@@ -26,6 +26,8 @@ export interface RunnerSubagentStep {
 	outputSchema?: JsonSchemaObject;
 	/** Chain-output binding name; this step's (structured) output is exposed as {outputs.<as>}. */
 	as?: string;
+	/** M6.1: structural logical key for the durable OM completion protocol, when this run is OM-registered. */
+	omLogicalChildKey?: string;
 }
 
 export interface ParallelStepGroup {
