@@ -96,6 +96,7 @@ function scalarToKey(value: unknown, label: string): string {
 	if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
 		const key = String(value);
 		if (!key.trim()) throw new DynamicFanoutError(`${label} resolved to an empty key.`);
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejects control characters in resolved fan-out keys
 		if (/[\u0000-\u001F\u007F]/.test(key)) throw new DynamicFanoutError(`${label} resolved to an unsafe key.`);
 		if (key.length > 200) throw new DynamicFanoutError(`${label} resolved to a key longer than 200 characters.`);
 		return key;
