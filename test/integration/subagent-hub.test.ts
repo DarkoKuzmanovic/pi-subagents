@@ -9,6 +9,7 @@ const available = !!hubMod;
 const SubagentHubComponent = hubMod?.SubagentHubComponent;
 
 function stripAnsi(text: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape stripping requires matching the ESC control char
 	return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 

@@ -13,7 +13,7 @@ function collectTsFiles(dir: string): string[] {
 	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
 		const entryPath = path.join(dir, entry.name);
 		if (entry.isDirectory()) {
-			collectTsFiles(entryPath).forEach((file) => files.push(file));
+			collectTsFiles(entryPath).forEach((file) => { files.push(file); });
 		} else if (entry.name.endsWith(".ts")) {
 			files.push(entryPath);
 		}

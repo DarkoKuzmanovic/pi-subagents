@@ -15,6 +15,7 @@ export function getStderrTail(stderr: string | undefined | null): string {
 	// Strip ANSI escape sequences (includes color codes, formatting, etc.)
 	// Pattern: ESC [ followed by zero or more digits/semicolons, then a letter
 	// eslint-disable-next-line no-control-regex
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escape stripping requires matching the ESC control char
 	const stripped = stderr.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
 
 	// Split into lines, take last 8, trim each
