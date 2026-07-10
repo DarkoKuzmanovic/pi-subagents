@@ -24,6 +24,7 @@ describe("stripKnownThinkingSuffix", () => {
 		assert.equal(stripKnownThinkingSuffix("provider/model:low"), "provider/model");
 		assert.equal(stripKnownThinkingSuffix("provider/model:medium"), "provider/model");
 		assert.equal(stripKnownThinkingSuffix("provider/model:xhigh"), "provider/model");
+		assert.equal(stripKnownThinkingSuffix("provider/model:max"), "provider/model");
 	});
 
 	it("leaves models without thinking suffixes unchanged", () => {
@@ -51,6 +52,7 @@ describe("applyEffectiveThinkingSuffix", () => {
 
 	it("replaces existing known suffix with new thinking level", () => {
 		assert.equal(applyEffectiveThinkingSuffix("provider/model:high", "low"), "provider/model:low");
+		assert.equal(applyEffectiveThinkingSuffix("provider/model:max", "high"), "provider/model:high");
 	});
 
 	it("handles thinking off by stripping existing suffix", () => {
@@ -335,7 +337,6 @@ describe("resolveParallelBehaviors thinking propagation", () => {
 describe("subagent hub save: suffix stripping with thinking override", () => {
 	it("strips :high suffix from model when separate thinking override is low", () => {
 		const modelOverride = "provider/id:high";
-		const thinkingLevel = "low";
 		const stripped = stripKnownThinkingSuffix(modelOverride);
 		assert.equal(stripped, "provider/id");
 		assert.notEqual(stripped, modelOverride);

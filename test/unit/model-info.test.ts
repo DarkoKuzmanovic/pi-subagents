@@ -34,6 +34,20 @@ describe("model info helpers", () => {
 		);
 	});
 
+
+	it("only exposes max when model metadata opts in", () => {
+		assert.deepEqual(
+			getSupportedThinkingLevels({
+				provider: "openai-codex",
+				id: "gpt-5.6-sol",
+				fullId: "openai-codex/gpt-5.6-sol",
+				reasoning: true,
+				thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+			}),
+			["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+		);
+	});
+
 	it("filters levels only when per-level metadata is present", () => {
 		assert.deepEqual(
 			getSupportedThinkingLevels({

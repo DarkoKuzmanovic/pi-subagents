@@ -4,6 +4,7 @@
 
 import { Type } from "typebox";
 import { SUBAGENT_ACTIONS } from "../shared/types.ts";
+import { THINKING_LEVELS } from "../shared/model-info.ts";
 
 const SkillOverride = Type.Unsafe({
 	anyOf: [
@@ -49,7 +50,7 @@ const TaskItem = Type.Object({
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking for this task" })),
 	model: Type.Optional(Type.String({ description: "Override model for this task (e.g. 'google/gemini-3-pro')" })),
 	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this task (for example 'easy' or 'hard')." })),
-	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for this task. Takes precedence over agent config for this dispatch only." })),
+	thinking: Type.Optional(Type.String({ enum: [...THINKING_LEVELS], description: "Thinking level override for this task. Takes precedence over agent config for this dispatch only." })),
 	skill: Type.Optional(SkillOverride),
 });
 
@@ -66,7 +67,7 @@ const ParallelTaskSchema = Type.Object({
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for this task" })),
 	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this parallel task." })),
-	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for this parallel task" })),
+	thinking: Type.Optional(Type.String({ enum: [...THINKING_LEVELS], description: "Thinking level override for this parallel task" })),
 	as: Type.Optional(AsParam),
 	outputSchema: Type.Optional(OutputSchemaParam),
 });
@@ -85,7 +86,7 @@ const ChainItem = Type.Object({
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for this step" })),
 	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this chain step." })),
-	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for this chain step" })),
+	thinking: Type.Optional(Type.String({ enum: [...THINKING_LEVELS], description: "Thinking level override for this chain step" })),
 	as: Type.Optional(AsParam),
 	outputSchema: Type.Optional(OutputSchemaParam),
 	parallel: Type.Optional(Type.Union([Type.Array(ParallelTaskSchema, { minItems: 1 }), ParallelTaskSchema, Type.String()], { description: "Tasks to run in parallel (array), or a single parallel template object when used with expand/collect for dynamic fanout. Prefer literal JSON; a JSON-stringified array is tolerated and parsed." })),
@@ -198,6 +199,6 @@ export const SubagentParams = Type.Object({
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for single agent (e.g. 'anthropic/claude-sonnet-4)'" })),
 	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this single-agent dispatch." })),
-	thinking: Type.Optional(Type.String({ enum: ["off", "minimal", "low", "medium", "high", "xhigh"], description: "Thinking level override for single agent dispatch. Takes precedence over agent config for this dispatch only." })),
+	thinking: Type.Optional(Type.String({ enum: [...THINKING_LEVELS], description: "Thinking level override for single agent dispatch. Takes precedence over agent config for this dispatch only." })),
 	reads: Type.Optional(ReadsOverride),
 });

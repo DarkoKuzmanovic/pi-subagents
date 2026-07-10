@@ -256,22 +256,21 @@ Precedence is by parsed runtime name:
 
 ## Model Lanes
 
-Model lanes route an agent through named model configurations (e.g. `easy`, `medium`, `hard`) without keeping duplicate role agents. Configure them in `~/.pi/agent/settings.json` under `subagents.modelLanes`; see AGENTS.md for the full shape.
+Model lanes route a named agent through configured model/thinking pairs without duplicate role agents. Configure them in `~/.pi/agent/settings.json` under `subagents.modelLanes`; the parent chooses a lane, never the child.
 
-Use `lane` in dispatch calls:
+| Agent | Lanes | Select when |
+|---|---|---|
+| `worker` | `easy`, `medium`, `hard` | Bounded edit; normal implementation; architecture-sensitive or high-blast-radius work. |
+| `reviewer` | `quick`, `standard`, `deep` | Focused tests/docs/correctness; normal diff review; security, data integrity, architecture, or release-critical review. |
+
 ```typescript
 subagent({ agent: "worker", lane: "easy", task: "..." });
-// chain step:
-{ agent: "worker", lane: "hard", task: "..." }
-// parallel task:
-{ agent: "worker", lane: "medium", task: "..." }
+subagent({ agent: "reviewer", lane: "deep", context: "fresh", task: "Review this migration. Do not edit." });
 ```
 
-Precedence: inline `model`/`thinking` > lane `model`/`thinking` > agent defaults. Unknown lanes fail with a clear error before spawning.
+Inline `model`/`thinking` overrides a lane; a lane overrides the agent's default config. Same-named project lanes override user lanes. Unknown lanes fail before spawning.
 
-To open and edit the lanes JSON, use `/subagents config` (or `/subagents json` or `/subagents edit`). It seeds a `subagents.modelLanes` skeleton when absent and opens the file in `$VISUAL`, `$EDITOR`, or `nano`.
-
-> **Future:** A full lane-editing TUI inside `/subagents` is deferred to a later milestone.
+To edit lane JSON, use `/subagents config` (or `/subagents json` or `/subagents edit`).
 
 ### Single agent
 

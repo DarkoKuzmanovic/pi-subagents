@@ -489,7 +489,9 @@ export class ChainClarifyComponent implements Component {
 			const current = this.getEffectiveBehavior(this.selectedStep).skills;
 			this.skillSelectedNames.clear();
 			if (current !== false && current.length > 0) {
-				current.forEach((skillName) => this.skillSelectedNames.add(skillName));
+				current.forEach((skillName) => {
+					this.skillSelectedNames.add(skillName);
+				});
 			}
 			this.tui.requestRender();
 			return;
@@ -1004,7 +1006,8 @@ export class ChainClarifyComponent implements Component {
 			"low": "Light reasoning",
 			"medium": "Moderate reasoning",
 			"high": "Deep reasoning",
-			"xhigh": "Maximum reasoning (ultrathink)",
+			"xhigh": "Very deep reasoning (ultrathink)",
+			"max": "Maximum available reasoning",
 		};
 
 		const levels = this.getAvailableThinkingLevels(this.editingStep!);

@@ -151,10 +151,22 @@ describe("model prompt role resolver", () => {
 		try {
 			const content = "Thinking suffix stripped";
 			fs.writeFileSync(path.join(tempDir, "umans-coder@worker.md"), content, "utf-8");
-			// umans-coder:high should strip :high and match umans-coder
 			const result = resolveModelPromptRoleBlock("umans/umans-coder:high", "worker", tempDir);
 			assert.ok(result);
 			assert.strictEqual(result.fileName, "umans-coder@worker.md");
+		} finally {
+			fs.rmSync(tempDir, { recursive: true });
+		}
+	});
+	it("strips max thinking suffix before exact provider-model matching", () => {
+		const tempDir = mkdtempSync(path.join(os.tmpdir(), "mpr-test-"));
+		try {
+			// Without suffix stripping, the normalized `-max` variant wins exact matching.
+			fs.writeFileSync(path.join(tempDir, "umans--umans-coder@worker.md"), "Base model", "utf-8");
+			fs.writeFileSync(path.join(tempDir, "umans--umans-coder-max@worker.md"), "Suffix shadow", "utf-8");
+			const result = resolveModelPromptRoleBlock("umans/umans-coder:max", "worker", tempDir);
+			assert.ok(result);
+			assert.strictEqual(result.fileName, "umans--umans-coder@worker.md");
 		} finally {
 			fs.rmSync(tempDir, { recursive: true });
 		}

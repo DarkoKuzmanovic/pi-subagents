@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.40.1] - 2026-07-10
+
+### Added
+
+- **Pi 0.80.6 `max` thinking-level support.** Single, parallel, and chain dispatch schemas now accept `thinking: "max"`; child model suffix normalization, model-prompt role matching, model capability filtering, and clarification selectors handle `max` end to end. Like Pi core, `max` remains opt-in and appears only when a model's `thinkingLevelMap.max` is defined.
+
+### Tests
+
+- Added regression coverage for `max` schema exposure, suffix stripping, exact model-prompt matching, capability filtering, and selector visibility while preserving legacy `xhigh` fallback behavior.
+
 ## [0.40.0] - 2026-07-09
 
 ### Added
