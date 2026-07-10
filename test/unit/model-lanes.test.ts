@@ -53,6 +53,26 @@ describe("model lanes", () => {
 		});
 	});
 
+
+	it("accepts max thinking in model lane settings", () => {
+		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
+		writeJson(settingsPath, {
+			subagents: {
+				modelLanes: {
+					worker: {
+						hard: { thinking: "max" },
+					},
+				},
+			},
+		});
+
+		assert.deepEqual(readModelLanesFromSettingsFile(settingsPath), {
+			worker: {
+				hard: { thinking: "max" },
+			},
+		});
+	});
+
 	it("accepts partial lane entries when resolving a lane", () => {
 		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
 		writeJson(settingsPath, {
@@ -131,7 +151,7 @@ describe("model lanes", () => {
 			subagents: {
 				modelLanes: {
 					worker: {
-						easy: { thinking: "max" },
+						easy: { thinking: "ultra" },
 					},
 				},
 			},
@@ -163,7 +183,7 @@ describe("model lanes", () => {
 			subagents: {
 				modelLanes: {
 					worker: {
-						easy: { thinking: "max" },
+						easy: { thinking: "ultra" },
 					},
 				},
 			},

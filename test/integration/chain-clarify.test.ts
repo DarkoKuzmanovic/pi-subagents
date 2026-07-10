@@ -8,7 +8,7 @@ interface ClarifyTestModel {
 	id: string;
 	fullId: string;
 	reasoning?: boolean;
-	thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh", string | null>>;
+	thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
 }
 
 interface ClarifyTestComponent {
@@ -28,7 +28,7 @@ interface ClarifyTestComponent {
 }
 
 function stripAnsi(text: string): string {
-	return text.replace(/\x1b\[[0-9;]*m/g, "");
+	return text.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
 }
 
 interface ClarifyTestModule {
@@ -113,10 +113,50 @@ describe("chain clarify model display", { skip: !available ? "pi packages not av
 
 		assert.match(rendered, /off - No extended thinking/);
 		assert.match(rendered, /high - Deep reasoning/);
-		assert.match(rendered, /xhigh - Maximum reasoning/);
+		assert.match(rendered, /xhigh - Very deep reasoning \(ultrathink\)/);
 		assert.doesNotMatch(rendered, /minimal - Brief reasoning/);
 		assert.doesNotMatch(rendered, /low - Light reasoning/);
 		assert.doesNotMatch(rendered, /medium - Moderate reasoning/);
+		assert.doesNotMatch(rendered, /max - Maximum available reasoning/);
+	});
+	it("shows max when the selected model opts in", () => {
+		const component = new ChainClarifyComponent(
+			{ requestRender() {} },
+			{ fg(_key: string, text: string) { return text; } },
+			[{
+				name: "worker",
+				description: "",
+				systemPrompt: "",
+				systemPromptMode: "replace",
+				inheritProjectContext: false,
+				inheritSkills: false,
+				source: "user",
+				filePath: "worker.md",
+				model: "gpt-5.6-sol",
+			}],
+			["Task"],
+			"Task",
+			undefined,
+			[{ output: false, outputMode: "inline", reads: false, progress: false, skills: [], model: "gpt-5.6-sol" }],
+			[{
+				provider: "openai-codex",
+				id: "gpt-5.6-sol",
+				fullId: "openai-codex/gpt-5.6-sol",
+				reasoning: true,
+				thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+			}],
+			"openai-codex",
+			[],
+			() => {},
+			"single",
+		);
+
+		component.selectedStep = 0;
+		component.enterThinkingSelector();
+		const rendered = component.renderThinkingSelector().join("\n");
+
+		assert.match(rendered, /xhigh - Very deep reasoning \(ultrathink\)/);
+		assert.match(rendered, /max - Maximum available reasoning/);
 	});
 
 	it("preselects the current model and drops thinking for unsupported targets", () => {

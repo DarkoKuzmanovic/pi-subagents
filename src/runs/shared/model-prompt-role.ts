@@ -12,6 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/model-info.ts";
 
 /**
  * Normalize a string for matching: replace colons/slashes/backslashes with dashes,
@@ -24,20 +25,18 @@ function normalize(s: string): string {
 
 /**
  * Parse a model candidate string:
- * 1. Strip trailing thinking suffix (":off" | ":minimal" | ":low" | ":medium" | ":high" | ":xhigh")
+ * 1. Strip trailing thinking suffix (":off" | ":minimal" | ":low" | ":medium" | ":high" | ":xhigh" | ":max")
  * 2. Split on FIRST "/" into provider and modelId; if no "/", provider is "", whole string is modelId
  *
  * Returns { provider: string; modelId: string }
  */
 function parseModelCandidate(model: string): { provider: string; modelId: string } {
-	const THINKING_SUFFIXES = ["off", "minimal", "low", "medium", "high", "xhigh"];
-
 	// Strip known thinking suffix from the end
 	let stripped = model;
 	const colonIdx = model.lastIndexOf(":");
 	if (colonIdx !== -1) {
 		const suffix = model.substring(colonIdx + 1);
-		if (THINKING_SUFFIXES.includes(suffix)) {
+		if (THINKING_LEVELS.includes(suffix as ThinkingLevel)) {
 			stripped = model.substring(0, colonIdx);
 		}
 	}

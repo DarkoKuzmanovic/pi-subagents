@@ -174,6 +174,20 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(String(parallelTaskLaneSchema?.description ?? ""), /lane/i);
 	});
 
+
+	it("accepts max thinking overrides in every execution shape", () => {
+		const expected = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+		const singleThinking = SubagentParams?.properties?.thinking as JsonSchemaNode | undefined;
+		const taskThinking = arrayItemProperties(SubagentParams?.properties?.tasks)?.thinking;
+		const chainProperties = arrayItemProperties(SubagentParams?.properties?.chain);
+		const chainThinking = chainProperties?.thinking;
+		const parallelThinking = arrayItemProperties(chainProperties?.parallel)?.thinking;
+
+		for (const schema of [singleThinking, taskThinking, chainThinking, parallelThinking]) {
+			assert.deepEqual(schema?.enum, expected);
+		}
+	});
+
 	it("uses an enum for management and control actions", () => {
 		const actionSchema = SubagentParams?.properties?.action;
 		assert.ok(actionSchema, "action schema should exist");
@@ -228,7 +242,9 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 				}
 
 				if (Array.isArray(current.value)) {
-					current.value.forEach((value, index) => stack.push({ path: `${current.path}[${index}]`, value }));
+					current.value.forEach((value, index) => {
+						stack.push({ path: `${current.path}[${index}]`, value });
+					});
 					continue;
 				}
 
@@ -256,7 +272,9 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 				}
 
 				if (Array.isArray(current.value)) {
-					current.value.forEach((value, index) => stack.push({ path: `${current.path}[${index}]`, value }));
+					current.value.forEach((value, index) => {
+						stack.push({ path: `${current.path}[${index}]`, value });
+					});
 					continue;
 				}
 
@@ -287,7 +305,9 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 				}
 
 				if (Array.isArray(current.value)) {
-					current.value.forEach((value, index) => stack.push({ path: `${current.path}[${index}]`, value }));
+					current.value.forEach((value, index) => {
+						stack.push({ path: `${current.path}[${index}]`, value });
+					});
 					continue;
 				}
 

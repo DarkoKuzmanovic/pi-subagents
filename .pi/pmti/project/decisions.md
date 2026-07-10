@@ -42,3 +42,14 @@
 **Implementation requirement:** Disabled compatibility agents stay parseable through `discoverAgentsAll`; normal `discoverAgents` and management list output hide them unless explicitly re-enabled. Public guidance should route local/web recon through `recon`, synthesis through `reviewer`, test-focused implementation through `worker`, and cleanup through `janitor`.
 
 **Future work:** A lane-editing TUI is deferred until the JSON control plane has baked in real use.
+
+## 2026-07-10 — Pi 0.80.6 `max` thinking compatibility is a maintenance patch
+
+**Decision:** Add Pi 0.80.6's opt-in `max` thinking level across pi-subagents without reopening completed M0 or creating a new PMTI milestone.
+
+**Rationale:** M0's scope-out bounded that June 2026 milestone and the roadmap now has no active milestone. Pi 0.80.6 added `max` as a public thinking level after M0 closed. Updating only `models.json` would leave pi-subagents' schema, suffix normalization, model capability filtering, and selectors unable to dispatch the new level end to end.
+
+**Alternatives considered:**
+
+- Config-only model mappings: rejected because `subagent({ thinking: "max" })` would remain rejected or mishandled.
+- Open a new M3 milestone: rejected for this bounded compatibility patch; the existing task plan and focused regression suite are sufficient.
