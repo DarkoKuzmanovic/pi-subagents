@@ -44,13 +44,25 @@ interface ExecutionModule {
 const execution = await tryImport<ExecutionModule>("./src/runs/foreground/execution.ts");
 const runSync = execution?.runSync;
 
-/** One thinking-only child event (~64 KB serialized) with no progress marker. */
+/** One thinking-only streaming update (~64 KB serialized) with no progress marker. */
 function thinkingFloodEvent(): Record<string, unknown> {
+	return {
+		type: "message_update",
+		message: {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "loop ".repeat(13_000) }],
+		},
+		assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "loop " },
+	};
+}
+
+function textProgressEvent(): Record<string, unknown> {
 	return {
 		type: "message_end",
 		message: {
 			role: "assistant",
-			content: [{ type: "thinking", thinking: "loop ".repeat(13_000) }],
+			content: [{ type: "text", text: "Initial progress" }],
+			stopReason: "toolUse",
 		},
 	};
 }
@@ -89,9 +101,20 @@ describe("runaway stream watchdog (foreground)", { skip: !runSync ? "pi packages
 
 		assert.equal(result.exitCode, 1, "runaway run must fail");
 		assert.notEqual(result.interrupted, true);
-		assert.match(result.error ?? "", /runaway output aborted: \d+ MB of model events with no text or tool activity \(likely a thinking loop\)/);
+		assert.match(result.error ?? "", /runaway output aborted: \d+ MB of raw model events since last text or tool activity .*likely a thinking loop/);
 		// The failure must flow through the existing attempt/error reporting.
 		assert.match(result.modelAttempts?.at(-1)?.error ?? "", /runaway output aborted/);
+	});
+
+	it("aborts a later thinking-only flood after earlier progress", { timeout: 120_000 }, async () => {
+		const flood = Array.from({ length: 500 }, () => thinkingFloodEvent());
+		mockPi.onCall({ jsonl: [textProgressEvent(), ...flood], keepAliveAfterFinalMessageMs: 2_000, exitCode: 0 });
+		const agents = makeAgentConfigs(["late-flooder"]);
+
+		const result = await runSync!(tempDir, agents, "late-flooder", "Continue after the first tool result", {});
+
+		assert.equal(result.exitCode, 1, "later runaway turn must fail even after prior progress");
+		assert.match(result.error ?? "", /since last text or tool activity/);
 	});
 
 	it("leaves a healthy small run untouched", async () => {

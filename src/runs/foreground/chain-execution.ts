@@ -108,6 +108,7 @@ interface ParallelChainRunInput {
 	intercomEvents?: IntercomEventBus;
 	cwd?: string;
 	runId: string;
+	runStartedAt: number;
 	globalTaskIndex: number;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex?: (idx?: number) => string | undefined;
@@ -265,6 +266,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				allowIntercomDetach: taskAgentConfig?.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
 				intercomEvents: input.intercomEvents,
 				runId: input.runId,
+				runStartedAt: input.runStartedAt,
 				index: input.globalTaskIndex + taskIndex,
 				sessionDir: input.sessionDirForIndex(input.globalTaskIndex + taskIndex),
 				sessionFile: input.sessionFileForIndex?.(input.globalTaskIndex + taskIndex),
@@ -588,6 +590,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		tuiBehaviorOverrides = result.behaviorOverrides;
 	}
 
+	const runStartedAt = Date.now();
 	const results: SingleResult[] = [];
 	const outputs: ChainOutputMap = {};
 	let prev = "";
@@ -716,6 +719,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					intercomEvents,
 					cwd,
 					runId,
+					runStartedAt,
 					globalTaskIndex,
 					sessionDirForIndex,
 					sessionFileForIndex,
@@ -910,6 +914,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				intercomEvents,
 				cwd,
 				runId,
+				runStartedAt,
 				globalTaskIndex,
 				sessionDirForIndex,
 				sessionFileForIndex,
@@ -1091,6 +1096,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				allowIntercomDetach: agentConfig.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
 				intercomEvents,
 				runId,
+				runStartedAt,
 				index: globalTaskIndex,
 				sessionDir: sessionDirForIndex(globalTaskIndex),
 				sessionFile: sessionFileForIndex?.(globalTaskIndex),

@@ -9,8 +9,9 @@
  *
  * 1. `createStreamWatchdog` — per-child-process guard over the `--mode json`
  *    stdout stream:
- *    - No-progress trip (raw bytes): a child that floods stdout without ever
- *      producing a meaningful progress marker (assistant text or a tool call).
+ *    - Rolling no-progress trip (raw bytes): a child that floods stdout without
+ *      producing a new meaningful progress marker (assistant text or a tool call),
+ *      even when an earlier turn had made progress.
  *    - Degenerate-loop trip (parsed deltas): a periodic-suffix detector over
  *      the normalized streaming-delta tail of the current content block.
  *      Chunking-independent and value-cycle-tolerant, because real loops vary
@@ -38,9 +39,9 @@
 export const EVENTS_JSONL_BYTE_BUDGET = 50 * 1024 * 1024; // 50 MB
 
 /**
- * Runaway trip: raw stdout bytes with NO progress marker yet.
+ * Runaway trip: raw stdout bytes since the latest meaningful progress marker.
  * Healthy runs sit in the 90 KB–550 KB range; heavy-but-healthy runs reach
- * ~30 MB only WITH text present — hence the no-progress qualifier.
+ * ~30 MB only while continuing to emit text/tool progress.
  */
 export const RUNAWAY_NO_PROGRESS_BYTES = 30 * 1024 * 1024; // 30 MB
 
@@ -90,18 +91,34 @@ function formatMb(bytes: number): number {
 	return Math.round(bytes / BYTES_PER_MB);
 }
 
+function formatAmplification(rawBytes: number, accountedBytes: number): string {
+	if (accountedBytes <= 0) return "n/a";
+	const ratio = rawBytes / accountedBytes;
+	return `${ratio < 10 ? ratio.toFixed(1) : Math.round(ratio)}x`;
+}
+
+function formatStreamStats(rawBytes: number, accountedBytes: number): string {
+	return `raw total ${formatMb(rawBytes)} MB, accounted ${formatMb(accountedBytes)} MB, amplification ${formatAmplification(rawBytes, accountedBytes)}`;
+}
+
 /**
- * True when a parsed `--mode json` child event carries a meaningful progress
- * marker: a tool actually executing, or an assistant content block of type
- * `text` (non-empty) or `toolCall`/`tool_use`. Thinking-only assistant
- * messages are NOT progress — that is exactly the runaway-loop signature.
+ * True when the CURRENT parsed child event carries meaningful progress. For
+ * `message_update`, inspect the delta event rather than the re-serialized full
+ * message snapshot: stale text from earlier in the same message must not make
+ * a later thinking-only update look productive.
  */
 export function eventShowsProgress(event: unknown): boolean {
 	if (!event || typeof event !== "object") return false;
 	const evt = event as { type?: unknown; message?: unknown };
-	// Tool execution events imply the model emitted a tool call — progress.
 	if (evt.type === "tool_execution_start" || evt.type === "tool_execution_end" || evt.type === "tool_result_end") {
 		return true;
+	}
+	if (evt.type === "message_update") {
+		const streamingDelta = extractStreamingDelta(event);
+		if (!streamingDelta) return false;
+		const kind = streamingDelta.kind.toLowerCase();
+		if (kind === "text_delta") return streamingDelta.delta.trim().length > 0;
+		return kind === "toolcall_delta" || kind === "tool_call_delta" || kind === "tool_use_delta";
 	}
 	const message = evt.message;
 	if (!message || typeof message !== "object") return false;
@@ -202,6 +219,8 @@ export interface StreamWatchdog {
 	readonly bytes: number;
 	/** Delta-aware accounted model-output bytes seen so far. */
 	readonly accountedBytes: number;
+	/** Raw stdout bytes received since the latest meaningful progress event. */
+	readonly bytesSinceProgress: number;
 	readonly hasProgress: boolean;
 	readonly tripped: boolean;
 }
@@ -217,6 +236,7 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 	let rawBytes = 0;
 	let accountedBytes = 0;
 	let hasProgress = false;
+	let lastProgressRawBytes = 0;
 	let tripped = false;
 
 	// Degenerate-loop detector state, tracked PER content block because real
@@ -241,18 +261,26 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 			if (typeof count === "number" && Number.isFinite(count) && count > 0) {
 				rawBytes += count;
 			}
-			if (rawBytes > rawHardCapBytes) {
-				return trip(`runaway output aborted: ${formatMb(rawBytes)} MB of raw model events exceeded the ${formatMb(rawHardCapBytes)} MB raw output backstop`);
+			const bytesSinceProgress = rawBytes - lastProgressRawBytes;
+			if (bytesSinceProgress > noProgressBytes) {
+				return trip(
+					`runaway output aborted: ${formatMb(bytesSinceProgress)} MB of raw model events since last text or tool activity (${formatStreamStats(rawBytes, accountedBytes)}; likely a thinking loop)`,
+				);
 			}
-			if (!hasProgress && rawBytes > noProgressBytes) {
-				return trip(`runaway output aborted: ${formatMb(rawBytes)} MB of model events with no text or tool activity (likely a thinking loop)`);
+			if (rawBytes > rawHardCapBytes) {
+				return trip(
+					`runaway output aborted: ${formatMb(rawBytes)} MB of raw model events exceeded the ${formatMb(rawHardCapBytes)} MB raw output backstop (${formatStreamStats(rawBytes, accountedBytes)}, ${formatMb(bytesSinceProgress)} MB since last text or tool activity)`,
+				);
 			}
 			return undefined;
 		},
 		observeEvent(event: unknown, serializedBytes?: number): string | undefined {
 			if (tripped) return undefined;
 			try {
-				if (!hasProgress) hasProgress = eventShowsProgress(event);
+				if (eventShowsProgress(event)) {
+					hasProgress = true;
+					lastProgressRawBytes = rawBytes;
+				}
 
 				const streamingDelta = extractStreamingDelta(event);
 
@@ -292,7 +320,7 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 				}
 
 				if (accountedBytes > hardCapBytes) {
-					return trip(`runaway output aborted: ${formatMb(accountedBytes)} MB of model output exceeded the ${formatMb(hardCapBytes)} MB hard output cap`);
+					return trip(`runaway output aborted: ${formatMb(accountedBytes)} MB of model output exceeded the ${formatMb(hardCapBytes)} MB hard output cap (${formatStreamStats(rawBytes, accountedBytes)})`);
 				}
 			} catch {
 				// Watchdog observation is best-effort; malformed events never throw.
@@ -304,6 +332,9 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 		},
 		get accountedBytes() {
 			return accountedBytes;
+		},
+		get bytesSinceProgress() {
+			return rawBytes - lastProgressRawBytes;
 		},
 		get hasProgress() {
 			return hasProgress;

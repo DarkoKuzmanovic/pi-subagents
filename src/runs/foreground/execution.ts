@@ -59,6 +59,7 @@ import {
 	didMutatingToolFail,
 	isMutatingTool,
 	nextLongRunningTrigger,
+	nextRunTimeoutTrigger,
 	nextStepTimeoutTrigger,
 	recordMutatingFailure,
 	resetMutatingFailureState,
@@ -105,6 +106,71 @@ function snapshotResult(result: SingleResult, progress: AgentProgress): SingleRe
 		truncation: result.truncation ? { ...result.truncation } : undefined,
 		outputReference: result.outputReference ? { ...result.outputReference } : undefined,
 	};
+}
+
+function createRunWallClockTimeoutResult(
+	agent: AgentConfig,
+	task: string,
+	options: RunSyncOptions,
+	runStartedAt: number,
+	now = Date.now(),
+): SingleResult {
+	const elapsedMs = Math.max(0, now - runStartedAt);
+	const error = `Timed out: run exceeded ${Math.floor(elapsedMs / 1000)}s wall-clock limit before this child could start`;
+	const progress: AgentProgress = {
+		index: options.index ?? 0,
+		agent: agent.name,
+		status: "failed",
+		activityState: "timed_out",
+		task,
+		recentTools: [],
+		recentOutput: [],
+		toolCount: 0,
+		tokens: 0,
+		durationMs: 0,
+		lastActivityAt: runStartedAt,
+	};
+	const controlConfig = options.controlConfig ?? DEFAULT_CONTROL_CONFIG;
+	const event = buildControlEvent({
+		type: "timeout_killed",
+		to: "timed_out",
+		runId: options.runId,
+		agent: agent.name,
+		index: options.index,
+		ts: now,
+		message: error,
+		reason: "timeout_killed",
+		turns: 0,
+		tokens: 0,
+		toolCount: 0,
+		elapsedMs,
+	});
+	const notify = shouldNotifyControlEvent(controlConfig, event);
+	if (notify) options.onControlEvent?.(event);
+	const result: SingleResult = {
+		agent: agent.name,
+		task,
+		exitCode: 1,
+		messages: [],
+		usage: emptyUsage(),
+		error,
+		progress,
+		progressSummary: { toolCount: 0, tokens: 0, durationMs: 0 },
+		controlEvents: notify ? [event] : undefined,
+	};
+	if (options.onUpdate) {
+		const progressSnapshot = snapshotProgress(progress);
+		options.onUpdate({
+			content: [{ type: "text", text: error }],
+			details: {
+				mode: "single",
+				results: [snapshotResult(result, progressSnapshot)],
+				progress: [progressSnapshot],
+				controlEvents: notify ? [event] : undefined,
+			},
+		});
+	}
+	return result;
 }
 
 async function runSingleAttempt(
@@ -171,6 +237,7 @@ async function runSingleAttempt(
 		skillsWarning: shared.skillsWarning,
 	};
 	const startTime = Date.now();
+	const runStartedAt = options.runStartedAt ?? startTime;
 	const controlConfig = options.controlConfig ?? DEFAULT_CONTROL_CONFIG;
 	let interruptedByControl = false;
 	let timedOutByControl = false;
@@ -381,7 +448,7 @@ async function runSingleAttempt(
 			const elapsedSeconds = Math.floor(Math.max(0, now - lastActivityAt) / 1000);
 			result.error = reason === "step_inactivity_timeout"
 				? `Timed out: no activity for ${elapsedSeconds}s (step inactivity timeout)`
-				: `Timed out: run exceeded ${Math.floor(Math.max(0, now - startTime) / 1000)}s wall-clock limit`;
+				: `Timed out: run exceeded ${Math.floor(Math.max(0, now - runStartedAt) / 1000)}s wall-clock limit`;
 			emitControlEvent(buildControlEvent({
 				type: "timeout_killed",
 				from: previous,
@@ -398,7 +465,7 @@ async function runSingleAttempt(
 				currentTool: progress.currentTool,
 				currentToolDurationMs: currentToolDurationMs(now),
 				currentPath: progress.currentPath,
-				elapsedMs: Math.max(0, now - lastActivityAt),
+				elapsedMs: reason === "run_wall_clock_timeout" ? Math.max(0, now - runStartedAt) : Math.max(0, now - lastActivityAt),
 			}));
 			// Reuse existing SIGINT → SIGTERM escalation; SIGKILL escalation deferred.
 			trySignalChild(proc, "SIGINT");
@@ -406,6 +473,11 @@ async function runSingleAttempt(
 		};
 		const updateActivityState = (now: number): boolean => {
 			if (!controlConfig.enabled || timedOutByControl) return false;
+			const runTimeoutReason = nextRunTimeoutTrigger(controlConfig, { startedAt: runStartedAt, now });
+			if (runTimeoutReason) {
+				killByTimeout(now, runTimeoutReason);
+				return true;
+			}
 			const lastActivityAt = progress.lastActivityAt ?? startTime;
 			const idleState = deriveActivityState({
 				config: controlConfig,
@@ -884,6 +956,12 @@ export async function runSync(
 			error: outputModeValidationError,
 		};
 	}
+	const runStartedAt = options.runStartedAt ?? Date.now();
+	const runOptions: RunSyncOptions = options.runStartedAt === runStartedAt ? options : { ...options, runStartedAt };
+	const runControlConfig = runOptions.controlConfig ?? DEFAULT_CONTROL_CONFIG;
+	if (runControlConfig.enabled && nextRunTimeoutTrigger(runControlConfig, { startedAt: runStartedAt, now: Date.now() })) {
+		return createRunWallClockTimeoutResult(agent, task, runOptions, runStartedAt);
+	}
 
 	const shareEnabled = options.share === true;
 	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
@@ -947,12 +1025,16 @@ export async function runSync(
 	try {
 		const modelsToTry = candidates.length > 0 ? candidates : [undefined];
 		for (let i = 0; i < modelsToTry.length; i++) {
+			if (runControlConfig.enabled && nextRunTimeoutTrigger(runControlConfig, { startedAt: runStartedAt, now: Date.now() })) {
+				lastResult = createRunWallClockTimeoutResult(agent, task, runOptions, runStartedAt);
+				break;
+			}
 			const candidate = modelsToTry[i];
 			if (candidate) attemptedModels.push(candidate);
 			// Clear any capture written by a prior failed attempt so the final attempt must write its own.
 			resetStructuredOutputCapture(structuredRuntime);
 			const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
-			const result = await runSingleAttempt(runtimeCwd, agent, task, candidate, options, {
+			const result = await runSingleAttempt(runtimeCwd, agent, task, candidate, runOptions, {
 				sessionEnabled,
 				systemPrompt,
 				resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,

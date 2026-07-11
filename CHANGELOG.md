@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Later-turn thinking floods are bounded again.** The 30 MB no-progress watchdog now measures raw bytes since the most recent *current* text/tool event instead of permanently disabling itself after the first successful turn. Streaming updates inspect their delta rather than stale full-message snapshot content. Size-triggered errors now report raw bytes, delta-aware accounted bytes, amplification ratio, and bytes since meaningful progress.
+- **Foreground wall-clock limits are run-wide.** Single retries, top-level parallel siblings, queued work, and chain steps now share one `control.runWallClockTimeoutMs` deadline, matching detached/background semantics even while active children continue emitting events. Queued children are not launched after that deadline.
+- **`maxOutput` now matches its public contract.** The tool schema exposes `bytes`/`lines` as post-run inline-result truncation, and documentation explicitly distinguishes it from model-generation, per-child token, and runtime limits.
+
+### Tests
+
+- Added unit and foreground integration regressions for progress followed by a later thinking-only flood, stale snapshot text, rolling progress resets, amplification diagnostics, single-child wall-clock termination, shared top-level/chain parallel deadlines, and `maxOutput` schema semantics.
+
 ## [0.40.1] - 2026-07-10
 
 ### Added
