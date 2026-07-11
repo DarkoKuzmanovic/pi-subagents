@@ -126,6 +126,23 @@ describe("eventShowsProgress", () => {
 		assert.equal(eventShowsProgress(thinkingEvent()), false);
 	});
 
+	it("uses the current streaming delta, not stale snapshot content, as progress", () => {
+		const staleSnapshot = {
+			...deltaEvent("thinking_delta", 1, "still thinking"),
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "earlier text from this message" },
+					{ type: "thinking", thinking: "still thinking" },
+				],
+			},
+		};
+
+		assert.equal(eventShowsProgress(staleSnapshot), false);
+		assert.equal(eventShowsProgress(deltaEvent("text_delta", 0, "new text")), true);
+		assert.equal(eventShowsProgress(deltaEvent("toolcall_delta", 1, '{"path":"src"}')), true);
+	});
+
 	it("does NOT treat empty/whitespace text blocks as progress", () => {
 		assert.equal(eventShowsProgress(textEvent("")), false);
 		assert.equal(eventShowsProgress(textEvent("   \n")), false);
@@ -216,7 +233,7 @@ describe("createStreamWatchdog: raw-byte guards (addBytes)", () => {
 		assert.equal(watchdog.addBytes(RUNAWAY_NO_PROGRESS_BYTES), undefined, "exactly at the limit must not trip");
 		const message = watchdog.addBytes(1);
 		assert.ok(message, "must trip past the limit");
-		assert.match(message!, /^runaway output aborted: 30 MB of model events with no text or tool activity \(likely a thinking loop\)$/);
+		assert.match(message!, /^runaway output aborted: 30 MB of raw model events since last text or tool activity .*likely a thinking loop/);
 		assert.equal(watchdog.tripped, true);
 	});
 
@@ -228,19 +245,31 @@ describe("createStreamWatchdog: raw-byte guards (addBytes)", () => {
 		assert.equal(watchdog.tripped, true);
 	});
 
-	it("does NOT trip at 30 MB+ when a progress marker was seen (heavy healthy run)", () => {
+	it("trips on a later no-progress flood even after earlier progress", () => {
 		const watchdog = createStreamWatchdog();
 		watchdog.observeEvent(textEvent("real output"));
-		assert.equal(watchdog.addBytes(35 * MB), undefined);
-		assert.equal(watchdog.tripped, false);
-		assert.equal(watchdog.hasProgress, true);
+		assert.equal(watchdog.addBytes(RUNAWAY_NO_PROGRESS_BYTES), undefined, "exactly one rolling window must not trip");
+		const message = watchdog.addBytes(1);
+		assert.ok(message);
+		assert.match(message!, /since last text or tool activity/);
+		assert.match(message!, /accounted .* amplification/);
+		assert.equal(watchdog.tripped, true);
 	});
 
-	it("progress observed via tool_execution_start also suppresses the 30 MB trip", () => {
-		const watchdog = createStreamWatchdog();
+	it("a tool event resets only the current no-progress byte window", () => {
+		const watchdog = createStreamWatchdog({ noProgressBytes: 100, rawHardCapBytes: 10_000 });
+		assert.equal(watchdog.addBytes(80), undefined);
 		watchdog.observeEvent({ type: "tool_execution_start", toolName: "read" });
-		assert.equal(watchdog.addBytes(35 * MB), undefined);
-		assert.equal(watchdog.tripped, false);
+		assert.equal(watchdog.addBytes(100), undefined, "exactly one window after progress must not trip");
+		assert.match(watchdog.addBytes(1) ?? "", /since last text or tool activity/);
+	});
+
+	it("a current text delta resets the rolling window", () => {
+		const watchdog = createStreamWatchdog({ noProgressBytes: 100, rawHardCapBytes: 10_000 });
+		assert.equal(watchdog.addBytes(80), undefined);
+		watchdog.observeEvent(deltaEvent("text_delta", 0, "working"));
+		assert.equal(watchdog.addBytes(100), undefined);
+		assert.ok(watchdog.addBytes(1));
 	});
 
 	it("thinking-only events do not count as progress: still trips at 30 MB", () => {
@@ -250,12 +279,14 @@ describe("createStreamWatchdog: raw-byte guards (addBytes)", () => {
 	});
 
 	it("raw backstop trips past 1 GB even with progress", () => {
-		const watchdog = createStreamWatchdog();
+		const watchdog = createStreamWatchdog({ noProgressBytes: RUNAWAY_RAW_HARD_CAP_BYTES * 2 });
 		watchdog.observeEvent(textEvent("real output"));
 		assert.equal(watchdog.addBytes(RUNAWAY_RAW_HARD_CAP_BYTES), undefined, "exactly at the backstop must not trip");
 		const message = watchdog.addBytes(1);
 		assert.ok(message);
 		assert.match(message!, /raw output backstop/);
+
+		assert.match(message!, /accounted .* amplification/);
 		assert.equal(watchdog.tripped, true);
 	});
 

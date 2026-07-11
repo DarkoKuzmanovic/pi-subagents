@@ -28,6 +28,16 @@ const OutputModeOverride = Type.String({
 	description: "Return saved output inline (default) or only a concise file reference. file-only requires output to be a path.",
 });
 
+const MaxOutputParam = Type.Object(
+	{
+		bytes: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum UTF-8 bytes returned inline after the child finishes." })),
+		lines: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum lines returned inline after the child finishes." })),
+	},
+	{
+		description: "Post-run truncation limits for model-visible returned text. Full output remains in artifacts/session data. This does not limit model generation or child runtime.",
+	},
+);
+
 const ReadsOverride = Type.Unsafe({
 	anyOf: [
 		{ type: "array", items: { type: "string" } },
@@ -179,6 +189,7 @@ export const SubagentParams = Type.Object({
 	cwd: Type.Optional(Type.String()),
 	artifacts: Type.Optional(Type.Boolean({ description: "Write debug artifacts (default: true)" })),
 	includeProgress: Type.Optional(Type.Boolean({ description: "Include full progress in result (default: false)" })),
+	maxOutput: Type.Optional(MaxOutputParam),
 	budget: Type.Optional(Type.Integer({ minimum: 1, description: "Per-run output token budget override. Stops launching new subagents once completed children have produced this many output tokens; already-running children are not killed, so overshoot is possible." })),
 	share: Type.Optional(Type.Boolean({ description: "Upload session to GitHub Gist for sharing (default: false)" })),
 	sessionDir: Type.Optional(

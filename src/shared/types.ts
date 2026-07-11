@@ -598,6 +598,8 @@ export interface RunSyncOptions {
 	onUpdate?: (r: import("@earendil-works/pi-agent-core").AgentToolResult<Details>) => void;
 	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig?: ResolvedControlConfig;
+	/** Shared foreground-run start timestamp used to enforce one wall-clock deadline across retries, siblings, and queued work. */
+	runStartedAt?: number;
 	intercomSessionName?: string;
 	orchestratorIntercomTarget?: string;
 	maxOutput?: MaxOutputConfig;

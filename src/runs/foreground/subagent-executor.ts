@@ -1565,6 +1565,7 @@ interface ForegroundParallelRunInput {
 	intercomEvents: IntercomEventBus;
 	signal: AbortSignal;
 	runId: string;
+	runStartedAt: number;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex: (idx?: number) => string | undefined;
 	shareEnabled: boolean;
@@ -1726,6 +1727,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			allowIntercomDetach: agentConfig?.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
 			intercomEvents: input.intercomEvents,
 			runId: input.runId,
+			runStartedAt: input.runStartedAt,
 			index,
 			sessionDir: input.sessionDirForIndex(index),
 			sessionFile: input.sessionFileForIndex(index),
@@ -2017,6 +2019,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			}
 		}
 
+		const runStartedAt = Date.now();
 		const results = await runForegroundParallelTasks({
 			tasks,
 			taskTexts,
@@ -2025,6 +2028,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			intercomEvents: deps.pi.events,
 			signal,
 			runId,
+			runStartedAt,
 			sessionDirForIndex,
 			sessionFileForIndex,
 			shareEnabled,

@@ -257,6 +257,33 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.progress.activityState, "active_long_running");
 	});
 
+	it("kills a foreground child at the run wall-clock limit", { timeout: 10_000 }, async () => {
+		mockPi.onCall({ delay: 2_500, output: "Too late" });
+		const agents = makeAgentConfigs(["slow"]);
+		const controlEvents: NonNullable<RunSyncResult["controlEvents"]> = [];
+
+		const result = await runSync(tempDir, agents, "slow", "Keep producing activity forever", {
+			runId: "run-wall-clock",
+			controlConfig: {
+				enabled: true,
+				needsAttentionAfterMs: 999_999,
+				activeNoticeAfterMs: 999_999,
+				failedToolAttemptsBeforeAttention: 3,
+				notifyOn: ["timeout_killed"],
+				notifyChannels: ["event"],
+				stepInactivityTimeoutMs: 999_999,
+				runWallClockTimeoutMs: 100,
+				timeoutAction: "auto_kill",
+				escalationGraceMs: 100,
+			},
+			onControlEvent: (event: NonNullable<RunSyncResult["controlEvents"]>[number]) => controlEvents.push(event),
+		});
+
+		assert.equal(result.exitCode, 1);
+		assert.match(result.error ?? "", /wall-clock limit/);
+		assert.equal(controlEvents.some((event) => event.type === "timeout_killed"), true);
+	});
+
 	it("escalates repeated mutating tool failures to needs attention", async () => {
 		mockPi.onCall({
 			jsonl: [

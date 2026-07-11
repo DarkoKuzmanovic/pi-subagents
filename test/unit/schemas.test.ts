@@ -45,6 +45,7 @@ interface SubagentParamsSchema {
 		};
 		skill?: JsonSchemaNode;
 		output?: JsonSchemaNode;
+		maxOutput?: JsonSchemaNode;
 		config?: JsonSchemaNode;
 		chain?: JsonSchemaNode;
 	};
@@ -149,6 +150,18 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(budgetSchema.minimum, 1);
 		assert.match(String(budgetSchema.description ?? ""), /output token/i);
 		assert.match(String(budgetSchema.description ?? ""), /per-run/i);
+	});
+
+	it("describes maxOutput as post-run truncation rather than a generation cap", () => {
+		const maxOutputSchema = SubagentParams?.properties?.maxOutput;
+		assert.ok(maxOutputSchema, "maxOutput schema should exist");
+		assert.equal(maxOutputSchema.type, "object");
+		const properties = maxOutputSchema.properties as Record<string, JsonSchemaNode> | undefined;
+		assert.equal(properties?.bytes?.minimum, 1);
+		assert.equal(properties?.lines?.minimum, 1);
+		const description = String(maxOutputSchema.description ?? "");
+		assert.match(description, /post-run/i);
+		assert.match(description, /does not limit model generation/i);
 	});
 
 	it("includes lane selectors on single, parallel, and chain execution inputs", () => {

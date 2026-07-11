@@ -112,7 +112,7 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		removeTempDir(tempDir);
 	});
 
-	function makeExecutor(agents = [makeAgent("echo")]) {
+	function makeExecutor(agents = [makeAgent("echo")], config: Record<string, unknown> = {}) {
 		return createSubagentExecutor({
 			pi: { events: createEventBus(), getSessionName: () => undefined },
 			state: {
@@ -134,7 +134,7 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 					clear: () => {},
 				},
 			},
-			config: {},
+			config,
 			asyncByDefault: false,
 			tempArtifactsDir: tempDir,
 			getSubagentSessionRoot: () => tempDir,
@@ -194,6 +194,40 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		assert.equal(results[1].agent, "b");
 		const ok = results.filter((r: any) => r.exitCode === 0).length;
 		assert.equal(ok, 2);
+	});
+
+	it("applies one wall-clock deadline to a concurrency-limited top-level parallel run", { timeout: 10_000 }, async () => {
+		mockPi.onCall({ delay: 2_500, output: "Too late" });
+		const executor = makeExecutor([makeAgent("slow")], { parallel: { concurrency: 1 } });
+
+		const result = await executor.execute(
+			"parallel-wall-clock",
+			{
+				tasks: [
+					{ agent: "slow", task: "First slow task" },
+					{ agent: "slow", task: "Queued slow task" },
+					{ agent: "slow", task: "Never-started slow task" },
+				],
+				concurrency: 1,
+				control: {
+					runWallClockTimeoutMs: 100,
+					stepInactivityTimeoutMs: 999_999,
+				},
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const results = result.details?.results ?? [];
+		assert.equal(results.length, 3);
+		assert.equal(
+			fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).length,
+			1,
+			"queued tasks must not spawn after the shared deadline",
+		);
+		assert.equal(results.every((child) => child.exitCode === 1), true);
+		for (const child of results) assert.match(child.error ?? "", /wall-clock limit/);
 	});
 
 	it("top-level parallel output saves use per-task output paths", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

@@ -24,6 +24,7 @@ import {
 	events,
 } from "../support/helpers.ts";
 import { INTERCOM_DETACH_REQUEST_EVENT, SUBAGENT_BUDGET_EXHAUSTED_EVENT, type BudgetExhaustedEvent } from "../../src/shared/types.ts";
+import { DEFAULT_CONTROL_CONFIG } from "../../src/runs/shared/subagent-control.ts";
 
 interface TestSequentialStep {
 	agent: string;
@@ -62,6 +63,7 @@ interface ChainResultItem {
 	exitCode: number;
 	finalOutput?: string;
 	task?: string;
+	error?: string;
 	detached?: boolean;
 	attemptedModels?: string[];
 	skills?: string[];
@@ -199,6 +201,34 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		assert.equal(exhaustedEvent?.budget.limit, 50);
 		assert.equal(exhaustedEvent?.mode, "chain");
 		assert.equal(exhaustedEvent?.skippedFromStepIndex, 1);
+	});
+
+	it("shares one wall-clock deadline across a concurrency-limited parallel chain step", { timeout: 10_000 }, async () => {
+		mockPi.onCall({ delay: 2_500, output: "Too late" });
+
+		const result = await executeChain!(makeChainParams(
+			[{
+				parallel: [
+					{ agent: "slow", task: "First slow task" },
+					{ agent: "slow", task: "Queued slow task" },
+					{ agent: "slow", task: "Never-started slow task" },
+				],
+				concurrency: 1,
+			}],
+			[makeAgent("slow")],
+			{
+				controlConfig: {
+					...DEFAULT_CONTROL_CONFIG,
+					runWallClockTimeoutMs: 100,
+					stepInactivityTimeoutMs: 999_999,
+				},
+			},
+		));
+
+		assert.equal(mockPi.callCount(), 1, "queued chain tasks must not spawn after the shared deadline");
+		assert.equal(result.details.results.length, 3);
+		assert.equal(result.details.results.every((child) => child.exitCode === 1), true);
+		for (const child of result.details.results) assert.match(child.error ?? "", /wall-clock limit/);
 	});
 
 	it("lets an already-launched parallel group finish before budget exhaustion skips later steps", async () => {
