@@ -66,7 +66,7 @@ import {
 	nextRunTimeoutTrigger,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
-import { parseSessionTokens } from "../../shared/session-tokens.ts";
+import { createStepTokenLedger, parseSessionTokens } from "../../shared/session-tokens.ts";
 import type { TokenUsage } from "../../shared/types.ts";
 import {
 	cleanupWorktrees,
@@ -286,7 +286,13 @@ function runPiStreaming(
 			errorFromChildMessage = false;
 			trySignalChild(child, "SIGINT");
 			setTimeout(() => {
-				if (!settled) trySignalChild(child, "SIGTERM");
+				if (settled) return;
+				trySignalChild(child, "SIGTERM");
+				// SIGKILL backstop: a runaway child ignoring SIGTERM must not linger. Mirrors the
+				// final-drain escalation (startFinalDrain), which also hard-kills after HARD_KILL_MS.
+				setTimeout(() => {
+					if (!settled) trySignalChild(child, "SIGKILL");
+				}, HARD_KILL_MS).unref?.();
 			}, 1000).unref?.();
 		};
 
@@ -992,7 +998,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	let interrupted = false;
 	let currentActivityState: ActivityState | undefined;
 	let activityTimer: NodeJS.Timeout | undefined;
-	let previousCumulativeTokens: TokenUsage = { input: 0, output: 0, total: 0 };
+	const tokenLedger = createStepTokenLedger();
 	let latestSessionFile: string | undefined;
 
 	const parallelGroups: Array<{ start: number; count: number; stepIndex: number }> = [];
@@ -1607,10 +1613,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						// Deregister the per-step interrupt (child has exited).
 						activeChildInterrupts.delete(fi);
 
-						// Preserve killStep's writes when the step was killed by inactivity timeout.
-						// Without this, an `interrupted` child returns exitCode 0 and overwrites status to "complete".
+						// Preserve killStep's writes when the step was killed by inactivity timeout,
+						// and interruptRunner's "paused" state when the run was interrupted. Without this,
+						// a timed-out/interrupted child returns exitCode 0 and overwrites status to "complete".
 						const wasTimedOut = statusPayload.steps[fi].activityState === "timed_out";
-						if (!wasTimedOut) {
+						if (!wasTimedOut && !interrupted) {
 							statusPayload.steps[fi].status = singleResult.exitCode === 0 ? "complete" : "failed";
 							statusPayload.steps[fi].endedAt = taskEndTime;
 							statusPayload.steps[fi].durationMs = taskDuration;
@@ -1659,13 +1666,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						if (!taskTokens) continue;
 						recordBudgetUsage(tokenBudget, taskTokens);
 						statusPayload.steps[fi].tokens = taskTokens;
-						previousCumulativeTokens = {
-							input: previousCumulativeTokens.input + taskTokens.input,
-							output: previousCumulativeTokens.output + taskTokens.output,
-							total: previousCumulativeTokens.total + taskTokens.total,
-						};
+						tokenLedger.addParallel(taskTokens);
 					}
-					statusPayload.totalTokens = { ...previousCumulativeTokens };
+					statusPayload.totalTokens = tokenLedger.total;
 					statusPayload.lastUpdate = Date.now();
 					writeAtomicJson(statusPath, statusPayload);
 				} catch (tokenErr) {
@@ -1951,10 +1954,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			// actually succeeded, and the stale-run reconciler would then mark a completed run
 			// as "failed". Recording success first lets the reconciler salvage it as complete.
 			//
-			// Preserve killStep's writes when the step was killed by inactivity timeout.
-			// Without this, an `interrupted` child returns exitCode 0 and overwrites status to "complete".
+			// Preserve killStep's writes when the step was killed by inactivity timeout,
+			// and interruptRunner's "paused" state when the run was interrupted. Without this,
+			// a timed-out/interrupted child returns exitCode 0 and overwrites status to "complete".
 			const wasTimedOut = statusPayload.steps[flatIndex].activityState === "timed_out";
-			if (!wasTimedOut) {
+			if (!wasTimedOut && !interrupted) {
 				statusPayload.steps[flatIndex].status = singleResult.exitCode === 0 ? "complete" : "failed";
 				statusPayload.steps[flatIndex].endedAt = stepEndTime;
 				statusPayload.steps[flatIndex].durationMs = stepEndTime - stepStartTime;
@@ -1972,30 +1976,29 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			// still reference it if accounting throws.
 			let stepTokens: TokenUsage | null = null;
 			try {
-				const cumulativeTokens = config.sessionDir ? parseSessionTokens(config.sessionDir) : null;
-				stepTokens = cumulativeTokens
-					? {
-							input: cumulativeTokens.input - previousCumulativeTokens.input,
-							output: cumulativeTokens.output - previousCumulativeTokens.output,
-							total: cumulativeTokens.total - previousCumulativeTokens.total,
-						}
-					: null;
-				if (cumulativeTokens) {
-					previousCumulativeTokens = cumulativeTokens;
-				} else {
+				const ownSessionFile = seqStep.sessionFile;
+				if (ownSessionFile) {
+					// Step wrote to its own dedicated session file, not the run's root session.
+					// Use the child's reported attempt usage and never advance the root baseline;
+					// a root-dir delta would read ~0 for this step and undercount the budget (H3).
 					stepTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
-					if (stepTokens) {
-						previousCumulativeTokens = {
-							input: previousCumulativeTokens.input + stepTokens.input,
-							output: previousCumulativeTokens.output + stepTokens.output,
-							total: previousCumulativeTokens.total + stepTokens.total,
-						};
+					if (stepTokens) tokenLedger.addStandaloneStep(stepTokens);
+				} else {
+					const cumulativeTokens = config.sessionDir ? parseSessionTokens(config.sessionDir) : null;
+					if (cumulativeTokens) {
+						// Sequential steps share the growing root session file; the delta against the
+						// root baseline is this step's usage. Parallel/standalone tokens never advance
+						// this baseline, so mixed sequential+parallel chains no longer undercount (H2).
+						stepTokens = tokenLedger.advanceRootCumulative(cumulativeTokens);
+					} else {
+						stepTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
+						if (stepTokens) tokenLedger.addStandaloneStep(stepTokens);
 					}
 				}
 				if (stepTokens) {
 					recordBudgetUsage(tokenBudget, stepTokens);
 					statusPayload.steps[flatIndex].tokens = stepTokens;
-					statusPayload.totalTokens = { ...previousCumulativeTokens };
+					statusPayload.totalTokens = tokenLedger.total;
 					statusPayload.lastUpdate = Date.now();
 					writeAtomicJson(statusPath, statusPayload);
 				}
