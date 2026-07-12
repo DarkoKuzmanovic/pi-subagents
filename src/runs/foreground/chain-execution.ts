@@ -36,7 +36,7 @@ import { INTERCOM_BRIDGE_MARKER } from "../../intercom/intercom-bridge.ts";
 import { runSync } from "./execution.ts";
 import { buildChainSummary } from "../../shared/formatters.ts";
 import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd, substituteTemplateVars } from "../../shared/utils.ts";
-import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferences, validateChainOutputBindings } from "../shared/chain-outputs.ts";
+import { ChainOutputValidationError, outputEntryFromResult, renderChainTemplate, resolveOutputReferences, validateChainOutputBindings } from "../shared/chain-outputs.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection, type DynamicCollectedResult } from "../shared/dynamic-fanout.ts";
 import { SUBAGENT_BUDGET_EXHAUSTED_EVENT, type BudgetExhaustedEvent, type BudgetSummary, type ChainOutputMap } from "../../shared/types.ts";
 import { recordRun } from "../shared/run-history.ts";
@@ -1041,16 +1041,13 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				templateHasPrevious ? undefined : prev,
 			params.inlineReads,
 			);
-			// Resolve {outputs.X} on the author's template BEFORE injecting {previous}/{task}/{chain_dir}
-			// data, matching the parallel (line ~642) and dynamic (line ~884) paths. Doing it after
-			// {previous} let a prior step's output text containing a literal {outputs.name} inject another
-			// step's output downstream (H6).
-			let stepTask = resolveOutputReferences(stepTemplate, outputs);
-			stepTask = substituteTemplateVars(stepTask, {
-				task: originalTask,
-				previous: prev,
-				chain_dir: chainDir,
-			});
+			// Single-pass render: resolve {outputs.X} and {task}/{previous}/{chain_dir} in ONE scan so
+			// neither an output's text nor a {previous} value can inject the other's tokens (H6).
+			let stepTask = renderChainTemplate(
+				stepTemplate,
+				{ task: originalTask, previous: prev, chain_dir: chainDir },
+				outputs,
+			);
 			const cleanTask = stepTask;
 			stepTask = prefix + stepTask + suffix;
 

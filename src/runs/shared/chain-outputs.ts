@@ -88,6 +88,31 @@ export function resolveOutputReferences(template: string, outputs: ChainOutputMa
 	});
 }
 
+const CHAIN_TEMPLATE_TOKEN = /\{outputs\.([^}]*)\}|\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/**
+ * Single-pass chain template render. Resolves {outputs.NAME} and plain {var} tokens (task,
+ * previous, chain_dir, item, ...) in ONE left-to-right scan, so a value substituted for one
+ * token is never re-scanned for another. This prevents both injection directions: an output
+ * whose text contains a literal {previous}/{task}/{chain_dir} is not expanded, and a
+ * {previous}/{item} value containing a literal {outputs.name} is not expanded either.
+ *
+ * Total and best-effort like resolveOutputReferences: unknown/invalid tokens are left literal
+ * and it never throws (post-substitution input may legitimately contain a literal token).
+ */
+export function renderChainTemplate(template: string, vars: Record<string, string>, outputs: ChainOutputMap): string {
+	return template.replace(CHAIN_TEMPLATE_TOKEN, (full: string, outName: string | undefined, varName: string | undefined) => {
+		if (outName !== undefined) {
+			if (!SAFE_OUTPUT_NAME_PATTERN.test(outName)) return full;
+			if (!Object.hasOwn(outputs, outName)) return full;
+			const entry = outputs[outName];
+			return entry ? entry.text : full;
+		}
+		if (varName !== undefined && Object.hasOwn(vars, varName)) return vars[varName]!;
+		return full;
+	});
+}
+
 function compactStructuredText(value: unknown): string {
 	return JSON.stringify(value);
 }
