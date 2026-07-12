@@ -3,7 +3,10 @@ import type { ChainOutputMap, ChainOutputMapEntry, SingleResult } from "../../sh
 import { getSingleResultOutput } from "../../shared/utils.ts";
 import { DynamicFanoutError, hasDynamicFanoutFields, type DynamicFanoutConfig, validateDynamicStepShape } from "./dynamic-fanout.ts";
 
-const OUTPUT_REF_PATTERN = /\{outputs\.([^}]*)\}/g;
+// Name class excludes '{' as well as '}' so an unterminated '{outputs.' prefix fails fast
+// instead of rescanning to end-of-string (avoids quadratic blowup on malformed templates).
+// Output names are validated against SAFE_OUTPUT_NAME_PATTERN, so they never contain braces.
+const OUTPUT_REF_PATTERN = /\{outputs\.([^{}]*)\}/g;
 const SAFE_OUTPUT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class ChainOutputValidationError extends Error {}
@@ -88,7 +91,7 @@ export function resolveOutputReferences(template: string, outputs: ChainOutputMa
 	});
 }
 
-const CHAIN_TEMPLATE_TOKEN = /\{outputs\.([^}]*)\}|\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const CHAIN_TEMPLATE_TOKEN = /\{outputs\.([^{}]*)\}|\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 /**
  * Single-pass chain template render. Resolves {outputs.NAME} and plain {var} tokens (task,

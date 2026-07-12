@@ -36,4 +36,16 @@ describe("chain single-pass template render (H6)", () => {
 		const rendered = renderChainTemplate("{outputs.missing} {outputs.bad-name} {nope}", { previous: "P" }, outputs);
 		assert.equal(rendered, "{outputs.missing} {outputs.bad-name} {nope}");
 	});
+
+	it("renders malformed templates in linear time (no quadratic backtracking)", () => {
+		// Many unterminated '{outputs.' prefixes: the '{'-excluding name class must fail each fast
+		// rather than rescan to end-of-string. Generous bound: the fixed regex is ~single-digit ms,
+		// the quadratic form took multiple seconds at this size.
+		const hostile = "{outputs.".repeat(40000);
+		const start = performance.now();
+		const rendered = renderChainTemplate(hostile, { previous: "P" }, outputs);
+		const elapsedMs = performance.now() - start;
+		assert.equal(rendered, hostile);
+		assert.ok(elapsedMs < 1000, `render took ${elapsedMs.toFixed(1)}ms, expected < 1000ms`);
+	});
 });
