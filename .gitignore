@@ -8,6 +8,7 @@ node_modules/
 .codegraph
 .pi-lens
 .serena
+.claude/
 context.md
 .pi/*
 !.pi/pmti/

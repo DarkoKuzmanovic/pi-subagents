@@ -1,6 +1,10 @@
-# Plan: v0.41.0 — "Acceptance gates" (rubric loops)
+# Plan: "Acceptance gates" (rubric loops)
 
-Status: **design draft** (not started). Proposed headline for v0.41.0, deferred from v0.40.0.
+> **Version target: TBD.** This was originally drafted as the v0.41.0 headline, but v0.41.0
+> shipped instead as the runaway-containment + regression-audit fixes (see `CHANGELOG.md`).
+> The acceptance-gate design below remains **unbuilt**; retarget to a future minor when picked up.
+
+Status: **design draft** (not started). Deferred from v0.40.0.
 Base: v0.40.0. Prereq: structured output (v0.39.0) + async dynamic fanout (v0.40.0) already shipped.
 
 ## Why
