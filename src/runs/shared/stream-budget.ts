@@ -40,8 +40,14 @@ export const EVENTS_JSONL_BYTE_BUDGET = 50 * 1024 * 1024; // 50 MB
 
 /**
  * Runaway trip: raw stdout bytes since the latest meaningful progress marker.
- * Healthy runs sit in the 90 KB–550 KB range; heavy-but-healthy runs reach
- * ~30 MB only while continuing to emit text/tool progress.
+ * Calibrated against 3 captured multi-child runs (11 children, 3 genuine runaways):
+ * healthy children peaked at ~3.9 MB raw-since-progress while every runaway hit the
+ * 30 MB trip (~7.7x margin, zero false positives). Using RAW (not delta-aware
+ * `accounted`) bytes is deliberate: a thinking loop re-serializes a growing snapshot on
+ * every delta, so raw amplification (measured 11x here, up to ~210x for coder paralysis)
+ * is exactly what separates a loop from heavy-but-healthy reasoning. Accounted bytes
+ * since progress do NOT separate them — the confirmed runaway emitted 609 KB accounted,
+ * which fell BETWEEN a healthy reviewer (554 KB) and a legit interrupted child (727 KB).
  */
 export const RUNAWAY_NO_PROGRESS_BYTES = 30 * 1024 * 1024; // 30 MB
 
@@ -69,7 +75,12 @@ export const DELTA_EVENT_OVERHEAD_BYTES = 64;
  * (numeric literals -> '#', whitespace runs -> ' '), accumulates a rolling
  * per-content-block tail, and trips when the trailing LOOP_SUFFIX_CHARS are
  * periodic with period <= LOOP_MAX_PERIOD_CHARS and the block keeps growing
- * that way for LOOP_SUSTAIN_CHARS more normalized chars.
+ * that way for LOOP_SUSTAIN_CHARS more normalized chars. Because digit
+ * normalization also makes legitimate incrementing tabular output (CSV, numeric
+ * tables) look periodic, a trip is additionally confirmed against the RAW
+ * (un-normalized) tail: a genuine loop repeats a bounded verbatim/cycling
+ * fragment (raw-periodic within LOOP_RAW_MAX_PERIOD_CHARS), whereas a real table
+ * has ever-changing values (raw-aperiodic) and is spared.
  *
  * Calibrated against captured production streams: MiniMax-M3 tool-call loops
  * show a ~13–14 char normalized period sustained for tens of KB, while honest
@@ -81,6 +92,9 @@ export const DELTA_EVENT_OVERHEAD_BYTES = 64;
 export const LOOP_SUFFIX_CHARS = 1024;
 export const LOOP_MAX_PERIOD_CHARS = 128;
 export const LOOP_SUSTAIN_CHARS = 8192;
+// Max period for the RAW-tail confirmation. Verbatim/cycling loops repeat a short
+// fragment; incrementing tables never do, so they stay raw-aperiodic and are spared.
+export const LOOP_RAW_MAX_PERIOD_CHARS = 256;
 
 /** Structural notice appended once when the events.jsonl budget trips. */
 export const EVENTS_CAPPED_EVENT_TYPE = "subagent.events.capped";
@@ -244,7 +258,7 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 	// M3 stream a44b411f alternated contentIndex 0/1 on every event). Cleared
 	// at message boundaries; bounded as a safety valve against hostile streams.
 	const MAX_TRACKED_BLOCKS = 32;
-	const blocks = new Map<string, { tail: string; periodicChars: number }>();
+	const blocks = new Map<string, { tail: string; rawTail: string; periodicChars: number }>();
 
 	const trip = (message: string): string => {
 		tripped = true;
@@ -287,7 +301,7 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 				// Delta-aware byte accounting toward the hard cap.
 				if (typeof serializedBytes === "number" && Number.isFinite(serializedBytes) && serializedBytes > 0) {
 					accountedBytes += streamingDelta
-						? Math.min(serializedBytes, streamingDelta.delta.length + DELTA_EVENT_OVERHEAD_BYTES)
+						? Math.min(serializedBytes, Buffer.byteLength(streamingDelta.delta, "utf8") + DELTA_EVENT_OVERHEAD_BYTES)
 						: serializedBytes;
 				}
 
@@ -297,19 +311,30 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 					let block = blocks.get(key);
 					if (!block) {
 						if (blocks.size >= MAX_TRACKED_BLOCKS) blocks.clear();
-						block = { tail: "", periodicChars: 0 };
+						block = { tail: "", rawTail: "", periodicChars: 0 };
 						blocks.set(key, block);
 					}
 					const normalized = normalizeForLoopDetection(streamingDelta.delta);
 					block.tail = (block.tail + normalized).slice(-loopSuffixChars);
+					block.rawTail = (block.rawTail + streamingDelta.delta).slice(-loopSuffixChars);
 					const period = periodicTailPeriod(block.tail, loopSuffixChars, loopMaxPeriodChars);
 					if (period > 0) {
 						block.periodicChars += normalized.length;
 						if (block.periodicChars > loopSustainChars) {
-							const preview = block.tail.slice(-Math.min(60, block.tail.length));
-							return trip(
-								`runaway output aborted: degenerate streaming loop detected (${streamingDelta.kind} repeating a ~${period}-char fragment for ${block.periodicChars}+ chars): ${JSON.stringify(preview)}`,
-							);
+							// The NORMALIZED tail is periodic, but digit-normalization also makes
+							// legitimate incrementing tabular output look periodic. Confirm against
+							// the RAW tail: a genuine degenerate loop repeats a bounded verbatim/
+							// cycling fragment (raw-periodic); a real table has ever-changing values
+							// (raw-aperiodic) and must not trip (H4 false-positive).
+							const rawPeriod = periodicTailPeriod(block.rawTail, loopSuffixChars, LOOP_RAW_MAX_PERIOD_CHARS);
+							if (rawPeriod > 0) {
+								const preview = block.tail.slice(-Math.min(60, block.tail.length));
+								return trip(
+									`runaway output aborted: degenerate streaming loop detected (${streamingDelta.kind} repeating a ~${period}-char fragment for ${block.periodicChars}+ chars): ${JSON.stringify(preview)}`,
+								);
+							}
+							// High-cardinality structured data, not a loop: reset and keep going.
+							block.periodicChars = 0;
 						}
 					} else {
 						block.periodicChars = 0;
