@@ -195,12 +195,21 @@ function extractServers(config: unknown, kind: ImportKind): Record<string, Serve
 	return servers && typeof servers === "object" && !Array.isArray(servers) ? servers as Record<string, ServerEntry> : {};
 }
 
+// NOTE: This intentionally does NOT filter by `directTools`. It is only ever called with an
+// explicit env override (the agent's `mcp:` frontmatter, passed as MCP_DIRECT_TOOLS). pi-mcp-adapter
+// resolves the same way: when an env override is present it uses ONLY the env selection and ignores
+// `directTools` (direct-tools.ts: `if (envOverride) {...} else { directTools }`). Adding a directTools
+// gate here would make our --tools allowlist narrower than what the child adapter actually registers,
+// breaking working direct tools. Keep this in sync with pi-mcp-adapter's env-override branch.
 function resolveDirectToolNames(config: McpConfig, cache: MetadataCache, prefix: ToolPrefix, envOverride: string[]): string[] {
 	const names: string[] = [];
 	const seenNames = new Set<string>();
 	const { servers: selectedServers, tools: selectedTools } = parseSelections(envOverride);
 
 	for (const [serverName, definition] of Object.entries(config.mcpServers)) {
+		// Skip a malformed/null server entry so one bad definition can't crash resolution and drop
+		// EVERY direct tool via the outer catch-all in resolveMcpDirectToolNames.
+		if (!definition || typeof definition !== "object") continue;
 		const serverCache = cache.servers[serverName];
 		if (!isServerCacheValid(serverCache, definition)) continue;
 
@@ -262,6 +271,10 @@ function isServerCacheValid(entry: ServerCacheEntry | undefined, definition: Ser
 }
 
 export function computeMcpServerHash(definition: ServerEntry): string {
+	// These fields MUST byte-match pi-mcp-adapter's computeServerHash (metadata-cache.ts) so we can
+	// validate the adapter-written cache entry's configHash. `directTools` is intentionally excluded
+	// (it affects tool EXPOSURE, not which tools a server discovers/caches); including it here would
+	// diverge from the adapter's hash and make every cache lookup miss for servers that set it.
 	const identity: Record<string, unknown> = {
 		command: definition.command,
 		args: definition.args,
