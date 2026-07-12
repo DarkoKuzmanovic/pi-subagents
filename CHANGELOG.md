@@ -7,10 +7,21 @@
 - **Later-turn thinking floods are bounded again.** The 30 MB no-progress watchdog now measures raw bytes since the most recent *current* text/tool event instead of permanently disabling itself after the first successful turn. Streaming updates inspect their delta rather than stale full-message snapshot content. Size-triggered errors now report raw bytes, delta-aware accounted bytes, amplification ratio, and bytes since meaningful progress.
 - **Foreground wall-clock limits are run-wide.** Single retries, top-level parallel siblings, queued work, and chain steps now share one `control.runWallClockTimeoutMs` deadline, matching detached/background semantics even while active children continue emitting events. Queued children are not launched after that deadline.
 - **`maxOutput` now matches its public contract.** The tool schema exposes `bytes`/`lines` as post-run inline-result truncation, and documentation explicitly distinguishes it from model-generation, per-child token, and runtime limits.
+- **Interrupted children are no longer reported as `complete`.** Aborted/interrupted runs keep their real status in both the parallel and sequential completion paths, guarded on a run-level `interrupted` flag.
+- **Budget accounting no longer corrupts the sequential baseline.** A dedicated step-token ledger separates the sequential baseline (steps sharing the root session file) from the display total (parallel tasks and standalone steps with their own session files), so parallel tasks can't distort the running total and standalone steps keep it stable.
+- **Runaway kills have a SIGKILL backstop.** The runaway path escalates SIGINT -> SIGTERM -> SIGKILL (after `HARD_KILL_MS`), matching the final-drain escalation, so a child ignoring SIGTERM cannot linger.
+- **The loop detector spares real tables.** It now confirms raw-suffix periodicity before tripping, so incrementing/aperiodic tabular output (e.g. CSV) is no longer mistaken for a degenerate streaming loop; genuine verbatim/cycling loops still trip.
+- **Accounted-byte hard-cap is byte-accurate.** The clamp uses UTF-8 `Buffer.byteLength` instead of UTF-16 `String.length`, so multibyte deltas are not undercounted.
+- **Model fallback engages on watchdog aborts.** `runaway output aborted:` and MiniMax's terminal `input_tokens` usage-stream error are treated as retryable on a *different* configured model; unrelated child TypeErrors remain ordinary task failures.
+- **`{outputs.X}` references can't be injected by upstream output.** The foreground sequential path resolves output references on the author template before injecting `{previous}`/`{task}`/`{chain_dir}`, matching the parallel/dynamic paths, so a prior step's output text containing a literal `{outputs.name}` no longer expands another step's output downstream.
+- **A malformed MCP server entry no longer drops every direct tool.** Null/non-object server definitions are skipped during direct-tool resolution instead of crashing into the catch-all that returned `[]`.
+- **Stricter config validation.** `expand.onEmpty` must be `skip`/`fail` (a typo previously fell through to `skip`), non-string JSON pointers raise a `DynamicFanoutError` instead of a raw `TypeError`, and a blank/whitespace lane `model` is rejected rather than dispatched as a model name.
+- **Degraded OM outbox writes are surfaced.** A non-committed (degraded) completion-outbox write now warns instead of being dropped silently; delivery semantics are unchanged.
 
 ### Tests
 
 - Added unit and foreground integration regressions for progress followed by a later thinking-only flood, stale snapshot text, rolling progress resets, amplification diagnostics, single-child wall-clock termination, shared top-level/chain parallel deadlines, and `maxOutput` schema semantics.
+- Added unit regressions for the loop-detector table false-positive, step-token ledger domains, model-fallback runaway/usage-crash retryability, `{outputs.X}` injection ordering, `expand.onEmpty`/JSON-pointer validation, and blank lane-model rejection.
 
 ## [0.40.1] - 2026-07-10
 
