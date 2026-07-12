@@ -563,7 +563,7 @@ async function runSingleAttempt(
 				const evt = parsed as { type?: string; message?: Message; toolName?: string; args?: unknown };
 				// Delta-aware byte accounting + degenerate-loop detection over the
 				// parsed event stream (raw-byte guards live in the stdout handler).
-				const runawayError = streamWatchdog.observeEvent(evt, line.length);
+				const runawayError = streamWatchdog.observeEvent(evt, Buffer.byteLength(line, "utf8"));
 				if (runawayError) handleRunawayError(runawayError);
 				const now = Date.now();
 				progress.durationMs = now - startTime;
