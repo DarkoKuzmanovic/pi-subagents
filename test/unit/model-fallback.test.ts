@@ -69,6 +69,9 @@ describe("model fallback helpers", () => {
 		assert.equal(isRetryableModelFailure("authentication failed"), true);
 		assert.equal(isRetryableModelFailure("connection terminated"), true);
 		assert.equal(isRetryableModelFailure("stream terminated unexpectedly"), true);
+		assert.equal(isRetryableModelFailure("runaway output aborted: degenerate streaming loop detected"), true);
+		assert.equal(isRetryableModelFailure("runaway output aborted: 30 MB of raw model events since last text or tool activity"), true);
+		assert.equal(isRetryableModelFailure("Cannot read properties of undefined (reading 'input_tokens')"), true);
 	});
 
 	it("does not treat ordinary task/tool failures as retryable model failures", () => {
@@ -76,6 +79,7 @@ describe("model fallback helpers", () => {
 		assert.equal(isRetryableModelFailure("read failed (exit 1): no such file or directory"), false);
 		assert.equal(isRetryableModelFailure("bash failed (exit 143): process terminated by signal"), false);
 		assert.equal(isRetryableModelFailure("the build was terminated"), false);
+		assert.equal(isRetryableModelFailure("Cannot read properties of undefined (reading 'project')"), false);
 		assert.equal(isRetryableModelFailure(undefined), false);
 	});
 });

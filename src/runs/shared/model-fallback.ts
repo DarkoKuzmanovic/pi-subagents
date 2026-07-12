@@ -77,6 +77,13 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/unknown model/i,
 	/overloaded/i,
 	/service unavailable/i,
+	// The stream watchdog proves the current model is no longer making usable
+	// progress. Retrying another configured model is safe; retrying the same one is not.
+	/^runaway output aborted:/i,
+	// MiniMax's Anthropic-compatible stream has emitted a terminal assistant error
+	// when a usage-bearing event omits the expected usage object. Keep this narrow:
+	// unrelated child TypeErrors remain ordinary task failures.
+	/Cannot read properties of undefined \(reading ['"]input_tokens['"]\)/i,
 	/temporar(?:ily)? unavailable/i,
 	/connection refused/i,
 	/fetch failed/i,
