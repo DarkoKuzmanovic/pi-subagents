@@ -1041,13 +1041,16 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				templateHasPrevious ? undefined : prev,
 			params.inlineReads,
 			);
-			let stepTask = stepTemplate;
+			// Resolve {outputs.X} on the author's template BEFORE injecting {previous}/{task}/{chain_dir}
+			// data, matching the parallel (line ~642) and dynamic (line ~884) paths. Doing it after
+			// {previous} let a prior step's output text containing a literal {outputs.name} inject another
+			// step's output downstream (H6).
+			let stepTask = resolveOutputReferences(stepTemplate, outputs);
 			stepTask = substituteTemplateVars(stepTask, {
 				task: originalTask,
 				previous: prev,
 				chain_dir: chainDir,
 			});
-			stepTask = resolveOutputReferences(stepTask, outputs);
 			const cleanTask = stepTask;
 			stepTask = prefix + stepTask + suffix;
 
