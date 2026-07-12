@@ -301,7 +301,7 @@ function runPiStreaming(
 				const event = parsed as ChildEvent;
 				// Delta-aware byte accounting + degenerate-loop detection over the
 				// parsed event stream (raw-byte guards live in the stdout handler).
-				const runawayError = streamWatchdog.observeEvent(event, line.length);
+				const runawayError = streamWatchdog.observeEvent(event, Buffer.byteLength(line, "utf8"));
 				if (runawayError) handleRunawayError(runawayError);
 				appendChildEvent(event);
 				onChildEvent?.(event);
@@ -1630,11 +1630,15 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						statusPayload.lastUpdate = taskEndTime;
 						writeAtomicJson(statusPath, statusPayload);
 
-						appendRunEvent(eventsPath, {
-							type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
-							ts: taskEndTime, runId: id, stepIndex: fi, agent: task.agent,
-							exitCode: singleResult.exitCode, durationMs: taskDuration,
-						});
+						// Do not emit a terminal step event for an interrupted (paused) child: its exitCode is
+						// forced to 0 but the step is paused, not completed. run.paused already signals it (H1).
+						if (!interrupted) {
+							appendRunEvent(eventsPath, {
+								type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
+								ts: taskEndTime, runId: id, stepIndex: fi, agent: task.agent,
+								exitCode: singleResult.exitCode, durationMs: taskDuration,
+							});
+						}
 						if (singleResult.completionGuardTriggered) {
 							const event = buildControlEvent({
 								from: statusPayload.steps[fi].activityState,
@@ -2006,16 +2010,20 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				console.error("Token accounting failed (non-fatal):", tokenErr);
 			}
 
-			appendRunEvent(eventsPath, {
-				type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
-				ts: stepEndTime,
-				runId: id,
-				stepIndex: flatIndex,
-				agent: seqStep.agent,
-				exitCode: singleResult.exitCode,
-				durationMs: stepEndTime - stepStartTime,
-				tokens: stepTokens,
-			});
+			// See the parallel block: suppress the terminal step event for an interrupted (paused)
+			// child so consumers can't observe a "completed" step inside a paused run (H1).
+			if (!interrupted) {
+				appendRunEvent(eventsPath, {
+					type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
+					ts: stepEndTime,
+					runId: id,
+					stepIndex: flatIndex,
+					agent: seqStep.agent,
+					exitCode: singleResult.exitCode,
+					durationMs: stepEndTime - stepStartTime,
+					tokens: stepTokens,
+				});
+			}
 			if (singleResult.completionGuardTriggered) {
 				const event = buildControlEvent({
 					from: statusPayload.steps[flatIndex].activityState,
