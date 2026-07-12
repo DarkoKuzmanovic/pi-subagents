@@ -77,10 +77,13 @@ export const DELTA_EVENT_OVERHEAD_BYTES = 64;
  * periodic with period <= LOOP_MAX_PERIOD_CHARS and the block keeps growing
  * that way for LOOP_SUSTAIN_CHARS more normalized chars. Because digit
  * normalization also makes legitimate incrementing tabular output (CSV, numeric
- * tables) look periodic, a trip is additionally confirmed against the RAW
- * (un-normalized) tail: a genuine loop repeats a bounded verbatim/cycling
- * fragment (raw-periodic within LOOP_RAW_MAX_PERIOD_CHARS), whereas a real table
- * has ever-changing values (raw-aperiodic) and is spared.
+ * tables) look periodic, a trip is confirmed against the RAW tail in two tiers: a
+ * genuine verbatim/cycling loop repeats a bounded fragment (raw-periodic within
+ * LOOP_RAW_MAX_PERIOD_CHARS) and trips at LOOP_SUSTAIN_CHARS; a raw-aperiodic stream is a
+ * real table OR a value-incrementing loop (pattern-identical), so it is spared at the low
+ * sustain and trips only after LOOP_NORMALIZED_ONLY_SUSTAIN_CHARS of sustained periodicity
+ * — far past any realistic streamed table, far below the accounted hard cap so an
+ * incrementing tool-call loop (which resets the no-progress guard) is still caught early.
  *
  * Calibrated against captured production streams: MiniMax-M3 tool-call loops
  * show a ~13–14 char normalized period sustained for tens of KB, while honest
@@ -92,9 +95,18 @@ export const DELTA_EVENT_OVERHEAD_BYTES = 64;
 export const LOOP_SUFFIX_CHARS = 1024;
 export const LOOP_MAX_PERIOD_CHARS = 128;
 export const LOOP_SUSTAIN_CHARS = 8192;
-// Max period for the RAW-tail confirmation. Verbatim/cycling loops repeat a short
-// fragment; incrementing tables never do, so they stay raw-aperiodic and are spared.
+// Max period for the RAW-tail confirmation. Kept well below LOOP_SUFFIX_CHARS so a confirmed
+// period must repeat several times within the window (1024/256 = 4x); a near-window cap would
+// declare spurious periodicity on incrementing tables from a tiny suffix overlap. Verbatim
+// loops have raw period == normalized period (<= LOOP_MAX_PERIOD_CHARS), so 256 never misses
+// one; wide-digit cycling loops with a larger raw period fall through to the volume tier below.
 export const LOOP_RAW_MAX_PERIOD_CHARS = 256;
+// Raw-aperiodic but normalized-periodic output (a real incrementing table OR a
+// value-incrementing degenerate loop — indistinguishable by shape) must not trip at the
+// low LOOP_SUSTAIN_CHARS (that killed real tables, H4). It keeps accumulating and trips
+// only once the periodic run dwarfs any realistic streamed table, still ~780x below the
+// 200 MB accounted hard cap so an incrementing loop is caught far earlier than that cap.
+export const LOOP_NORMALIZED_ONLY_SUSTAIN_CHARS = 256 * 1024;
 
 /** Structural notice appended once when the events.jsonl budget trips. */
 export const EVENTS_CAPPED_EVENT_TYPE = "subagent.events.capped";
@@ -213,6 +225,8 @@ export interface StreamWatchdogLimits {
 	loopSuffixChars?: number;
 	loopMaxPeriodChars?: number;
 	loopSustainChars?: number;
+	loopRawMaxPeriodChars?: number;
+	loopNormalizedOnlySustainChars?: number;
 }
 
 export interface StreamWatchdog {
@@ -246,6 +260,8 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 	const loopSuffixChars = limits.loopSuffixChars ?? LOOP_SUFFIX_CHARS;
 	const loopMaxPeriodChars = limits.loopMaxPeriodChars ?? LOOP_MAX_PERIOD_CHARS;
 	const loopSustainChars = limits.loopSustainChars ?? LOOP_SUSTAIN_CHARS;
+	const loopRawMaxPeriodChars = limits.loopRawMaxPeriodChars ?? LOOP_RAW_MAX_PERIOD_CHARS;
+	const loopNormalizedOnlySustainChars = limits.loopNormalizedOnlySustainChars ?? LOOP_NORMALIZED_ONLY_SUSTAIN_CHARS;
 
 	let rawBytes = 0;
 	let accountedBytes = 0;
@@ -322,19 +338,25 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 						block.periodicChars += normalized.length;
 						if (block.periodicChars > loopSustainChars) {
 							// The NORMALIZED tail is periodic, but digit-normalization also makes
-							// legitimate incrementing tabular output look periodic. Confirm against
-							// the RAW tail: a genuine degenerate loop repeats a bounded verbatim/
-							// cycling fragment (raw-periodic); a real table has ever-changing values
-							// (raw-aperiodic) and must not trip (H4 false-positive).
-							const rawPeriod = periodicTailPeriod(block.rawTail, loopSuffixChars, LOOP_RAW_MAX_PERIOD_CHARS);
+							// legitimate incrementing tabular output look periodic. Discriminate on
+							// the RAW tail. A genuine verbatim/cycling loop repeats a bounded fragment
+							// (raw-periodic) and trips immediately; a raw-aperiodic stream is either a
+							// real table or a value-incrementing loop and is gated by volume below.
+							const rawPeriod = periodicTailPeriod(block.rawTail, loopSuffixChars, loopRawMaxPeriodChars);
+							const preview = block.tail.slice(-Math.min(60, block.tail.length));
 							if (rawPeriod > 0) {
-								const preview = block.tail.slice(-Math.min(60, block.tail.length));
 								return trip(
 									`runaway output aborted: degenerate streaming loop detected (${streamingDelta.kind} repeating a ~${period}-char fragment for ${block.periodicChars}+ chars): ${JSON.stringify(preview)}`,
 								);
 							}
-							// High-cardinality structured data, not a loop: reset and keep going.
-							block.periodicChars = 0;
+							// Raw-aperiodic: keep accumulating (do NOT reset) so a value-incrementing
+							// loop eventually trips, while a bounded real table ends and resets via the
+							// period==0 branch below before reaching this far larger threshold (H4).
+							if (block.periodicChars > loopNormalizedOnlySustainChars) {
+								return trip(
+									`runaway output aborted: degenerate streaming loop detected (${streamingDelta.kind} sustained a ~${period}-char incrementing pattern for ${block.periodicChars}+ chars): ${JSON.stringify(preview)}`,
+								);
+							}
 						}
 					} else {
 						block.periodicChars = 0;
