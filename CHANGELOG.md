@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.40.2] - 2026-07-12
+
 ### Fixed
 
 - **Later-turn thinking floods are bounded again.** The 30 MB no-progress watchdog now measures raw bytes since the most recent *current* text/tool event instead of permanently disabling itself after the first successful turn. Streaming updates inspect their delta rather than stale full-message snapshot content. Size-triggered errors now report raw bytes, delta-aware accounted bytes, amplification ratio, and bytes since meaningful progress.
