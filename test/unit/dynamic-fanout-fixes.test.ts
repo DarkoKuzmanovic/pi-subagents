@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { coerceEnvelopeArrays } from "../../src/runs/foreground/subagent-executor.js";
-import { resolveItemTemplate, validateDynamicStepShape } from "../../src/runs/shared/dynamic-fanout.js";
+import { assertJsonPointer, resolveItemTemplate, validateDynamicStepShape } from "../../src/runs/shared/dynamic-fanout.js";
 import type { DynamicParallelStep } from "../../src/shared/settings.js";
 
 const expand = { from: { output: "ctx", path: "/files" }, item: "f", maxItems: 10 } as const;
@@ -73,5 +73,36 @@ describe("resolveItemTemplate dotted paths", () => {
 	});
 	it("throws on a double-dot path segment {f.a..b}", () => {
 		assert.throws(() => resolveItemTemplate("{f.a..b}", "f", { a: 1 }), /Invalid item reference/);
+	});
+});
+
+// MEDIUM/LOW hardening: expand.onEmpty enum + non-string JSON pointer guards.
+function dynStepExpand(expandOverride: Record<string, unknown>): DynamicParallelStep {
+	return {
+		expand: { from: { output: "ctx", path: "/files" }, item: "f", maxItems: 10, ...expandOverride },
+		parallel: { agent: "worker", task: "{f}" },
+		collect: { as: "fixes" },
+	} as unknown as DynamicParallelStep;
+}
+
+describe("validateDynamicStepShape expand.onEmpty enum", () => {
+	it("accepts 'skip' and 'fail'", () => {
+		assert.doesNotThrow(() => validateDynamicStepShape(dynStepExpand({ onEmpty: "skip" }), 0));
+		assert.doesNotThrow(() => validateDynamicStepShape(dynStepExpand({ onEmpty: "fail" }), 0));
+	});
+	it("accepts an omitted onEmpty (defaults to skip)", () => {
+		assert.doesNotThrow(() => validateDynamicStepShape(dynStepExpand({}), 0));
+	});
+	it("rejects a typo'd onEmpty instead of silently treating it as skip", () => {
+		assert.throws(() => validateDynamicStepShape(dynStepExpand({ onEmpty: "error" }), 0), /onEmpty must be 'skip' or 'fail'/);
+	});
+});
+
+describe("assertJsonPointer non-string guard", () => {
+	it("throws a DynamicFanoutError (not a raw TypeError) on a non-string pointer", () => {
+		assert.throws(() => assertJsonPointer(123 as unknown as string, "expand.from.path"), /expand\.from\.path must be a string JSON Pointer/);
+	});
+	it("surfaces a non-string from.path through validateDynamicStepShape as a DynamicFanoutError", () => {
+		assert.throws(() => validateDynamicStepShape(dynStepExpand({ from: { output: "ctx", path: 5 } }), 0), /must be a string JSON Pointer/);
 	});
 });

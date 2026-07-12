@@ -47,6 +47,9 @@ function parseModelLaneDefinition(filePath: string, agentName: string, laneName:
 	if (rawModel !== undefined && typeof rawModel !== "string") {
 		throw new Error(`Model lane '${laneName}' for agent '${agentName}' in '${filePath}' has invalid 'model'; expected a string.`);
 	}
+	if (typeof rawModel === "string" && rawModel.trim() === "") {
+		throw new Error(`Model lane '${laneName}' for agent '${agentName}' in '${filePath}' has an empty 'model'; provide a non-blank model name or omit it.`);
+	}
 	const model = rawModel as string | undefined;
 
 	const rawThinking = value.thinking;
