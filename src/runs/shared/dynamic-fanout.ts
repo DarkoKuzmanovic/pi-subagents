@@ -50,6 +50,7 @@ export function isSafeOutputName(name: string): boolean {
 }
 
 export function assertJsonPointer(pointer: string, label: string): void {
+	if (typeof (pointer as unknown) !== "string") throw new DynamicFanoutError(`${label} must be a string JSON Pointer.`);
 	if (pointer === "") return;
 	if (!pointer.startsWith("/")) {
 		throw new DynamicFanoutError(`${label} must be a JSON Pointer starting with '/'.`);
@@ -180,6 +181,10 @@ export function validateDynamicStepShape(step: DynamicParallelStep, stepIndex: n
 	if (!isSafeOutputName(step.expand.from.output)) throw new DynamicFanoutError(`${prefix} has invalid expand.from.output '${step.expand.from.output}'.`);
 	assertJsonPointer(step.expand.from.path, `${prefix} expand.from.path`);
 	if (step.expand.key !== undefined) assertJsonPointer(step.expand.key, `${prefix} expand.key`);
+	const onEmpty = step.expand.onEmpty as unknown;
+	if (onEmpty !== undefined && onEmpty !== "skip" && onEmpty !== "fail") {
+		throw new DynamicFanoutError(`${prefix} expand.onEmpty must be 'skip' or 'fail'.`);
+	}
 	const itemName = step.expand.item ?? "item";
 	if (!ITEM_NAME_PATTERN.test(itemName)) throw new DynamicFanoutError(`${prefix} has invalid expand.item '${itemName}'.`);
 	if (step.expand.maxItems === undefined && config.maxItems === undefined) {

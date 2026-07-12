@@ -167,6 +167,28 @@ describe("model lanes", () => {
 		);
 	});
 
+	it("rejects a blank/whitespace lane model instead of dispatching it as a model name", () => {
+		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
+		writeJson(settingsPath, {
+			subagents: {
+				modelLanes: {
+					worker: {
+						easy: { model: "   " },
+					},
+				},
+			},
+		});
+
+		assert.throws(
+			() => readModelLanesFromSettingsFile(settingsPath),
+			(error: unknown) => error instanceof Error
+				&& error.message.includes(settingsPath)
+				&& error.message.includes("worker")
+				&& error.message.includes("easy")
+				&& error.message.includes("model"),
+		);
+	});
+
 	it("surfaces invalid project settings before falling back to user lanes", () => {
 		const userSettingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
 		const projectSettingsPath = path.join(tempProject, ".pi", "settings.json");

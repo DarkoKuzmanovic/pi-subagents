@@ -196,5 +196,10 @@ export function publishChildOmOutbox(
 	const delivery = buildOmDeliveryBinding(manifest, slot.childId);
 	const outbox = buildCompletionOutbox(delivery, entries);
 	const result = publishCompletionOutbox(asyncDir, outbox);
+	// A degraded write can land bytes on disk without a durable commit; we do NOT treat that as
+	// delivered (return false), but surface it so a silently-dropped OM outbox stays diagnosable.
+	if (result && result.status !== "committed") {
+		console.warn(`[pi-subagents] OM completion outbox for child ${slot.childId} not committed (status=${result.status}); treating as undelivered.`);
+	}
 	return result?.status === "committed";
 }
