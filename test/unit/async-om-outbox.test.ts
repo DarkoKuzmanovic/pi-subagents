@@ -217,6 +217,40 @@ describe("async-om-outbox", () => {
 			assert.ok(fs.existsSync(outboxPath));
 		});
 
+		it("warns and retains a degraded completion outbox for delivery retry", () => {
+			const asyncDir = path.join(tempDir, "async-run");
+			const sessionFile = path.join(tempDir, "session.jsonl");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(sessionFile, '{"type":"a"}\n', "utf-8");
+			const warnings: string[] = [];
+			const originalWarn = console.warn;
+			let fsyncCalls = 0;
+			console.warn = (message: unknown) => warnings.push(String(message));
+			try {
+				const published = publishChildOmOutbox(makeManifest(), "root/0/sequential/0", sessionFile, asyncDir, {
+					fsOps: {
+						fsyncSync(fd) {
+							fsyncCalls += 1;
+							if (fsyncCalls === 2) {
+								const error = new Error("directory fsync unsupported") as Error & { code?: string };
+								error.code = "ENOTSUP";
+								throw error;
+							}
+							fs.fsyncSync(fd);
+						},
+					},
+				});
+				assert.equal(published, false, "a degraded outbox is never reported as committed");
+				assert.deepEqual(warnings, ["[pi-subagents] OM completion outbox for child c000001 not committed (status=degraded); treating as undelivered."]);
+			} finally {
+				console.warn = originalWarn;
+			}
+
+			const outboxPath = resolveOmOutboxPath(asyncDir, "c000001");
+			assert.ok(fs.existsSync(outboxPath), "the retained outbox remains available for the result watcher's delivery retry");
+			assert.equal(JSON.parse(fs.readFileSync(outboxPath, "utf-8")).delivery.childId, "c000001");
+		});
+
 		it("no-ops without publishing when the manifest is absent", () => {
 			const asyncDir = path.join(tempDir, "async-run");
 			fs.mkdirSync(asyncDir, { recursive: true });

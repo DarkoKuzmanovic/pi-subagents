@@ -17,7 +17,8 @@ interface ClarifyTestComponent {
 	modelSelectedIndex: number;
 	filteredModels: ClarifyTestModel[];
 	getEffectiveModel(stepIndex: number): string;
-	applyThinkingLevel(level: "high"): void;
+	applyThinkingLevel(level: "off" | "high"): void;
+	getEffectiveBehavior(stepIndex: number): { thinking?: string };
 	enterModelSelector(): void;
 	enterThinkingSelector(): void;
 	renderThinkingSelector(): string[];
@@ -73,6 +74,23 @@ describe("chain clarify model display", { skip: !available ? "pi packages not av
 		component.editingStep = 0;
 		component.applyThinkingLevel("high");
 		assert.equal(component.getEffectiveModel(0), "github-copilot/gpt-5-mini:high");
+	});
+
+	it("makes a selected off level override explicit agent thinking", () => {
+		const component = new ChainClarifyComponent(
+			{ requestRender() {} },
+			{ fg(_key: string, text: string) { return text; } },
+			[{ name: "worker", description: "", systemPrompt: "", systemPromptMode: "replace", inheritProjectContext: false, inheritSkills: false, source: "user", filePath: "worker.md", model: "openai/gpt-5-mini", thinking: "high" }],
+			["Task"], "Task", undefined,
+			[{ output: false, outputMode: "inline", reads: false, progress: false, skills: [], model: "openai/gpt-5-mini", thinking: "high" }],
+			[{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini", reasoning: true, thinkingLevelMap: { high: "high" } }],
+			"openai", [], () => {}, "single",
+		);
+
+		component.editingStep = 0;
+		component.applyThinkingLevel("off");
+		assert.equal(component.getEffectiveBehavior(0).thinking, "off");
+		assert.equal(component.getEffectiveModel(0), "openai/gpt-5-mini");
 	});
 
 	it("shows only thinking levels supported by the selected model", () => {

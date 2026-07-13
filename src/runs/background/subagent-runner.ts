@@ -42,12 +42,12 @@ import {
 	mapConcurrent,
 	aggregateParallelOutputs,
 } from "../shared/parallel-utils.ts";
-import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
+import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, resolveItemTemplate, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
 import { allocateDynamicOmSlots, loadOmManifest, publishChildOmOutbox } from "./async-om-outbox.ts";
 import { dynamicOmChildKey } from "../shared/om-logical-keys.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
 import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput, resetStructuredOutputCapture, type StructuredOutputRuntime } from "../shared/structured-output.ts";
-import { isStorableStepResult, outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
+import { isStorableStepResult, outputEntryFromAsyncResult, renderChainTemplate } from "../shared/chain-outputs.ts";
 import type { ChainOutputMap } from "../../shared/types.ts";
 import { formatModelAttemptNote, isRetryableModelFailure, isTransportFailure } from "../shared/model-fallback.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
@@ -596,6 +596,7 @@ function writeRunLog(
 interface SingleStepContext {
 	previousOutput: string;
 	placeholder: string;
+	outputs?: ChainOutputMap;
 	cwd: string;
 	sessionEnabled: boolean;
 	sessionDir?: string;
@@ -633,8 +634,12 @@ async function runSingleStep(
 	completionGuardTriggered?: boolean;
 	structuredOutput?: unknown;
 }> {
-	const placeholderRegex = new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
-	const task = step.task.replace(placeholderRegex, () => ctx.previousOutput);
+	const renderedTask = ctx.outputs
+		? renderChainTemplate(step.task, { previous: ctx.previousOutput }, ctx.outputs)
+		: step.task.replace(new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), () => ctx.previousOutput);
+	const task = step.dynamicItemName
+		? resolveItemTemplate(renderedTask, step.dynamicItemName, step.dynamicItem)
+		: renderedTask;
 	const sessionEnabled = Boolean(step.sessionFile) || ctx.sessionEnabled;
 	const sessionDir = step.sessionFile ? undefined : ctx.sessionDir;
 
@@ -1582,10 +1587,10 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							? path.join(config.sessionDir, `parallel-${taskIdx}`)
 							: undefined;
 						const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
-						const taskForRunResolved = { ...taskForRun, task: resolveOutputReferences(taskForRun.task, outputs) };
 
-						const singleResult = await runSingleStep(taskForRunResolved, {
+						const singleResult = await runSingleStep(taskForRun, {
 							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
+							outputs,
 							sessionDir: taskSessionDir,
 							artifactsDir, artifactConfig, id,
 							flatIndex: fi, flatStepCount: flatSteps.length,
@@ -1815,9 +1820,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			// Recompute read-only progress suppression per item so async behavior matches the
 			// foreground path (which resolves against the real per-item task text).
 			const materializedSteps: SubagentStep[] = materialized.parallel.map((task, itemIndex) => {
-				const resolvedTask = task.task ?? "{previous}";
-				const itemBehavior = suppressProgressForReadOnlyTask(dyn.behavior, resolvedTask, dyn.originalTask);
-				let itemTask = dyn.template.task.split(dyn.sentinel).join(resolvedTask);
+				const rawTask = dyn.step.parallel.task ?? "{previous}";
+				const itemBehavior = suppressProgressForReadOnlyTask(dyn.behavior, rawTask, dyn.originalTask);
+				let itemTask = dyn.template.task.split(dyn.sentinel).join(rawTask);
 				if (!itemBehavior.progress && dyn.progressSuffix) {
 					itemTask = itemTask.replace(dyn.progressSuffix, "");
 				}
@@ -1826,17 +1831,16 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 					itemTask = itemTask.replace(/\*\*Output:\*\* Write your findings to: .+$/m, `**Output:** Write your findings to: ${outputPath}`);
 				}
-				// M6.1: a registered dynamic child must have an explicit session file so its outbox
-				// snapshot is a real session-entry snapshot, not just final output text (existing
-				// dynamic-fanout items otherwise get no session file at all — see PLAN-structured-
-				// output-fanout.md's per-item resume/share gap).
 				const omSlot = omDynamicSlots?.slots[itemIndex];
 				const omSessionFile = omSlot ? path.join(asyncDir, "om-sessions", `${dynStepIndex}-${itemIndex}.jsonl`) : undefined;
 				if (omSessionFile) fs.mkdirSync(path.dirname(omSessionFile), { recursive: true });
 				return {
+					...task,
 					...dyn.template,
 					...(outputPath ? { outputPath } : {}),
 					task: itemTask,
+					dynamicItemName: dyn.step.expand.item ?? "item",
+					dynamicItem: materialized.items[itemIndex]?.item,
 					...(omSlot ? { omLogicalChildKey: omSlot.logicalChildKey, sessionFile: omSessionFile } : {}),
 				};
 			});
@@ -1906,9 +1910,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				agent: seqStep.agent,
 			});
 
-			const seqStepResolved = { ...seqStep, task: resolveOutputReferences(seqStep.task, outputs) };
-			const singleResult = await runSingleStep(seqStepResolved, {
+			const singleResult = await runSingleStep(seqStep, {
 				previousOutput, placeholder, cwd, sessionEnabled,
+				outputs,
 				sessionDir: config.sessionDir,
 				artifactsDir, artifactConfig, id,
 				flatIndex, flatStepCount: flatSteps.length,

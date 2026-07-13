@@ -136,6 +136,38 @@ async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Promise<s
 	return resultPath;
 }
 
+function thinkingFloodEvent(): unknown {
+	return {
+		type: "message_update",
+		message: {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "x".repeat(65_000) }],
+		},
+	};
+}
+
+async function interruptAsyncRunner(id: string): Promise<void> {
+	const statusPath = path.join(ASYNC_DIR, id, "status.json");
+	const deadline = Date.now() + 15_000;
+	while (!fs.existsSync(statusPath)) {
+		if (Date.now() > deadline) assert.fail(`Timed out waiting for async status: ${statusPath}`);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as { state?: unknown; pid?: unknown };
+	assert.equal(status.state, "running");
+	assert.equal(typeof status.pid, "number");
+	process.kill(status.pid, process.platform === "win32" ? "SIGBREAK" : "SIGUSR2");
+}
+
+function readRunEventTypes(id: string): string[] {
+	const eventsPath = path.join(ASYNC_DIR, id, "events.jsonl");
+	return fs.readFileSync(eventsPath, "utf-8")
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => (JSON.parse(line) as { type?: unknown }).type)
+		.filter((type): type is string => typeof type === "string");
+}
+
 describe("async execution utilities", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
 	let mockPi: MockPi;
@@ -377,6 +409,58 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(fs.readFileSync(secondOutput, "utf-8"), "child two");
 	});
 
+	it("does not re-expand {previous} injected by named output in an async sequential step", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "literal {previous}" });
+		mockPi.onCall({ output: "consumer done" });
+		const id = `async-chain-template-sequential-${Date.now().toString(36)}`;
+		executeAsyncChain!(id, {
+			chain: [
+				{ agent: "producer", task: "Produce literal output", as: "producer" },
+				{ agent: "consumer", task: "Consume {outputs.producer}" },
+			],
+			agents: [makeAgent("producer"), makeAgent("consumer")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		await waitForAsyncResultFile(id, 10_000);
+		const callFiles = fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).sort();
+		const consumerCall = callFiles[1];
+		assert.ok(consumerCall, "expected consumer call");
+		const task = (JSON.parse(fs.readFileSync(path.join(mockPi.dir, consumerCall), "utf-8")).args as string[]).at(-1) ?? "";
+		assert.match(task, /Consume literal \{previous\}/);
+		assert.doesNotMatch(task, /literal literal \{previous\}/);
+	});
+
+	it("does not re-expand {previous} injected by named output in an async parallel step", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "literal {previous}" });
+		mockPi.onCall({ output: "consumer done" });
+		const id = `async-chain-template-parallel-${Date.now().toString(36)}`;
+		executeAsyncChain!(id, {
+			chain: [
+				{ agent: "producer", task: "Produce literal output", as: "producer" },
+				{ parallel: [{ agent: "consumer", task: "Consume {outputs.producer}" }] },
+			],
+			agents: [makeAgent("producer"), makeAgent("consumer")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		await waitForAsyncResultFile(id, 10_000);
+		const callFiles = fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).sort();
+		const consumerCall = callFiles[1];
+		assert.ok(consumerCall, "expected consumer call");
+		const task = (JSON.parse(fs.readFileSync(path.join(mockPi.dir, consumerCall), "utf-8")).args as string[]).at(-1) ?? "";
+		assert.match(task, /Consume literal \{previous\}/);
+		assert.doesNotMatch(task, /literal literal \{previous\}/);
+	});
+
 	it("top-level async parallel lane keeps inline model while applying lane thinking", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Async lane report" });
 		writeProjectLaneSettings(tempDir, {
@@ -614,6 +698,88 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(statusPayload.steps[0].tokens.total > 0);
 		assert.match(fs.readFileSync(path.join(asyncDir, "output-0.log"), "utf-8"), /Recovered asynchronously/);
 		assert.equal(mockPi.callCount(), 2);
+	});
+
+	it("retries a runaway MiniMax background attempt on the configured fallback", { skip: !isAsyncAvailable() ? "jiti not available" : undefined, timeout: 120_000 }, async () => {
+		const flood = Array.from({ length: 500 }, () => thinkingFloodEvent());
+		mockPi.onCall({ jsonl: flood, keepAliveAfterFinalMessageMs: 60_000, exitCode: 0 });
+		mockPi.onCall({ output: "Recovered asynchronously from runaway" });
+		const id = `async-runaway-fallback-${Date.now().toString(36)}`;
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Do work",
+			agentConfig: makeAgent("worker", {
+				model: "minimax/MiniMax-M3",
+				thinking: "high",
+				fallbackModels: ["anthropic/claude-sonnet-4"],
+			}),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			availableModels: [
+				{ provider: "minimax", id: "MiniMax-M3", fullId: "minimax/MiniMax-M3" },
+				{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+			],
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		const payload = JSON.parse(fs.readFileSync(await waitForAsyncResultFile(id), "utf-8")) as AsyncResultPayload;
+		const result = payload.results[0];
+		assert.equal(payload.success, true);
+		assert.equal(result?.model, "anthropic/claude-sonnet-4:high");
+		assert.deepEqual(result?.attemptedModels, ["minimax/MiniMax-M3", "anthropic/claude-sonnet-4"]);
+		assert.deepEqual(result?.modelAttempts?.map((attempt) => attempt.success), [false, true]);
+		assert.match(result?.modelAttempts?.[0]?.error ?? "", /runaway output aborted/);
+		assert.match(result?.output ?? "", /Recovered asynchronously from runaway/);
+		assert.equal(mockPi.callCount(), 2);
+	});
+
+	it("preserves paused state and suppresses terminal step completion after an async sequential interrupt", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ delay: 10_000 });
+		const id = `async-interrupt-sequential-${Date.now().toString(36)}`;
+		executeAsyncChain!(id, {
+			chain: [{ agent: "worker", task: "Wait" }],
+			agents: [makeAgent("worker")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		await interruptAsyncRunner(id);
+		const payload = JSON.parse(fs.readFileSync(await waitForAsyncResultFile(id), "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, false);
+		assert.equal(payload.mode, "chain");
+		assert.doesNotMatch(readRunEventTypes(id).join("\n"), /subagent\.step\.completed/);
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.state, "paused");
+		assert.equal(status.steps?.[0]?.status, "paused");
+	});
+
+	it("preserves paused state and suppresses terminal step completion after an async parallel interrupt", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ delay: 10_000 });
+		mockPi.onCall({ delay: 10_000 });
+		const id = `async-interrupt-parallel-${Date.now().toString(36)}`;
+		executeAsyncChain!(id, {
+			chain: [{ parallel: [{ agent: "worker-a", task: "Wait A" }, { agent: "worker-b", task: "Wait B" }] }],
+			agents: [makeAgent("worker-a"), makeAgent("worker-b")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		await interruptAsyncRunner(id);
+		const payload = JSON.parse(fs.readFileSync(await waitForAsyncResultFile(id), "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, false);
+		assert.equal(payload.mode, "chain");
+		assert.doesNotMatch(readRunEventTypes(id).join("\n"), /subagent\.step\.completed/);
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.state, "paused");
+		assert.ok(status.steps?.every((step) => step.status === "paused"));
 	});
 
 	it("background runs fail zero-exit provider errors when no fallback succeeds", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

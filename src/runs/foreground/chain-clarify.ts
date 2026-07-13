@@ -389,6 +389,7 @@ export class ChainClarifyComponent implements Component {
 			progress: override.progress !== undefined ? override.progress : base.progress,
 			skills: override.skills !== undefined ? override.skills : base.skills,
 			model: override.model !== undefined ? override.model : base.model,
+			thinking: override.thinking !== undefined ? override.thinking : base.thinking,
 		};
 	}
 
@@ -696,6 +697,7 @@ export class ChainClarifyComponent implements Component {
 		const { baseModel } = splitThinkingSuffix(currentModel);
 		const newModel = level === "off" ? baseModel : `${baseModel}:${level}`;
 		this.updateBehavior(stepIndex, "model", newModel);
+		this.updateBehavior(stepIndex, "thinking", level);
 	}
 
 	private filterSkills(): void {

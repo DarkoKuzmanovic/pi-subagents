@@ -166,11 +166,19 @@ export function buildCompletionOutbox(
 	};
 }
 
+export interface PublishCompletionOutboxOptions {
+	fsOps?: WriteDurableJsonOptions["fsOps"];
+}
+
 /** Durably publish a completion outbox under a fresh owner-only directory, keyed by childId. */
-export function publishCompletionOutbox(asyncDir: string, outbox: AsyncOmCompletionOutboxV1): DurableWriteResult | undefined {
+export function publishCompletionOutbox(
+	asyncDir: string,
+	outbox: AsyncOmCompletionOutboxV1,
+	options?: PublishCompletionOutboxOptions,
+): DurableWriteResult | undefined {
 	try {
 		fs.mkdirSync(resolveOmOutboxDir(asyncDir), { recursive: true, mode: 0o700 });
-		return writeDurableJson(resolveOmOutboxPath(asyncDir, outbox.delivery.childId), outbox);
+		return writeDurableJson(resolveOmOutboxPath(asyncDir, outbox.delivery.childId), outbox, { fsOps: options?.fsOps });
 	} catch {
 		return undefined;
 	}
@@ -187,6 +195,7 @@ export function publishChildOmOutbox(
 	logicalChildKey: string | undefined,
 	sessionFile: string | undefined,
 	asyncDir: string,
+	options?: PublishCompletionOutboxOptions,
 ): boolean {
 	if (!manifest || !logicalChildKey || !sessionFile) return false;
 	const slot = manifest.childSlots[logicalChildKey];
@@ -195,7 +204,7 @@ export function publishChildOmOutbox(
 	if (!entries) return false;
 	const delivery = buildOmDeliveryBinding(manifest, slot.childId);
 	const outbox = buildCompletionOutbox(delivery, entries);
-	const result = publishCompletionOutbox(asyncDir, outbox);
+	const result = publishCompletionOutbox(asyncDir, outbox, options);
 	// A degraded write can land bytes on disk without a durable commit; we do NOT treat that as
 	// delivered (return false), but surface it so a silently-dropped OM outbox stays diagnosable.
 	if (result && result.status !== "committed") {

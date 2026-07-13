@@ -1,4 +1,6 @@
-# TODO
+# Completed work record
+
+> This historical file records a completed request; it is not an active backlog. See root `PLAN.md` for active execution state.
 
 ## Expose `thinking` level in /subagents TUI and inline dispatch
 

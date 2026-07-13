@@ -11,6 +11,8 @@ interface MockPiResponse {
 	structured?: unknown;
 	delay?: number;
 	keepAliveAfterFinalMessageMs?: number;
+	ignoreSigtermAfterFinalMessage?: boolean;
+	signalLogPath?: string;
 	jsonl?: unknown[];
 	steps?: Array<{
 		delay?: number;

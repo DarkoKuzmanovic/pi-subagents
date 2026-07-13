@@ -35,9 +35,9 @@ import { discoverAvailableSkills, normalizeSkillInput } from "../../agents/skill
 import { INTERCOM_BRIDGE_MARKER } from "../../intercom/intercom-bridge.ts";
 import { runSync } from "./execution.ts";
 import { buildChainSummary } from "../../shared/formatters.ts";
-import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd, substituteTemplateVars } from "../../shared/utils.ts";
-import { ChainOutputValidationError, outputEntryFromResult, renderChainTemplate, resolveOutputReferences, validateChainOutputBindings } from "../shared/chain-outputs.ts";
-import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection, type DynamicCollectedResult } from "../shared/dynamic-fanout.ts";
+import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd } from "../../shared/utils.ts";
+import { ChainOutputValidationError, outputEntryFromResult, renderChainTemplate, validateChainOutputBindings } from "../shared/chain-outputs.ts";
+import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, resolveItemTemplate, validateDynamicCollection, type DynamicCollectedResult, type DynamicMaterializedItem } from "../shared/dynamic-fanout.ts";
 import { SUBAGENT_BUDGET_EXHAUSTED_EVENT, type BudgetExhaustedEvent, type BudgetSummary, type ChainOutputMap } from "../../shared/types.ts";
 import { recordRun } from "../shared/run-history.ts";
 import {
@@ -97,12 +97,16 @@ interface ChainExecutionDetailsInput {
 interface ParallelChainRunInput {
 	step: ParallelStep;
 	parallelTemplates: string[];
+	rawParallelTemplates?: string[];
+	dynamicItemName?: string;
+	dynamicItems?: DynamicMaterializedItem[];
 	parallelBehaviors: ResolvedStepBehavior[];
 	agents: AgentConfig[];
 	stepIndex: number;
 	availableModels: ModelInfo[];
 	chainDir: string;
 	prev: string;
+	outputs: ChainOutputMap;
 	originalTask: string;
 	ctx: ExtensionContext;
 	intercomEvents?: IntercomEventBus;
@@ -211,8 +215,9 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			}
 
 			const taskTemplate = input.parallelTemplates[taskIndex] ?? "{previous}";
-			const behavior = suppressProgressForReadOnlyTask(input.parallelBehaviors[taskIndex]!, taskTemplate, input.originalTask);
-			const templateHasPrevious = taskTemplate.includes("{previous}");
+			const rawTaskTemplate = input.rawParallelTemplates?.[taskIndex] ?? taskTemplate;
+			const behavior = suppressProgressForReadOnlyTask(input.parallelBehaviors[taskIndex]!, rawTaskTemplate, input.originalTask);
+			const templateHasPrevious = rawTaskTemplate.includes("{previous}");
 			const { prefix, suffix } = buildChainInstructions(
 				behavior,
 				input.chainDir,
@@ -220,12 +225,15 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				templateHasPrevious ? undefined : input.prev,
 				input.inlineReads,
 			);
-			let taskStr = taskTemplate;
-			taskStr = substituteTemplateVars(taskStr, {
-				task: input.originalTask,
-				previous: input.prev,
-				chain_dir: input.chainDir,
-			});
+			let taskStr = renderChainTemplate(
+				taskTemplate,
+				{ task: input.originalTask, previous: input.prev, chain_dir: input.chainDir },
+				input.outputs,
+			);
+			const dynamicItem = input.dynamicItems?.[taskIndex];
+			if (dynamicItem && input.dynamicItemName) {
+				taskStr = resolveItemTemplate(taskStr, input.dynamicItemName, dynamicItem.item);
+			}
 			const cleanTask = taskStr;
 			taskStr = prefix + taskStr + suffix;
 
@@ -527,6 +535,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			progress: step.progress,
 			skills: normalizeSkillInput(step.skill),
 			model: step.model,
+			thinking: step.thinking,
 		}));
 
 		const resolvedBehaviors = agentConfigs.map((config, i) =>
@@ -572,6 +581,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					...step,
 					task: result.templates[i]!,
 					...(override?.model ? { model: override.model } : {}),
+					...(override?.thinking !== undefined ? { thinking: override.thinking } : {}),
 					...(override?.output !== undefined ? { output: override.output } : {}),
 					...("outputMode" in step && step.outputMode !== undefined ? { outputMode: step.outputMode } : {}),
 					...(override?.reads !== undefined ? { reads: override.reads } : {}),
@@ -639,7 +649,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		const stepTemplates = templates[stepIndex]!;
 
 		if (isParallelStep(step)) {
-			const parallelTemplates = (stepTemplates as string[]).map((template) => resolveOutputReferences(template, outputs));
+			const parallelTemplates = stepTemplates as string[];
 			const parallelCwd = resolveChildCwd(cwd ?? ctx.cwd, step.cwd);
 			let worktreeSetup: WorktreeSetup | undefined;
 			if (step.worktree) {
@@ -715,6 +725,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					chainDir,
 					prev,
 					originalTask,
+					outputs,
 					ctx,
 					intercomEvents,
 					cwd,
@@ -881,7 +892,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				concurrency: step.concurrency,
 				failFast: step.failFast,
 			};
-			const dynParallelTemplates = materialized.parallel.map((task) => resolveOutputReferences(task.task ?? "{previous}", outputs));
+			const dynParallelTemplates = materialized.parallel.map(() => step.parallel.task ?? "{previous}");
 			const dynAgentNames = dynamicParallelStep.parallel.map((task) => task.agent);
 			const dynParallelBehaviors = resolveParallelBehaviors(dynamicParallelStep.parallel, agents, stepIndex, chainSkills)
 				.map((behavior, taskIndex) => suppressProgressForReadOnlyTask(behavior, dynParallelTemplates[taskIndex] ?? dynamicParallelStep.parallel[taskIndex]?.task, originalTask));
@@ -903,13 +914,17 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const parallelResults = await runParallelChainTasks({
 				step: dynamicParallelStep,
 				parallelTemplates: dynParallelTemplates,
+				rawParallelTemplates: materialized.parallel.map(() => step.parallel.task ?? "{previous}"),
 				parallelBehaviors: dynParallelBehaviors,
+				dynamicItemName: step.expand.item ?? "item",
+				dynamicItems: materialized.items,
 				agents,
 				stepIndex,
 				availableModels,
 				chainDir,
 				prev,
 				originalTask,
+				outputs,
 				ctx,
 				intercomEvents,
 				cwd,
@@ -1020,7 +1035,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				outputMode: seqStep.outputMode,
 				reads: tuiOverride?.reads !== undefined ? tuiOverride.reads : seqStep.reads,
 				progress: tuiOverride?.progress !== undefined ? tuiOverride.progress : seqStep.progress,
-				thinking: seqStep.thinking,
+				thinking: tuiOverride?.thinking !== undefined ? tuiOverride.thinking : seqStep.thinking,
 				skills:
 					tuiOverride?.skills !== undefined
 						? tuiOverride.skills

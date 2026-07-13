@@ -28,6 +28,9 @@ export interface RunnerSubagentStep {
 	as?: string;
 	/** M6.1: structural logical key for the durable OM completion protocol, when this run is OM-registered. */
 	omLogicalChildKey?: string;
+	/** Runtime-only dynamic-fanout value inserted after ordinary chain template rendering. */
+	dynamicItemName?: string;
+	dynamicItem?: unknown;
 }
 
 export interface ParallelStepGroup {

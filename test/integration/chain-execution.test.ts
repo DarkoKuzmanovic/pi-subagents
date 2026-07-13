@@ -29,7 +29,10 @@ import { DEFAULT_CONTROL_CONFIG } from "../../src/runs/shared/subagent-control.t
 interface TestSequentialStep {
 	agent: string;
 	task?: string;
+	as?: string;
+	outputSchema?: Record<string, unknown>;
 	model?: string;
+	thinking?: string;
 	output?: string | false;
 	outputMode?: "inline" | "file-only";
 	reads?: string[] | false;
@@ -50,13 +53,23 @@ interface TestParallelTask {
 	cwd?: string;
 }
 
-type TestChainStep = TestSequentialStep | {
+interface TestParallelStep {
 	parallel: TestParallelTask[];
 	concurrency?: number;
 	failFast?: boolean;
 	worktree?: boolean;
 	cwd?: string;
-};
+}
+
+interface TestDynamicParallelStep {
+	expand: { from: { output: string; path: string }; item: string; maxItems: number };
+	parallel: TestParallelTask;
+	collect: { as: string };
+	concurrency?: number;
+	failFast?: boolean;
+}
+
+type TestChainStep = TestSequentialStep | TestParallelStep | TestDynamicParallelStep;
 
 interface ChainResultItem {
 	agent: string;
@@ -76,6 +89,7 @@ interface ChainExecutionResult {
 		results: ChainResultItem[];
 		chainAgents?: string[];
 		totalSteps?: number;
+	requestedAsync?: { chain: Array<{ thinking?: string }> };
 	};
 }
 
@@ -169,6 +183,69 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		assert.equal(result.details.results.length, 2);
 		assert.equal(result.details.results[0].agent, "analyst");
 		assert.equal(result.details.results[1].agent, "reporter");
+	});
+
+	it("passes Clarify thinking selections to the foreground sequential spawn", async () => {
+		for (const selection of [
+			{ level: "off", expectedModel: "openai/gpt-5-mini" },
+			{ level: "medium", expectedModel: "openai/gpt-5-mini:medium" },
+		]) {
+			mockPi.onCall({ output: "Done" });
+			const result = await executeChain(
+				makeChainParams(
+					[{ agent: "worker", task: "Do work", thinking: "high" }],
+					[makeAgent("worker", { model: "openai/gpt-5-mini", thinking: "high" })],
+					{
+						clarify: true,
+						ctx: {
+							...makeMinimalCtx(tempDir),
+							hasUI: true,
+							ui: {
+								custom: async () => ({
+									confirmed: true,
+									templates: ["Do work"],
+									behaviorOverrides: [{ thinking: selection.level }],
+								}),
+							},
+							model: { provider: "openai" },
+							modelRegistry: { getAvailable: () => [{ provider: "openai", id: "gpt-5-mini" }] },
+						},
+					},
+				),
+			);
+
+			assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
+			const args = readCallArgs(mockPi.callCount() - 1);
+			const modelIndex = args.indexOf("--model");
+			assert.notEqual(modelIndex, -1, "expected a model argument");
+			assert.equal(args[modelIndex + 1], selection.expectedModel);
+		}
+	});
+
+	it("preserves a Clarify thinking selection when requesting a background sequential chain", async () => {
+		const result = await executeChain(
+			makeChainParams(
+				[{ agent: "worker", task: "Do work", thinking: "high" }],
+				[makeAgent("worker", { model: "openai/gpt-5-mini", thinking: "high" })],
+				{
+					clarify: true,
+					ctx: {
+						...makeMinimalCtx(tempDir),
+						hasUI: true,
+						ui: {
+							custom: async () => ({
+								confirmed: true,
+								templates: ["Do work"],
+								behaviorOverrides: [{ thinking: "medium" }],
+								runInBackground: true,
+							}),
+						},
+					},
+				},
+			),
+		);
+
+		assert.equal(result.requestedAsync?.chain[0]?.thinking, "medium");
 	});
 
 	it("stops launching sequential chain steps once the output token budget is exhausted", async () => {
@@ -623,6 +700,97 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 
 		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
 		assert.equal(result.details.results.length, 2);
+	});
+
+	it("does not re-expand author tokens injected by named output in a parallel task", async () => {
+		mockPi.onCall({ output: "literal {task}" });
+		mockPi.onCall({ output: "review done" });
+		const agents = [makeAgent("producer"), makeAgent("reviewer")];
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{ agent: "producer", task: "Produce literal output", as: "producer" },
+					{ parallel: [{ agent: "reviewer", task: "Consume {outputs.producer}" }] },
+				],
+				agents,
+				{ task: "EXPANDED_TASK" },
+			),
+		);
+
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
+		const parallelTask = readCallArgs(1).at(-1) ?? "";
+		assert.match(parallelTask, /literal \{task\}/);
+		assert.doesNotMatch(parallelTask, /literal EXPANDED_TASK/);
+	});
+
+	it("does not re-expand author tokens injected by named output in a dynamic fanout task", async () => {
+		mockPi.onCall({ structured: { files: ["a.ts"], note: "literal {task}" }, output: "listed files" });
+		mockPi.onCall({ output: "review done" });
+		const agents = [makeAgent("producer"), makeAgent("reviewer")];
+		const filesSchema = {
+			type: "object",
+			properties: {
+				files: { type: "array", items: { type: "string" } },
+				note: { type: "string" },
+			},
+			required: ["files", "note"],
+			additionalProperties: false,
+		};
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{ agent: "producer", task: "List files", as: "files", outputSchema: filesSchema },
+					{
+						expand: { from: { output: "files", path: "/files" }, item: "file", maxItems: 1 },
+						parallel: { agent: "reviewer", task: "Review {file} with {outputs.files}" },
+						collect: { as: "reviews" },
+					},
+				],
+				agents,
+				{ task: "EXPANDED_TASK" },
+			),
+		);
+
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
+		const dynamicTask = readCallArgs(1).at(-1) ?? "";
+		assert.match(dynamicTask, /literal \{task\}/);
+		assert.doesNotMatch(dynamicTask, /literal EXPANDED_TASK/);
+	});
+
+	it("does not re-expand author tokens injected by a dynamic item", async () => {
+		mockPi.onCall({ structured: { files: ["literal {task}"] }, output: "listed files" });
+		mockPi.onCall({ output: "review done" });
+		const agents = [makeAgent("producer"), makeAgent("reviewer")];
+		const filesSchema = {
+			type: "object",
+			properties: {
+				files: { type: "array", items: { type: "string" } },
+			},
+			required: ["files"],
+			additionalProperties: false,
+		};
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{ agent: "producer", task: "List files", as: "files", outputSchema: filesSchema },
+					{
+						expand: { from: { output: "files", path: "/files" }, item: "file", maxItems: 1 },
+						parallel: { agent: "reviewer", task: "Review {file}" },
+						collect: { as: "reviews" },
+					},
+				],
+				agents,
+				{ task: "EXPANDED_TASK" },
+			),
+		);
+
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
+		const dynamicTask = readCallArgs(1).at(-1) ?? "";
+		assert.match(dynamicTask, /Review literal \{task\}/);
+		assert.doesNotMatch(dynamicTask, /Review literal EXPANDED_TASK/);
 	});
 
 	it("aggregates parallel outputs for next sequential step", async () => {

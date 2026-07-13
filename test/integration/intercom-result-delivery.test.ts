@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -350,6 +351,42 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			assert.equal(payload?.to, `subagent-worker-${runId}-1`);
 			assert.match(payload?.message ?? "", /Can you clarify the last change\?/);
 		} finally {
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+		}
+	});
+
+	it("interrupts a persisted running async run after tracker state is reset", async () => {
+		const runId = `interrupt-persisted-${Date.now()}`;
+		const asyncDir = path.join(ASYNC_DIR, runId);
+		const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+		try {
+			assert.ok(typeof child.pid === "number" && child.pid > 0, "expected child pid");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId,
+				mode: "single",
+				state: "running",
+				pid: child.pid,
+				startedAt: Date.now(),
+				lastUpdate: Date.now(),
+				steps: [{ agent: "worker", status: "running" }],
+			}, null, 2), "utf-8");
+			const { executor, state } = makeExecutor();
+			state.asyncJobs.clear();
+
+			const result = await executor.execute(
+				"interrupt-persisted",
+				{ action: "interrupt", id: runId },
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+
+			assert.equal(result.isError, undefined);
+			assert.match(result.content[0]?.text ?? "", new RegExp(`Interrupt requested for async run ${runId}`));
+			await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+		} finally {
+			if (child.exitCode === null) child.kill("SIGKILL");
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 		}
 	});
