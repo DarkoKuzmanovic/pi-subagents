@@ -1,5 +1,7 @@
 # Progress: Unify FG/BG Execution
 
+> **Historical snapshot:** this 2026-06 unification reconnaissance is retained for context. Its extraction plan is not active; consult `PLAN.md` and current source/tests for status.
+
 ## Phase 1: Reconnaissance (Complete)
 
 **Output:** `.pi/tasks/unify-fg-bg-execution/recon/scout.md`

@@ -189,7 +189,7 @@ function formatLongRunningFacts(event: ControlEvent): string | undefined {
 	return facts.length > 0 ? facts.join(" | ") : undefined;
 }
 
-export function formatControlNoticeMessage(event: ControlEvent, childIntercomTarget?: string): string {
+export function formatControlNoticeMessage(event: ControlEvent, childIntercomTarget?: string, escalationGraceMs = DEFAULT_CONTROL_CONFIG.escalationGraceMs): string {
 	const runTarget = event.runId;
 	if (event.reason === "completion_guard") {
 		return [
@@ -228,8 +228,10 @@ export function formatControlNoticeMessage(event: ControlEvent, childIntercomTar
 			`Run: ${runTarget}${event.index !== undefined ? ` step ${event.index + 1}` : ""}`,
 			`Signal: ${event.message}`,
 			elapsedSeconds !== undefined ? `Idle for: ${elapsedSeconds}s` : undefined,
-			"Action: Nudge sent via intercom. Will terminate if no response within grace period.",
-			"Grace: subagent will be killed if no activity within 30s",
+			childIntercomTarget
+				? "Action: Nudge sent via intercom. Will terminate if no response within grace period."
+				: "Action: no child message route registered. Will terminate after the grace period.",
+			`Grace: subagent will be killed if no activity within ${Math.ceil(escalationGraceMs / 1000)}s`,
 			`Interrupt now: subagent({ action: "interrupt", id: "${runTarget}" })`,
 		].filter((line): line is string => Boolean(line)).join("\n");
 	}

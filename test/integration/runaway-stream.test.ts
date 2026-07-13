@@ -20,6 +20,7 @@ import {
 	createMockPi,
 	createTempDir,
 	removeTempDir,
+	makeAgent,
 	makeAgentConfigs,
 	tryImport,
 } from "../support/helpers.ts";
@@ -28,7 +29,10 @@ interface RunSyncResult {
 	exitCode: number;
 	error?: string;
 	interrupted?: boolean;
+	model?: string;
+	attemptedModels?: string[];
 	modelAttempts?: Array<{ success?: boolean; error?: string }>;
+	finalOutput?: string;
 }
 
 interface ExecutionModule {
@@ -104,6 +108,29 @@ describe("runaway stream watchdog (foreground)", { skip: !runSync ? "pi packages
 		assert.match(result.error ?? "", /runaway output aborted: \d+ MB of raw model events since last text or tool activity .*likely a thinking loop/);
 		// The failure must flow through the existing attempt/error reporting.
 		assert.match(result.modelAttempts?.at(-1)?.error ?? "", /runaway output aborted/);
+	});
+
+	it("retries a runaway MiniMax attempt on the configured fallback", { timeout: 120_000 }, async () => {
+		const flood = Array.from({ length: 500 }, () => thinkingFloodEvent());
+		mockPi.onCall({ jsonl: flood, keepAliveAfterFinalMessageMs: 60_000, exitCode: 0 });
+		mockPi.onCall({ output: "Recovered on fallback" });
+		const agents = [makeAgent("flooder", {
+			model: "minimax/MiniMax-M3",
+			thinking: "high",
+			fallbackModels: ["anthropic/claude-sonnet-4"],
+		})];
+
+		const result = await runSync!(tempDir, agents, "flooder", "Summarize the repo", {
+			runId: "runaway-fallback",
+		});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.model, "anthropic/claude-sonnet-4:high");
+		assert.deepEqual(result.attemptedModels, ["minimax/MiniMax-M3", "anthropic/claude-sonnet-4"]);
+		assert.deepEqual(result.modelAttempts?.map((attempt) => attempt.success), [false, true]);
+		assert.match(result.modelAttempts?.[0]?.error ?? "", /runaway output aborted/);
+		assert.equal(result.finalOutput, "Recovered on fallback");
+		assert.equal(mockPi.callCount(), 2);
 	});
 
 	it("aborts a later thinking-only flood after earlier progress", { timeout: 120_000 }, async () => {

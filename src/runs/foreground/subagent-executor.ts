@@ -370,7 +370,8 @@ function resolveResumeTarget(params: SubagentParamsLike, state: SubagentState): 
 	throw new Error("Run not found. Provide id or runId.");
 }
 
-function getAsyncInterruptTarget(state: SubagentState, runId: string | undefined): { asyncId: string; asyncDir: string } | undefined {
+function getAsyncInterruptTarget(state: SubagentState, runId: string | undefined, persistedAsyncDir?: string | null): { asyncId: string; asyncDir: string } | undefined {
+	if (runId && persistedAsyncDir) return { asyncId: runId, asyncDir: persistedAsyncDir };
 	if (runId) {
 		const direct = state.asyncJobs.get(runId);
 		if (direct) return { asyncId: direct.asyncId, asyncDir: direct.asyncDir };
@@ -399,7 +400,7 @@ function emitControlNotification(input: {
 		event: input.event,
 		source: "foreground" as const,
 		childIntercomTarget,
-		noticeText: formatControlNoticeMessage(input.event, childIntercomTarget),
+		noticeText: formatControlNoticeMessage(input.event, childIntercomTarget, input.controlConfig.escalationGraceMs),
 	};
 	if (input.controlConfig.notifyChannels.includes("event")) {
 		input.pi.events.emit(SUBAGENT_CONTROL_EVENT, payload);
@@ -413,8 +414,8 @@ function emitControlNotification(input: {
 	}
 }
 
-function interruptAsyncRun(state: SubagentState, runId: string | undefined): AgentToolResult<Details> | null {
-	const target = getAsyncInterruptTarget(state, runId);
+function interruptAsyncRun(state: SubagentState, runId: string | undefined, persistedAsyncDir?: string | null): AgentToolResult<Details> | null {
+	const target = getAsyncInterruptTarget(state, runId, persistedAsyncDir);
 	if (!target) return null;
 	const status = readStatus(target.asyncDir);
 	if (status?.state !== "running" || typeof status.pid !== "number") {
@@ -2538,7 +2539,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						details: { mode: "management", results: [] },
 					};
 				}
-				const asyncInterruptResult = interruptAsyncRun(deps.state, resolved?.kind === "async" ? resolved.id : targetRunId);
+				const asyncInterruptResult = interruptAsyncRun(
+					deps.state,
+					resolved?.kind === "async" ? resolved.id : targetRunId,
+					resolved?.kind === "async" ? resolved.location.asyncDir : undefined,
+				);
 				if (asyncInterruptResult) return asyncInterruptResult;
 				return {
 					content: [{ type: "text", text: "No interrupt-capable run found in this session." }],

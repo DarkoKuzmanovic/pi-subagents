@@ -196,6 +196,12 @@ async function main() {
 		process.stderr.write(response.stderr);
 	}
 
+	if (response.ignoreSigtermAfterFinalMessage === true) {
+		process.on("SIGTERM", () => {
+			if (typeof response.signalLogPath === "string") fs.appendFileSync(response.signalLogPath, "SIGTERM\n");
+		});
+	}
+
 	if (typeof response.keepAliveAfterFinalMessageMs === "number" && response.keepAliveAfterFinalMessageMs > 0) {
 		await new Promise((resolve) => setTimeout(resolve, response.keepAliveAfterFinalMessageMs));
 	}

@@ -371,4 +371,20 @@ describe("timeout escalation flow", () => {
 		assert.match(message, /Subagent killed \(inactivity timeout\): worker/);
 		assert.match(message, /Process terminated after inactivity timeout/);
 	});
+
+	it("uses the configured grace period and does not invent a nudge route", () => {
+		const event = buildControlEvent({
+			type: "timed_out_escalating",
+			to: "timed_out_escalating",
+			runId: "run-1",
+			agent: "worker",
+			message: "Timed out",
+			reason: "step_inactivity_timeout",
+		});
+
+		const message = formatControlNoticeMessage(event, undefined, 5_000);
+		assert.match(message, /Grace: subagent will be killed if no activity within 5s/);
+		assert.match(message, /Action: no child message route registered/);
+		assert.doesNotMatch(message, /Nudge sent via intercom/);
+	});
 });

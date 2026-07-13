@@ -447,6 +447,38 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(mockPi.callCount(), 2);
 	});
 
+	it("retries MiniMax input_tokens stream failures on a configured fallback", async () => {
+		mockPi.onCall({
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "MiniMax stream failed" }],
+					model: "minimax/MiniMax-M3",
+					errorMessage: "Cannot read properties of undefined (reading 'input_tokens')",
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+				},
+			}],
+			exitCode: 1,
+		});
+		mockPi.onCall({ output: "Recovered from MiniMax fallback" });
+		const agents = [makeAgent("echo", {
+			model: "minimax/MiniMax-M3",
+			thinking: "high",
+			fallbackModels: ["anthropic/claude-sonnet-4"],
+		})];
+
+		const result = await runSync(tempDir, agents, "echo", "Task", { runId: "minimax-input-tokens-fallback" });
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.model, "anthropic/claude-sonnet-4:high");
+		assert.deepEqual(result.attemptedModels, ["minimax/MiniMax-M3", "anthropic/claude-sonnet-4"]);
+		assert.deepEqual(result.modelAttempts?.map((attempt) => attempt.success), [false, true]);
+		assert.match(result.modelAttempts?.[0]?.error ?? "", /input_tokens/);
+		assert.equal(result.finalOutput, "Recovered from MiniMax fallback");
+		assert.equal(mockPi.callCount(), 2);
+	});
+
 	it("retries with fallback models when provider errors exit zero", async () => {
 		mockPi.onCall({
 			jsonl: [{
@@ -1047,6 +1079,26 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.progress.activityState, undefined);
 		assert.deepEqual(controlEvents, []);
 		assert.match(result.finalOutput ?? "", /Interrupted/);
+	});
+
+	it("hard-kills an uncooperative child after final-drain SIGTERM and leaves no live process", async () => {
+		const signalLogPath = path.join(tempDir, "final-drain-signals.log");
+		mockPi.onCall({
+			output: "Final response",
+			keepAliveAfterFinalMessageMs: 10_000,
+			ignoreSigtermAfterFinalMessage: true,
+			signalLogPath,
+		});
+		const start = Date.now();
+		const result = await runSync(tempDir, makeAgentConfigs(["slow"]), "slow", "Finish", {
+			runId: "final-drain-hard-kill",
+		});
+		const elapsed = Date.now() - start;
+
+		assert.ok(elapsed >= 3_500, `should wait through SIGTERM and SIGKILL grace, took ${elapsed}ms`);
+		assert.ok(elapsed < 7_000, `SIGKILL must prevent the child from lingering, took ${elapsed}ms`);
+		assert.equal(fs.readFileSync(signalLogPath, "utf-8"), "SIGTERM\n");
+		assert.equal(result.exitCode, 0, "forced final-drain cleanup preserves the completed result");
 	});
 
 	for (const toolName of ["intercom", "contact_supervisor"]) {
