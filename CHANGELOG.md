@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.41.1] - 2026-07-13
+
+### Fixed
+
+- Completed single-pass chain template rendering across foreground parallel, dynamic-fanout, and detached async paths so substituted output and item values cannot trigger a later template expansion.
+- Clarification-selected thinking levels now override prior effective thinking values, including `off`.
+- Explicit async interrupts can resolve a persisted running async run after in-memory tracker reset.
+- Timeout escalation notices now show the configured grace period and accurately report when no child intercom route exists.
+- Legacy extension configuration ignores malformed optional fields instead of passing invalid values into dispatch paths.
+
+### Tests
+
+- Added regressions for Clarify thinking override and timeout-notice accuracy, plus retained call-path coverage for template integrity.
+
+### Documentation
+
+- Marked tracked historical progress and TODO records as non-active context.
+
 ## [0.41.0] - 2026-07-12
 
 ### Fixed
