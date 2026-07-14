@@ -9,21 +9,25 @@
  *
  * 1. `createStreamWatchdog` — per-child-process guard over the `--mode json`
  *    stdout stream:
- *    - Rolling no-progress trip (raw bytes): a child that floods stdout without
- *      producing a new meaningful progress marker (assistant text or a tool call),
- *      even when an earlier turn had made progress.
+ *    - Delta-aware no-progress trip (accounted bytes): the PRIMARY guard against
+ *      thinking floods. pi's `--mode json` re-serializes the entire partial message
+ *      on every streaming delta, so RAW stdout grows ~quadratically with message
+ *      length and inversely with delta granularity — a 6-char-delta streamer inflates
+ *      ~25 KB of real thought into ~30 MB of raw stream. Counting RAW there is a false
+ *      positive that kills coherent reviews for their streaming shape alone, so the
+ *      trip counts only ACCOUNTED bytes (delta payload + flat envelope) since the last
+ *      progress marker.
+ *    - Non-JSON stdout backstop (raw bytes): bytes that DON'T resolve into a parsed
+ *      event accumulate in a raw no-progress window; every successfully-parsed event
+ *      credits its bytes back, so this guard sees only non-JSON floods (a child spewing
+ *      raw stdout) and never fires on amplified JSON streams.
  *    - Degenerate-loop trip (parsed deltas): a periodic-suffix detector over
  *      the normalized streaming-delta tail of the current content block.
  *      Chunking-independent and value-cycle-tolerant, because real loops vary
  *      both the delta boundaries (one or two fragment copies per delta) and
  *      embedded numeric literals (30000/60000/10000).
- *    - Hard cap (accounted bytes): `message_update` events re-serialize the
- *      entire partial message on every delta, so raw stdout grows
- *      quadratically with message length. The hard cap therefore counts only
- *      the delta payload (plus a flat envelope overhead) for streaming
- *      updates, keeping it proportional to what the model actually generated
- *      — verbose-but-honest runs no longer trip it. A generous raw-byte
- *      backstop still bounds any flood shape.
+ *    - Hard caps: a 200 MB accounted-byte cap and a 1 GB raw-byte cap bound total
+ *      output as final backstops even when the stream keeps showing progress.
  *
  * 2. `createRunEventAppender` — a per-run byte budget for the async runner's
  *    events.jsonl. Once the budget is exceeded it appends one structural
@@ -39,17 +43,35 @@
 export const EVENTS_JSONL_BYTE_BUDGET = 50 * 1024 * 1024; // 50 MB
 
 /**
- * Runaway trip: raw stdout bytes since the latest meaningful progress marker.
- * Calibrated against 3 captured multi-child runs (11 children, 3 genuine runaways):
- * healthy children peaked at ~3.9 MB raw-since-progress while every runaway hit the
- * 30 MB trip (~7.7x margin, zero false positives). Using RAW (not delta-aware
- * `accounted`) bytes is deliberate: a thinking loop re-serializes a growing snapshot on
- * every delta, so raw amplification (measured 11x here, up to ~210x for coder paralysis)
- * is exactly what separates a loop from heavy-but-healthy reasoning. Accounted bytes
- * since progress do NOT separate them — the confirmed runaway emitted 609 KB accounted,
- * which fell BETWEEN a healthy reviewer (554 KB) and a legit interrupted child (727 KB).
+ * Delta-aware no-progress trip: ACCOUNTED model-output bytes since the latest
+ * meaningful progress marker (assistant text or tool activity) — the PRIMARY guard
+ * against thinking floods. pi's `--mode json` re-serializes the full growing message
+ * on every streaming delta, so RAW stdout grows ~quadratically with message length
+ * and inversely with delta granularity: a fine-grained streamer (e.g. 6-char thinking
+ * deltas) inflates ~25 KB of real thought into ~30 MB of raw stream (measured ~1,100x
+ * on captured tencent/hy3, umans-glm-5.2 and deepseek-v4-flash runs) with zero
+ * misbehaviour. Tripping on RAW there is a FALSE POSITIVE that kills coherent,
+ * near-complete reviews for their streaming shape alone. Counting delta-aware ACCOUNTED
+ * bytes strips the snapshot amplification, so a genuine runaway (real MBs generated
+ * without ever acting) trips while honest micro-delta thinking survives. The raw
+ * no-progress window credits back every parsed event (see RUNAWAY_NO_PROGRESS_BYTES),
+ * so this accounted trip — not the raw backstop — is what governs JSON streams.
+ * Verbatim loops are caught earlier and independently by the degenerate-loop detector.
+ * Calibration: the confirmed runaway reached only ~609 KB accounted by the time it hit the
+ * old 30 MB raw trip (honest runs 554-727 KB), so accounted volume alone does not discriminate
+ * at small scale — 8 MB is a generous no-progress ceiling, well above honest between-progress
+ * thinking yet still far below any sustained real-content flood.
  */
-export const RUNAWAY_NO_PROGRESS_BYTES = 30 * 1024 * 1024; // 30 MB
+export const RUNAWAY_ACCOUNTED_NO_PROGRESS_BYTES = 8 * 1024 * 1024; // 8 MB
+
+/**
+ * Non-JSON stdout backstop: raw bytes since the last progress marker that did NOT
+ * resolve into a parsed child event. Every successfully-parsed event credits its
+ * serialized size back to this window (see observeEvent), so amplified JSON streams
+ * never reach it — it bounds only genuine non-JSON stdout floods (a child spewing raw
+ * bytes) and caps how much unparsed stdout the runner buffers before aborting.
+ */
+export const RUNAWAY_NO_PROGRESS_BYTES = 32 * 1024 * 1024; // 32 MB
 
 /**
  * Hard cap on ACCOUNTED model-output bytes (delta-aware; streaming
@@ -82,8 +104,9 @@ export const DELTA_EVENT_OVERHEAD_BYTES = 64;
  * within LOOP_RAW_MAX_PERIOD_CHARS) — trips, at LOOP_SUSTAIN_CHARS. A raw-aperiodic
  * but normalized-periodic stream is EITHER a real incrementing table OR a
  * value-incrementing loop; the two are indistinguishable by both shape and volume,
- * so the detector does NOT kill them (that would abort legitimate large tables) —
- * they are bounded by the accounted hard cap instead.
+ * so the detector does NOT kill them (that would abort legitimate large tables) — a
+ * no-progress stream of them is bounded by the accounted no-progress trip, a progressing
+ * one by the accounted hard cap.
  *
  * Calibrated against captured production streams: MiniMax-M3 tool-call loops
  * show a ~13–14 char normalized period sustained for tens of KB, while honest
@@ -99,8 +122,8 @@ export const LOOP_SUSTAIN_CHARS = 8192;
 // period must repeat several times within the window (1024/256 = 4x); a near-window cap would
 // declare spurious periodicity on incrementing tables from a tiny suffix overlap. Verbatim
 // loops have raw period == normalized period (<= LOOP_MAX_PERIOD_CHARS), so 256 never misses a
-// verbatim loop; a wider-period cycling loop is caught later by the accounted hard cap rather
-// than risk a spurious early trip on a real table.
+// verbatim loop; a wider-period cycling loop is caught by the accounted no-progress trip
+// (or hard cap) rather than risk a spurious early trip on a real table.
 export const LOOP_RAW_MAX_PERIOD_CHARS = 256;
 
 /** Structural notice appended once when the events.jsonl budget trips. */
@@ -215,6 +238,7 @@ export function periodicTailPeriod(tail: string, suffixChars: number = LOOP_SUFF
 
 export interface StreamWatchdogLimits {
 	noProgressBytes?: number;
+	accountedNoProgressBytes?: number;
 	hardCapBytes?: number;
 	rawHardCapBytes?: number;
 	loopSuffixChars?: number;
@@ -249,6 +273,7 @@ export interface StreamWatchdog {
 
 export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamWatchdog {
 	const noProgressBytes = limits.noProgressBytes ?? RUNAWAY_NO_PROGRESS_BYTES;
+	const accountedNoProgressBytes = limits.accountedNoProgressBytes ?? RUNAWAY_ACCOUNTED_NO_PROGRESS_BYTES;
 	const hardCapBytes = limits.hardCapBytes ?? RUNAWAY_HARD_CAP_BYTES;
 	const rawHardCapBytes = limits.rawHardCapBytes ?? RUNAWAY_RAW_HARD_CAP_BYTES;
 	const loopSuffixChars = limits.loopSuffixChars ?? LOOP_SUFFIX_CHARS;
@@ -260,6 +285,9 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 	let accountedBytes = 0;
 	let hasProgress = false;
 	let lastProgressRawBytes = 0;
+	let lastProgressAccountedBytes = 0;
+	let creditedRawBytes = 0;
+	let lastProgressCreditedBytes = 0;
 	let tripped = false;
 
 	// Degenerate-loop detector state, tracked PER content block because real
@@ -284,15 +312,16 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 			if (typeof count === "number" && Number.isFinite(count) && count > 0) {
 				rawBytes += count;
 			}
-			const bytesSinceProgress = rawBytes - lastProgressRawBytes;
-			if (bytesSinceProgress > noProgressBytes) {
+			const rawSinceProgress = rawBytes - lastProgressRawBytes;
+			const unaccountedSinceProgress = Math.max(0, rawSinceProgress - (creditedRawBytes - lastProgressCreditedBytes));
+			if (unaccountedSinceProgress > noProgressBytes) {
 				return trip(
-					`runaway output aborted: ${formatMb(bytesSinceProgress)} MB of raw model events since last text or tool activity (${formatStreamStats(rawBytes, accountedBytes)}; likely a thinking loop)`,
+					`runaway output aborted: ${formatMb(unaccountedSinceProgress)} MB of unparsed non-JSON stdout since last text or tool activity (${formatStreamStats(rawBytes, accountedBytes)})`,
 				);
 			}
 			if (rawBytes > rawHardCapBytes) {
 				return trip(
-					`runaway output aborted: ${formatMb(rawBytes)} MB of raw model events exceeded the ${formatMb(rawHardCapBytes)} MB raw output backstop (${formatStreamStats(rawBytes, accountedBytes)}, ${formatMb(bytesSinceProgress)} MB since last text or tool activity)`,
+					`runaway output aborted: ${formatMb(rawBytes)} MB of raw model events exceeded the ${formatMb(rawHardCapBytes)} MB raw output backstop (${formatStreamStats(rawBytes, accountedBytes)}, ${formatMb(rawSinceProgress)} MB since last text or tool activity)`,
 				);
 			}
 			return undefined;
@@ -300,9 +329,15 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 		observeEvent(event: unknown, serializedBytes?: number): string | undefined {
 			if (tripped) return undefined;
 			try {
+				// Progress resets all three no-progress windows. The snapshot is taken BEFORE this
+				// event's own bytes are accounted, so a single progress-bearing event whose serialized
+				// size alone exceeds the accounted trip would self-trip — unreachable at realistic
+				// per-message output sizes.
 				if (eventShowsProgress(event)) {
 					hasProgress = true;
 					lastProgressRawBytes = rawBytes;
+					lastProgressAccountedBytes = accountedBytes;
+					lastProgressCreditedBytes = creditedRawBytes;
 				}
 
 				const streamingDelta = extractStreamingDelta(event);
@@ -312,6 +347,10 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 					accountedBytes += streamingDelta
 						? Math.min(serializedBytes, Buffer.byteLength(streamingDelta.delta, "utf8") + DELTA_EVENT_OVERHEAD_BYTES)
 						: serializedBytes;
+					// Credit this parsed event's raw footprint back to the non-JSON no-progress
+					// window so snapshot-amplified JSON streams never reach the raw backstop;
+					// only genuinely unparsed stdout accumulates there.
+					creditedRawBytes += serializedBytes;
 				}
 
 				// Degenerate-loop detection over the normalized per-block delta tail.
@@ -352,6 +391,12 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 					resetLoopState();
 				}
 
+				const accountedSinceProgress = accountedBytes - lastProgressAccountedBytes;
+				if (accountedSinceProgress > accountedNoProgressBytes) {
+					return trip(
+						`runaway output aborted: ${formatMb(accountedSinceProgress)} MB of model output since last text or tool activity (${formatStreamStats(rawBytes, accountedBytes)}; likely a thinking loop)`,
+					);
+				}
 				if (accountedBytes > hardCapBytes) {
 					return trip(`runaway output aborted: ${formatMb(accountedBytes)} MB of model output exceeded the ${formatMb(hardCapBytes)} MB hard output cap (${formatStreamStats(rawBytes, accountedBytes)})`);
 				}

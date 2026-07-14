@@ -7,6 +7,7 @@ import {
 	LOOP_MAX_PERIOD_CHARS,
 	LOOP_SUFFIX_CHARS,
 	LOOP_SUSTAIN_CHARS,
+	RUNAWAY_ACCOUNTED_NO_PROGRESS_BYTES,
 	RUNAWAY_HARD_CAP_BYTES,
 	RUNAWAY_NO_PROGRESS_BYTES,
 	RUNAWAY_RAW_HARD_CAP_BYTES,
@@ -85,10 +86,16 @@ function m3InterleavedLoopDeltas(count: number): Array<Record<string, unknown>> 
 	return events;
 }
 
+/** Aperiodic letters-only token (digits collapse under normalization, so avoid them). */
+function tok(n: number): string {
+	return n.toString(36).replace(/[0-9]/g, (c) => "ghijklmnopq"[Number(c)] ?? "z");
+}
+
 describe("stream-budget constants", () => {
-	it("uses 50 MB events budget, 30 MB no-progress trip, 200 MB accounted hard cap, 1 GB raw backstop", () => {
+	it("uses 50 MB events budget, 8 MB delta-aware / 32 MB non-JSON no-progress trips, 200 MB accounted hard cap, 1 GB raw backstop", () => {
 		assert.equal(EVENTS_JSONL_BYTE_BUDGET, 50 * MB);
-		assert.equal(RUNAWAY_NO_PROGRESS_BYTES, 30 * MB);
+		assert.equal(RUNAWAY_ACCOUNTED_NO_PROGRESS_BYTES, 8 * MB);
+		assert.equal(RUNAWAY_NO_PROGRESS_BYTES, 32 * MB);
 		assert.equal(RUNAWAY_HARD_CAP_BYTES, 200 * MB);
 		assert.equal(RUNAWAY_RAW_HARD_CAP_BYTES, 1024 * MB);
 	});
@@ -228,12 +235,12 @@ describe("createStreamWatchdog: raw-byte guards (addBytes)", () => {
 		assert.equal(watchdog.bytes, 550 * 1024);
 	});
 
-	it("trips just past 30 MB with no progress marker, with a thinking-loop message", () => {
+	it("trips just past the 32 MB non-JSON backstop with no progress marker", () => {
 		const watchdog = createStreamWatchdog();
 		assert.equal(watchdog.addBytes(RUNAWAY_NO_PROGRESS_BYTES), undefined, "exactly at the limit must not trip");
 		const message = watchdog.addBytes(1);
 		assert.ok(message, "must trip past the limit");
-		assert.match(message!, /^runaway output aborted: 30 MB of raw model events since last text or tool activity .*likely a thinking loop/);
+		assert.match(message!, /^runaway output aborted: 32 MB of unparsed non-JSON stdout since last text or tool activity/);
 		assert.equal(watchdog.tripped, true);
 	});
 
@@ -272,7 +279,7 @@ describe("createStreamWatchdog: raw-byte guards (addBytes)", () => {
 		assert.ok(watchdog.addBytes(1));
 	});
 
-	it("thinking-only events do not count as progress: still trips at 30 MB", () => {
+	it("thinking-only events do not count as progress: still trips at the raw backstop", () => {
 		const watchdog = createStreamWatchdog();
 		watchdog.observeEvent(thinkingEvent());
 		assert.ok(watchdog.addBytes(RUNAWAY_NO_PROGRESS_BYTES + 1));
@@ -351,6 +358,69 @@ describe("createStreamWatchdog: delta-aware accounted hard cap (observeEvent)", 
 		}
 		assert.ok(rawTotal > 100 * MB, "raw stream would have blown a 100 MB raw cap");
 		assert.ok(watchdog.accountedBytes < 1 * MB, "accounted bytes stay proportional to content");
+	});
+});
+
+describe("createStreamWatchdog: delta-aware no-progress trip (snapshot-amplification fix)", () => {
+	it("trips when ACCOUNTED output since progress exceeds the limit", () => {
+		const watchdog = createStreamWatchdog({ accountedNoProgressBytes: 1000 });
+		let message: string | undefined;
+		for (let i = 0; i < 200 && !message; i++) {
+			message = watchdog.observeEvent(deltaEvent("thinking_delta", 0, ` reasoning about ${tok(i)}`), 50_000);
+		}
+		assert.ok(message, "must trip on accounted-since-progress");
+		assert.match(message!, /model output since last text or tool activity/);
+		assert.match(message!, /likely a thinking loop/);
+		assert.equal(watchdog.tripped, true);
+	});
+
+	it("does NOT trip on snapshot-amplified micro-delta thinking (the captured HY false positive)", () => {
+		// Coherent thinking streamed as thousands of ~6-char deltas, each re-serialized into
+		// a growing snapshot. Total raw balloons far past the 32 MB non-JSON backstop, but every
+		// delta is a PARSED event that credits its bytes back, so only one uncredited snapshot is
+		// ever in flight and the real generated content (accounted) stays tiny.
+		const watchdog = createStreamWatchdog();
+		let rawSinceProgress = 0;
+		for (let i = 1; i <= 4000; i++) {
+			const snapshotBytes = i * 12; // snapshot grows every delta (quadratic raw)
+			rawSinceProgress += snapshotBytes;
+			assert.equal(watchdog.addBytes(snapshotBytes), undefined, `raw addBytes must not trip at ${i}`);
+			assert.equal(
+				watchdog.observeEvent(deltaEvent("thinking_delta", 0, ` w${tok(i)}`), snapshotBytes),
+				undefined,
+				`observeEvent must not trip at ${i}`,
+			);
+		}
+		assert.ok(rawSinceProgress > RUNAWAY_NO_PROGRESS_BYTES, "total raw must exceed the 32 MB non-JSON backstop");
+		assert.ok(watchdog.accountedBytes < 8 * MB, "real generated content stays small");
+		assert.equal(watchdog.tripped, false, "coherent micro-delta thinking must survive");
+	});
+
+	it("credits parsed JSON bytes: only UNPARSED stdout counts toward the non-JSON backstop", () => {
+		const watchdog = createStreamWatchdog({ noProgressBytes: 1000 });
+		// Raw stdout fully consumed by parsed events -> credited -> the backstop never fires.
+		for (let i = 0; i < 10; i++) {
+			assert.equal(watchdog.addBytes(500), undefined);
+			assert.equal(watchdog.observeEvent(deltaEvent("thinking_delta", 0, ` ${tok(i)}`), 500), undefined);
+		}
+		assert.equal(watchdog.tripped, false, "a fully-parsed stream never trips the non-JSON backstop");
+		// Raw stdout that never parses (no crediting) accumulates and trips.
+		const message = watchdog.addBytes(1001);
+		assert.ok(message, "unparsed stdout past the backstop trips");
+		assert.match(message!, /unparsed non-JSON stdout/);
+	});
+
+	it("resets the accounted no-progress window on a progress marker", () => {
+		const watchdog = createStreamWatchdog({ accountedNoProgressBytes: 1000 });
+		const feed = (kind: string, idx: number, n: number) => {
+			for (let i = 0; i < n; i++) {
+				assert.equal(watchdog.observeEvent(deltaEvent(kind, idx, ` ${tok(i)}`), 40), undefined);
+			}
+		};
+		feed("thinking_delta", 0, 20); // 20 * 40 = 800 accounted, under 1000
+		watchdog.observeEvent(deltaEvent("text_delta", 0, "verdict text"), 40); // progress resets window
+		feed("thinking_delta", 1, 20); // another window, still under 1000 because it reset
+		assert.equal(watchdog.tripped, false);
 	});
 });
 

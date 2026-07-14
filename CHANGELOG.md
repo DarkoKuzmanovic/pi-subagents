@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-07-14
+
+### Fixed
+
+- **Snapshot amplification no longer false-kills coherent reasoning.** The no-progress watchdog's raw-byte trip was measuring a streaming artifact: pi's `--mode json` re-serializes the full growing message on every delta, so a fine-grained streamer inflates ~25 KB of real thought into tens of MB of raw stdout (~1,100x measured on captured tencent/hy3, umans-glm-5.2 and deepseek-v4-flash runs). Cheaper models that stream ~6-char deltas were aborted mid-review while capable models with coarser deltas ran clean on identical work. The primary no-progress guard now trips on **delta-aware accounted output** (8 MB since the last text/tool activity), which measures what the model actually generated. Every successfully-parsed event credits its raw footprint back to a separate **non-JSON stdout backstop** (lowered to 32 MB), so amplified JSON streams never reach it and it fires only on genuine non-JSON floods. Verbatim loops (degenerate-loop detector) and the 200 MB / 1 GB hard caps are unchanged.
+
+### Tests
+
+- Added unit coverage for the delta-aware accounted no-progress trip, the parsed-byte crediting mechanism (fully-parsed streams never reach the non-JSON backstop; unparsed stdout still does), and a regression reproducing the captured micro-delta false positive (survives now, aborted under the old 30 MB raw rule). Recalibrated the end-to-end runaway integration test to cross the accounted no-progress trip.
+
+### Documentation
+
+- Rewrote the stream-budget guard documentation and README to describe the delta-aware primary trip and the credited non-JSON backstop.
+
 ## [0.41.1] - 2026-07-13
 
 ### Fixed

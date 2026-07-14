@@ -4,11 +4,12 @@
  * Uses the local createMockPi() helper to simulate a child that floods
  * `--mode json` stdout with thinking-only events and never produces text or
  * tool activity — the runaway-loop signature observed in production. The
- * watchdog must abort the child past 30 MB and surface a clear step error.
+ * watchdog must abort the child, surfacing a clear step error.
  *
- * The trip thresholds themselves (30 MB no-progress, 200 MB hard cap,
- * progress detection) are covered exhaustively by test/unit/stream-budget.test.ts;
- * this file asserts the end-to-end wiring at the real 30 MB threshold.
+ * The trip thresholds themselves (8 MB delta-aware no-progress, 32 MB non-JSON backstop,
+ * 200 MB / 1 GB hard caps, progress detection) are covered exhaustively by
+ * test/unit/stream-budget.test.ts; this file asserts the end-to-end wiring: a
+ * no-progress thinking flood crosses the accounted no-progress trip and aborts.
  *
  * Requires pi packages for execution tests. Skips gracefully if unavailable.
  */
@@ -48,15 +49,18 @@ interface ExecutionModule {
 const execution = await tryImport<ExecutionModule>("./src/runs/foreground/execution.ts");
 const runSync = execution?.runSync;
 
-/** One thinking-only streaming update (~64 KB serialized) with no progress marker. */
+/**
+ * One thinking-only assistant message (~65 KB) with no text or tool activity. A
+ * non-delta event is accounted at its full serialized size, so ~130 of them cross the
+ * 8 MB accounted no-progress trip.
+ */
 function thinkingFloodEvent(): Record<string, unknown> {
 	return {
-		type: "message_update",
+		type: "message_end",
 		message: {
 			role: "assistant",
 			content: [{ type: "thinking", thinking: "loop ".repeat(13_000) }],
 		},
-		assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "loop " },
 	};
 }
 
@@ -93,9 +97,9 @@ describe("runaway stream watchdog (foreground)", { skip: !runSync ? "pi packages
 		removeTempDir(tempDir);
 	});
 
-	it("aborts a child that floods >30 MB of thinking events with no text or tool activity", { timeout: 120_000 }, async () => {
-		// ~500 events x ~65 KB ≈ 32 MB > the 30 MB no-progress trip.
-		const flood = Array.from({ length: 500 }, () => thinkingFloodEvent());
+	it("aborts a child that floods thinking events with no text or tool activity", { timeout: 120_000 }, async () => {
+		// ~200 thinking-only events x ~65 KB; accounted crosses the 8 MB no-progress trip after ~130.
+		const flood = Array.from({ length: 200 }, () => thinkingFloodEvent());
 		// A long keepalive means the test only finishes quickly because the
 		// watchdog killed the child; a missed kill would hang here, not pass.
 		mockPi.onCall({ jsonl: flood, keepAliveAfterFinalMessageMs: 60_000, exitCode: 0 });
@@ -105,13 +109,13 @@ describe("runaway stream watchdog (foreground)", { skip: !runSync ? "pi packages
 
 		assert.equal(result.exitCode, 1, "runaway run must fail");
 		assert.notEqual(result.interrupted, true);
-		assert.match(result.error ?? "", /runaway output aborted: \d+ MB of raw model events since last text or tool activity .*likely a thinking loop/);
+		assert.match(result.error ?? "", /runaway output aborted: \d+ MB of model output since last text or tool activity .*likely a thinking loop/);
 		// The failure must flow through the existing attempt/error reporting.
 		assert.match(result.modelAttempts?.at(-1)?.error ?? "", /runaway output aborted/);
 	});
 
 	it("retries a runaway MiniMax attempt on the configured fallback", { timeout: 120_000 }, async () => {
-		const flood = Array.from({ length: 500 }, () => thinkingFloodEvent());
+		const flood = Array.from({ length: 200 }, () => thinkingFloodEvent());
 		mockPi.onCall({ jsonl: flood, keepAliveAfterFinalMessageMs: 60_000, exitCode: 0 });
 		mockPi.onCall({ output: "Recovered on fallback" });
 		const agents = [makeAgent("flooder", {
@@ -134,7 +138,7 @@ describe("runaway stream watchdog (foreground)", { skip: !runSync ? "pi packages
 	});
 
 	it("aborts a later thinking-only flood after earlier progress", { timeout: 120_000 }, async () => {
-		const flood = Array.from({ length: 500 }, () => thinkingFloodEvent());
+		const flood = Array.from({ length: 200 }, () => thinkingFloodEvent());
 		mockPi.onCall({ jsonl: [textProgressEvent(), ...flood], keepAliveAfterFinalMessageMs: 2_000, exitCode: 0 });
 		const agents = makeAgentConfigs(["late-flooder"]);
 
