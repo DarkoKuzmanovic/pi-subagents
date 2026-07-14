@@ -82,6 +82,6 @@
 ## Crew handoff
 
 - **Done:** user-scoped `commit-engineer` definition, discovery proof, two isolated Git fixtures, protected-boundary review/fix/re-review, design spec, historical v0.41.1 PLAN archive, and `IDEAS.md` roster update.
-- **Next:** investigate and decide async-by-default chain routing semantics before assigning the next extension version.
+- **Next:** implement v0.42.2 with a routing truth-table regression, then restore the chain-specific `effectiveAsync` gate.
 - **Open questions:** whether to add a third fixture for the already-specified pre-existing-staged-index hard block.
 - **Confidence gaps:** prompt-level command restrictions cannot physically constrain `bash`; safety is supported by explicit prohibitions, isolated behavior fixtures, and review, not a deterministic shell policy.
