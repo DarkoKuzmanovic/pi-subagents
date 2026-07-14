@@ -396,6 +396,81 @@ describe("createStreamWatchdog: delta-aware no-progress trip (snapshot-amplifica
 		assert.equal(watchdog.tripped, false, "coherent micro-delta thinking must survive");
 	});
 
+	it("does NOT trip the raw hard cap on fully-parsed snapshot-amplified progress streams (v0.42.1 regression)", () => {
+		// Production failure: a fully parsed GLM JSON stream reached 1,024 MB cumulative
+		// raw bytes while delta-aware accounted content was ~8 MB (121x snapshot
+		// amplification), and the cumulative raw hard cap aborted an otherwise progressing
+		// run. The raw backstop exists to catch non-JSON stdout floods; a fully-parsed
+		// JSON stream whose raw bytes balloon from snapshot re-serialization must never
+		// trip it — the accounted guards govern parsed streams.
+		const rawHardCapBytes = 2 * MB; // small injected cap; production default is 1 GB
+		const hardCapBytes = 50 * MB; // generous accounted cap; accounted bytes stay far below
+		const watchdog = createStreamWatchdog({ rawHardCapBytes, hardCapBytes });
+
+		// Each event: a full-snapshot serialized line (amplifying raw) carrying a tiny
+		// unique text delta (meaningful progress; accounted bytes stay small).
+		const snapshotSize = 100_000; // 100 KB per snapshot line
+		const eventCount = Math.ceil(rawHardCapBytes / snapshotSize) + 10; // push past raw cap
+
+		let rawTotal = 0;
+		for (let i = 0; i < eventCount; i++) {
+			const delta = ` progress text ${tok(i)}`; // aperiodic, progress-bearing
+			rawTotal += snapshotSize;
+			assert.equal(watchdog.addBytes(snapshotSize), undefined, `addBytes must not trip at event ${i} (raw ${rawTotal})`);
+			assert.equal(
+				watchdog.observeEvent(deltaEvent("text_delta", 0, delta), snapshotSize),
+				undefined,
+				`observeEvent must not trip at event ${i}`,
+			);
+		}
+
+		assert.ok(rawTotal > rawHardCapBytes, "cumulative raw snapshots must exceed the raw hard cap");
+		assert.ok(watchdog.accountedBytes < hardCapBytes, "accounted bytes must stay below the accounted hard cap");
+		assert.equal(watchdog.tripped, false, "cumulative reserialized raw snapshots alone must not trip the watchdog");
+	});
+
+	it("pure unparsed raw output exactly at the injected cumulative cap survives, one byte over trips", () => {
+		// No parsed events at all -> creditedRawBytes stays 0, so cumulative unaccounted
+		// raw bytes equals total raw bytes. Boundary is `>`, not `>=`.
+		const rawHardCapBytes = 500;
+		const watchdog = createStreamWatchdog({ rawHardCapBytes, noProgressBytes: 10_000 });
+		assert.equal(watchdog.addBytes(rawHardCapBytes), undefined, "exactly at the cumulative cap must not trip");
+		const message = watchdog.addBytes(1);
+		assert.ok(message, "one byte over the cumulative cap must trip");
+		assert.match(message!, /raw output backstop/);
+		assert.match(message!, /cumulative unaccounted \(unparsed\)/);
+		assert.equal(watchdog.tripped, true);
+	});
+
+	it("repeated sub-threshold unparsed bursts separated by credited progress eventually trip the cumulative cap", () => {
+		// Each burst alone stays under the ROLLING no-progress window (which credited
+		// progress keeps resetting), so the rolling guard never fires. But the bursts are
+		// genuinely unparsed (never credited), so they accumulate unboundedly in the
+		// cumulative counter until the raw hard cap trips -- proving the cumulative backstop
+		// still catches unparsed floods that repeatedly reset the no-progress window.
+		const rawHardCapBytes = 1000;
+		const noProgressBytes = 350;
+		const watchdog = createStreamWatchdog({ rawHardCapBytes, noProgressBytes });
+		const burst = 300; // unparsed stdout bytes, never credited
+		const credited = 50; // small parsed progress event; credits its own bytes
+
+		for (let cycle = 0; cycle < 3; cycle++) {
+			assert.equal(watchdog.addBytes(burst), undefined, `burst ${cycle} alone must stay under the rolling window`);
+			assert.equal(watchdog.addBytes(credited), undefined, `credited chunk ${cycle} must not trip`);
+			assert.equal(
+				watchdog.observeEvent(textEvent(`progress ${cycle}`), credited),
+				undefined,
+				`credited progress ${cycle} must reset the rolling window without tripping`,
+			);
+		}
+		assert.equal(watchdog.tripped, false, "three sub-threshold cycles must not yet trip the cumulative cap");
+
+		const message = watchdog.addBytes(burst);
+		assert.ok(message, "the next unparsed burst must push cumulative unaccounted bytes past the cap");
+		assert.match(message!, /raw output backstop/);
+		assert.equal(watchdog.tripped, true);
+	});
+
 	it("credits parsed JSON bytes: only UNPARSED stdout counts toward the non-JSON backstop", () => {
 		const watchdog = createStreamWatchdog({ noProgressBytes: 1000 });
 		// Raw stdout fully consumed by parsed events -> credited -> the backstop never fires.
