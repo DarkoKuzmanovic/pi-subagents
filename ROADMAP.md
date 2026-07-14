@@ -11,7 +11,7 @@
 
 ## Current
 
-- No active extension release is open. The next reliability decision is whether chains should inherit `asyncByDefault` when `clarify` is omitted; investigation is required before assigning a version.
+- **v0.42.2** — Restore chain-default clarify precedence: chains background only with `clarify: false`; add the missing routing truth-table regression before changing the one owning expression.
 
 ## Planned
 
