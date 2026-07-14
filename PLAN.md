@@ -1,104 +1,87 @@
-# pi-subagents v0.41.1 Crew Plan
+# Commit Engineer User Agent — Crew Plan
 
 ## Scope decision
 
 - **Tier:** Standard
 - **Risk:** contained protected
-- **Evidence:** five-model review plus direct source/test verification on v0.41.0; one confirmed template-rendering integrity defect, four bounded runtime/config defects, four regression-test gaps, and four stale documentation items.
-- **Allowed ceremony:** two supervised outcomes; no planner because file surfaces and dependencies are already mapped; one deep combined reviewer per protected outcome; no project-end repeat unless close-out creates new integration scope.
-- **Outcome dispatch ceiling:** 5 child calls per outcome.
-- **Session ceilings:** 12 child dispatches, 180 child-runtime minutes, 2 completed outcomes, 2 compactions, or a model swap.
-- **Promotion triggers:** new repository, unresolved architecture fork, destructive/data-integrity surface, materially expanded public API, or inability to verify deterministic behavior.
-- **Started-at:** 2026-07-13T00:32:27+02:00
-- **First-worker-at:** 2026-07-13T00:37:06+02:00
-- **Time-to-first-worker:** 4m39s
+- **Evidence:** one user-scoped agent definition plus isolated Git fixture verification; the agent intentionally mutates Git index/history in arbitrary target repositories, so shared-checkout ownership and remote-action authority are protected boundaries.
+- **Allowed ceremony:** one supervised implementation outcome, one fresh deep combined review, then deterministic fixture verification and local close-out. No planner because the spec fixes the file surface and behavior.
+- **Outcome dispatch ceiling:** 5 child calls.
+- **Session ceilings:** 12 child dispatches, 180 child-runtime minutes, 2 compactions, or a model swap.
+- **Promotion triggers:** need for a runtime Git guard beyond prompt enforcement, a second repository requiring coordinated code changes, destructive cleanup, or unresolved release/publish semantics.
+- **Started-at:** 2026-07-14T12:00:00+02:00
+- **First-worker-at:** 2026-07-14T12:08:00+02:00
+- **Time-to-first-worker:** 8m
 
 ## Grill decisions
 
 - Intensity: gentle.
-- Include all verified runtime, regression-test, config-hardening, and documentation items in v0.41.1.
-- Preserve a strict patch boundary: no async template-variable capability expansion, slash-command `thinking=` parity feature, package-lock policy change, PID-reuse redesign, or unrelated cleanup.
+- Default authority ends at local commits; push, tag, publish, PR creation, and other remote actions require exact dispatch authorization.
+- Release metadata follows repository policy first, exact task requirements second, and otherwise remains untouched.
+- Mixed/ambiguous checkout changes block committing unless ownership is provable.
+- Any pre-existing staged change blocks immediately, even if it appears task-related.
+- Repositories without automated checks may still be committed after deterministic staged-diff inspection, but the result must report incomplete verification rather than claiming a passing test gate.
 
 ## Acceptance criteria
 
-- Every chain execution path resolves author template tokens in one pass; substituted values cannot introduce another token expansion.
-- Clarify-selected thinking overrides the prior effective thinking value, including `off`.
-- Explicit async interrupt works from persisted run state after in-memory tracker reset.
-- Timeout escalation notices use configured grace and accurately describe intercom route availability.
-- Malformed legacy config cannot crash extension startup or dispatch path.
-- Regression coverage exercises runaway fallback, hard-kill escalation, interrupted lifecycle suppression, and degraded OM completion-outbox publication.
-- Verified stale documentation is corrected without introducing new planning promises.
-- `npm run typecheck`, `npm run test:all`, and extension lint pass.
-- `package.json` and `CHANGELOG.md` release v0.41.1.
-- Root `README.md` and `AGENTS.md` remain accurate; update only where behavior or maintainer invariants changed.
+- `~/.agents/commit-engineer.md` is discovered as a fresh-context user agent.
+- The definition permits Git/verification and surgical edits to existing release/state metadata, but excludes arbitrary file creation.
+- Explicit-path staging, pre-staged-index refusal, ambiguous-ownership refusal, no-amend/no-reset/no-stash/no-broad-add rules, and exact remote-action authorization are unambiguous.
+- An isolated fixture proves the agent commits only an explicitly authorized path while leaving unrelated changes unstaged and uncommitted.
+- A second isolated fixture proves an ambiguous “commit the work” request creates no commit and stages nothing.
+- The agent reports structured evidence for commits, verification, remaining changes, ambiguity, remote actions, and blockers.
+- `IDEAS.md` records the agent as built only after fixture verification.
+- The owning `pi-subagents` README/AGENTS remain accurate; no extension runtime documentation claims the user agent is a packaged builtin.
 
 ## Conventions
 
-- ESM imports use `.js` extensions; files remain `.ts`.
-- Node built-in test runner only.
-- No `any`, no non-null assertions, type-only imports use `import type`.
-- Bug fixes use TDD in the same worker dispatch.
-- Do not edit generated files or add dependencies.
-- Workers do not commit.
-- Baseline: `npm run typecheck` passes; `npm test` reports 1051 passed, 0 failed, 47 skipped.
-- On this machine, isolated worktree tests inherit global commit signing and can block on pinentry. Run the suite with `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false`; this is a per-command test override, not a config change.
+- Agent definitions live under `~/.agents/*.md` with YAML frontmatter.
+- User agents use fresh context and do not inherit project context or skills unless explicitly justified.
+- Workers do not commit the `pi-subagents` repository.
+- Fixture repositories live under `/tmp`, have no remotes, and disable commit signing only through fixture-local Git config.
+- Never test the commit-capable agent against a live repository.
 
 ## Outcome map
 
-### Outcome 1 — Template rendering integrity across all execution modes
+### Outcome 1 — Commit-engineer definition, isolated safety proof, and roster documentation
 
 **State:** completed
 
-**Counters:** dispatches: 3/5 · review-bundles: 1 · review-dispatches: 1 · fix-cycles: 1/1 · oracle: 0 · worker-retries: 0 · direct-edits: 0
+**Counters:** dispatches: 5/5 · review-bundles: 2 · review-dispatches: 2 · fix-cycles: 1/1 · oracle: 0 · worker-retries: 0 · direct-edits: 3
 
-- [x] Add failing call-path regressions for foreground parallel, dynamic fanout, async sequential, and async parallel token injection.
-- [x] Route all paths through the shared single-pass renderer.
-- [x] Compute previous-token behavior from raw author templates.
-- [x] Verify focused tests, typecheck, unit and integration suites.
-- [x] Run one fresh deep combined review; resolve accepted findings within the one-cycle rule.
+- [x] Implement `~/.agents/commit-engineer.md` from `docs/specs/2026-07-14-commit-engineer-design.md` and the grill decisions above.
+- [x] Confirm discovery through `subagent({ action: "list" })`.
+- [x] Run the explicit-path fixture and verify commit contents plus untouched unrelated work.
+- [x] Run the ambiguity fixture and verify zero commits/staged paths.
+- [x] Run one fresh deep combined review over the definition, spec, fixture evidence, and `IDEAS.md` update.
+- [x] Resolve the broad commit-time staging and short hook-bypass blocker within the one-cycle rule; delta re-review passed.
+- [x] Update `IDEAS.md`, final verification evidence, and Crew handoff.
 
-**Gate log:** PASS after one accepted should-fix cycle. Core output/author-token and dynamic-item non-recursion invariants are closed. Existing direct renderer tests remain authoritative. Async call-path tests are present but environment-skipped locally where jiti is unavailable.
-
-### Outcome 2 — Control/config correctness, regression hardening, docs, and release
-
-**State:** completed
-
-**Counters:** dispatches: 5/5 · review-bundles: 1 · review-dispatches: 1 · fix-cycles: 1/1 · oracle: 0 · worker-retries: 1 · direct-edits: 0
-
-- [x] Make Clarify thinking selection override prior effective thinking, including `off`, with regression tests.
-- [x] Resolve explicit async interrupt from persisted run state after tracker reset, with regression tests.
-- [x] Render timeout escalation notices from configured grace and actual intercom route availability.
-- [x] Validate legacy config JSON at the input boundary without crashing startup or dispatch.
-- [x] Add end-to-end runaway fallback, hard-kill escalation, interrupted lifecycle suppression, and degraded OM outbox tests.
-- [x] Repair tracked stale docs; locally correct ignored historical `pre-plan.md` without changing ignore policy.
-- [x] Review README/AGENTS accuracy; no contract text change required unless the gate identifies drift.
-- [x] Release v0.41.1 via package version and dated CHANGELOG section.
-- [x] Run one fresh deep combined review and final verification; no duplicate review of unchanged Outcome 1 scope.
-
-**Gate log:** PASS after one accepted should-fix cycle. Sequential/background Clarify thinking propagation, full-valid config round-trip coverage, and tracked-doc CHANGELOG wording were corrected. Async-only regressions remain environment-skipped locally where jiti is unavailable.
+**Gate log:** Initial deep review returned FIX-FIRST because `git commit -a`/`--all`/`-am` and `git commit -n` were not explicitly banned. The agent definition and design spec now ban those forms; fresh deep delta review returned PASS. The optional pre-staged-index fixture remains a future strengthening, not an acceptance blocker.
 
 ## Run metrics
 
-- Dispatches: 8/12
+- Dispatches: 5/12
 - Review bundles: 2
 - Review dispatches: 2
-- Worker retries: 1
+- Worker retries: 0
 - Oracle dispatches: 0
-- Completed outcomes: 2/2
-- Child runtime minutes: ≥30/180 (one timed-out worker; exact foreground totals unavailable)
-- Compactions: 1/2
+- Completed outcomes: 1/1
+- Child runtime minutes: ≥6/180 (exact foreground totals unavailable)
+- Compactions: 0/2
 
 ## Final verification evidence
 
-- `npm run typecheck` — exit 0.
-- `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false npm run test:all` — unit: 1104 tests, 1057 passed, 0 failed, 47 skipped; integration: 395 tests, 349 passed, 0 failed, 46 skipped.
-- Changed-file Biome — exit 0; two pre-existing warnings and informational suggestions, no errors.
-- `git diff --check` — exit 0.
-- `npm pack --dry-run --json` — `pi-subagents@0.41.1`, 124 files, 394151-byte archive, 1524567 bytes unpacked.
+- `subagent({ action: "list" })` discovers `commit-engineer` as a user agent with fresh context.
+- Explicit fixture: 2 commits; HEAD `8ba28b3` contains only `owned.txt`; index empty; `neighbor.txt` remains modified.
+- Ambiguous fixture: baseline commit only; index empty; `alpha.txt` and `beta.txt` remain modified.
+- Fresh deep combined review: FIX-FIRST on commit-time broad staging and short hook bypass.
+- Fresh deep delta re-review after the prompt/spec fix: PASS.
+- `git diff --check` and final repository status remain required before commit close-out.
 
 ## Crew handoff
 
-- **Done:** v0.41.1 implementation, tests, protected-boundary reviews, docs, roadmap, version, and changelog.
-- **Next:** choose git close-out; no push or publication performed.
-- **Open questions:** async-only regression cases remain skipped in this standalone checkout because jiti is unavailable; they are present and typechecked.
-- **Confidence gaps:** direct executed evidence exists for foreground fallback/hard-kill, persisted interrupt, config, thinking, notices, and OM degradation; detached async equivalents require a jiti-enabled environment.
+- **Done:** user-scoped `commit-engineer` definition, discovery proof, two isolated Git fixtures, protected-boundary review/fix/re-review, design spec, historical v0.41.1 PLAN archive, and `IDEAS.md` roster update.
+- **Next:** reconcile ROADMAP/PMTI/Obsidian planning state, then investigate async-by-default chain routing semantics.
+- **Open questions:** whether to add a third fixture for the already-specified pre-existing-staged-index hard block.
+- **Confidence gaps:** prompt-level command restrictions cannot physically constrain `bash`; safety is supported by explicit prohibitions, isolated behavior fixtures, and review, not a deterministic shell policy.
