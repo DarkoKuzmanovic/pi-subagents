@@ -35,16 +35,16 @@ gate · never trust the agent's own "done" without evidence.
   kills invented links/versions. Pinned `minimax/MiniMax-M3` (writing quality is
   the whole job). Caveat: ~1/3 provider-abort rate — retry on abort. — 2026-07-14
 
-## Planned
+- [x] **commit-engineer** (`~/.agents/commit-engineer.md`) — stages only
+  explicitly authorized paths, blocks on pre-existing staged or ambiguous changes,
+  runs repository-required checks, follows repository policy for release metadata,
+  and creates local commits in the repo's observed style. Remote actions require
+  exact dispatch authorization. Tools: `bash,read,grep,find,ls,edit` (no `write`).
+  Verified in isolated Git fixtures: committed only `owned.txt` while preserving an
+  unrelated modification, and refused an ownership-ambiguous checkout without
+  staging or committing anything. — 2026-07-14
 
-- [ ] **commit-engineer** — stages *explicit paths* (never `git add -A`), splits
-  coupled changes into clean conventional commits, writes messages in the repo's
-  style, and runs the release-script flow (promote CHANGELOG `[Unreleased]` →
-  version, bump `package.json`, reconcile ROADMAP `Current` → `Released`).
-  Absorbs the recurring `session-guard` friction and the pi-extension-author
-  release automation that currently exists only as a skill, never an agent.
-  Tools: `bash,read,grep,edit` (needs git; must respect the shared-checkout
-  rules in the global `AGENTS.md`). Highest-leverage remaining gap. — effort:M
+## Planned
 - [ ] **state-keeper** — reconciles the *project-state* docs against each other
   and enforces one milestone-ID convention (the Mx / Sx / M2.1 drift). Sibling to
   docs-freshener: docs-freshener does docs↔code, state-keeper does state↔state +

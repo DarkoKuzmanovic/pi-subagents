@@ -37,8 +37,8 @@ The agent may push, tag, publish, open a pull request, or perform another named 
 
 ### Always forbidden
 
-- `git add -A`, `git add .`, or broad pathspec staging.
-- `git reset` in any mode, `git checkout .`, `git clean`, `git stash`, commit amend, force push, or hook bypass.
+- `git add -A`, `git add .`, broad pathspec staging, or commit-time broad staging via `git commit -a`, `git commit --all`, or combined forms such as `git commit -am`.
+- `git reset` in any mode, `git checkout .`, `git clean`, `git stash`, commit amend, force push, or hook bypass including `git commit --no-verify` and `git commit -n`.
 - Destructive cleanup or deleting branches/worktrees.
 - Editing implementation source to make checks pass.
 - Inventing release/version metadata when neither repository policy nor the dispatch requires it.
