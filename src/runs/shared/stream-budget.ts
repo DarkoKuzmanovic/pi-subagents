@@ -26,8 +26,10 @@
  *      Chunking-independent and value-cycle-tolerant, because real loops vary
  *      both the delta boundaries (one or two fragment copies per delta) and
  *      embedded numeric literals (30000/60000/10000).
- *    - Hard caps: a 200 MB accounted-byte cap and a 1 GB raw-byte cap bound total
- *      output as final backstops even when the stream keeps showing progress.
+ *    - Hard caps: a 200 MB accounted-byte cap and a 1 GB cumulative UNACCOUNTED
+ *      (unparsed) raw-byte cap bound total output as final backstops even when the
+ *      stream keeps showing progress. The raw cap only counts raw bytes never credited
+ *      by a parsed event, so it never fires on fully-parsed snapshot-amplified streams.
  *
  * 2. `createRunEventAppender` — a per-run byte budget for the async runner's
  *    events.jsonl. Once the budget is exceeded it appends one structural
@@ -82,10 +84,17 @@ export const RUNAWAY_NO_PROGRESS_BYTES = 32 * 1024 * 1024; // 32 MB
 export const RUNAWAY_HARD_CAP_BYTES = 200 * 1024 * 1024; // 200 MB
 
 /**
- * Backstop on RAW stdout bytes even with progress. Bounds flood shapes the
- * accounted cap cannot see (e.g. non-JSON stdout spam). Deliberately generous:
- * honest heavy runs previously died at 200 MB raw purely from snapshot
- * re-serialization amplification.
+ * Backstop on CUMULATIVE UNACCOUNTED (unparsed) raw stdout bytes even with progress —
+ * `rawBytes - creditedRawBytes`, i.e. raw bytes never credited back by a successfully
+ * parsed event (see observeEvent). This is deliberately NOT total raw stream volume:
+ * fully-parsed JSON streams credit every parsed event's serialized bytes, so snapshot
+ * re-serialization amplification (measured up to ~1,300x on captured GLM runs) never
+ * accumulates here regardless of cumulative raw volume. It bounds flood shapes the
+ * accounted cap cannot see (e.g. non-JSON stdout spam, or unparsed bursts that
+ * repeatedly reset the rolling no-progress window above without ever being credited).
+ * Deliberately generous: a production run previously died at 1,024 MB cumulative raw
+ * (only ~8 MB accounted, 121x amplification) purely from counting total raw volume
+ * instead of unaccounted raw volume (v0.42.1).
  */
 export const RUNAWAY_RAW_HARD_CAP_BYTES = 1024 * 1024 * 1024; // 1 GB
 
@@ -319,9 +328,17 @@ export function createStreamWatchdog(limits: StreamWatchdogLimits = {}): StreamW
 					`runaway output aborted: ${formatMb(unaccountedSinceProgress)} MB of unparsed non-JSON stdout since last text or tool activity (${formatStreamStats(rawBytes, accountedBytes)})`,
 				);
 			}
-			if (rawBytes > rawHardCapBytes) {
+			// Cumulative UNACCOUNTED (unparsed) raw bytes, not total raw stream volume: every
+			// successfully-parsed event credits its serialized bytes back (see observeEvent), so
+			// fully-parsed snapshot-amplified JSON streams never accumulate here regardless of how
+			// many cumulative raw bytes they reserialize. This bounds genuinely unaccounted raw
+			// floods (including unparsed bursts that repeatedly reset the rolling no-progress
+			// window above without ever being credited) that the delta-aware accounted guards
+			// cannot see.
+			const cumulativeUnaccountedRawBytes = Math.max(0, rawBytes - creditedRawBytes);
+			if (cumulativeUnaccountedRawBytes > rawHardCapBytes) {
 				return trip(
-					`runaway output aborted: ${formatMb(rawBytes)} MB of raw model events exceeded the ${formatMb(rawHardCapBytes)} MB raw output backstop (${formatStreamStats(rawBytes, accountedBytes)}, ${formatMb(rawSinceProgress)} MB since last text or tool activity)`,
+					`runaway output aborted: ${formatMb(cumulativeUnaccountedRawBytes)} MB of cumulative unaccounted (unparsed) raw stdout exceeded the ${formatMb(rawHardCapBytes)} MB raw output backstop (${formatStreamStats(rawBytes, accountedBytes)}, ${formatMb(rawSinceProgress)} MB since last text or tool activity)`,
 				);
 			}
 			return undefined;

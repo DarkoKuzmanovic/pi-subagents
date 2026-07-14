@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-07-14
+
+### Fixed
+
+- **The raw hard-cap backstop no longer false-kills fully-parsed JSON streams.** It measured *total* raw stdout bytes, so a production GLM run whose `--mode json` snapshot re-serialization amplified ~8 MB of real accounted content into 1,024 MB of cumulative raw bytes (121x amplification) was aborted even though every byte had been successfully parsed and credited. The backstop now measures *cumulative unaccounted (unparsed)* raw bytes (`rawBytes - creditedRawBytes`) instead, so fully-parsed amplified streams never count toward it while genuinely unaccounted raw floods—including unparsed bursts that repeatedly reset the rolling no-progress window—still trip it. The 1 GiB default threshold is unchanged; only what it measures changed.
+
+### Tests
+
+- Added a regression reproducing the captured GLM 121x/1 GiB false kill (survives now). Added focused coverage for the cumulative-unaccounted boundary (exactly-at survives, one byte over trips) and for repeated sub-threshold unparsed bursts separated by credited progress eventually tripping the cumulative cap.
+
+### Documentation
+
+- Clarified the stream-budget guard comments and README to describe the raw hard cap as bounding cumulative unaccounted/unparsed raw bytes, not total raw stream volume.
+
 ## [0.42.0] - 2026-07-14
 
 ### Fixed
