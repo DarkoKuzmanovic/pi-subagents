@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-No active PMTI milestone is currently open. M0 and M1 are closed in `.pi/pmti/project/changes-log.md`.
+No active PMTI milestone is currently open. M0 and M1 are closed in `.pi/pmti/project/changes-log.md`; M2 remains an inactive planned candidate with no task packet or implementation started.
 
 ## Completed milestones
 
@@ -30,7 +30,7 @@ Use post-M0/M1 feedback to improve `/subagents` discoverability, dispatch previe
 
 ### Lane-editing TUI
 
-Design a first-class lane-editing TUI only after the JSON control plane and model-lane dispatch have baked in real use.
+M2 is drafted but inactive: design a first-class lane-editing TUI only after explicit reprioritization. No task packet or implementation has started.
 
 ## Phase-boundary notes
 

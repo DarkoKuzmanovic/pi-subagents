@@ -5,11 +5,14 @@
 ## Released
 
 - **v0.41.0** — Runaway containment, interrupt semantics, budget accounting, model fallback, sequential single-pass template rendering, and validation hardening.
+- **v0.41.1** — Completed single-pass rendering across chain modes, corrected control/config behavior, and added regression hardening from the v0.41.0 review.
+- **v0.42.0** — Made stream-budget accounting delta-aware and credited parsed JSON bytes so snapshot amplification no longer false-kills coherent runs.
+- **v0.42.1** — Changed the 1 GiB raw backstop to measure cumulative unaccounted/unparsed bytes, preserving protection against genuine raw floods without charging fully parsed amplified streams.
 
 ## Current
 
-- **v0.41.1** — Implementation and verification complete; awaiting git/release close-out. Completes single-pass rendering across chain modes, corrects control/config behavior, and adds regression hardening from the v0.41.0 review.
+- No active extension release is open. The next reliability decision is whether chains should inherit `asyncByDefault` when `clarify` is omitted; investigation is required before assigning a version.
 
 ## Planned
 
-- **v0.42.0 candidates** — Evaluate async `{task}` / `{chain_dir}` template parity, slash-command `thinking=` support, package-lock and contributor reproducibility policy, stronger PID identity for stale-run reconciliation, and broader foreground/background rendering consolidation.
+- **Future minor candidates** — Acceptance gates/rubric loops, lane-editing TUI, warm worker processes, mid-run steering, attach/detach UX, and the remaining bounded polish in `docs/IMPLEMENTATION_PLAN.md`. Candidates are not authorized implementation work.
