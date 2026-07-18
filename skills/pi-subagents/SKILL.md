@@ -14,6 +14,10 @@ This skill is for the main parent orchestrator only. Do not inject or follow it 
 
 Use this skill when the parent orchestrator needs to launch a specialized subagent, compose multiple agents into a workflow, or create/edit agents and chains on demand.
 
+## Crew precedence
+
+When a `/crew` run is active, Crew owns planning state, role/lane selection, parallelism, async supervision, review cadence, and fix-cycle budgets. Use this skill only for subagent mechanics. Do not apply its mesh recipes, self-orchestrated workflow, parallel reviewer fanout, planner/recon fanout, or automatic final fix worker unless Crew explicitly authorizes that shape under its own ceilings and gate-dominance rules. Crew's semantic-overlap serialization and `PLAN.md`-only state also override generic worktree and artifact examples here.
+
 ## When to Use
 
 - **Advisory review**: use fresh-context `reviewer` agents for adversarial code review, or fork to `oracle` when inherited decisions and drift matter
