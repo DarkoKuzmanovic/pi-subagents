@@ -77,7 +77,7 @@ dispatcher.
   default is `1`. State both precisely in one place.
 
 ### Tier 4 (small win) — Thinking selector in the launch TUI
-Inline `thinking` dispatch already works; the remaining piece from `docs/TODO.md` is the
+Inline `thinking` dispatch already works; the remaining piece from the historical thinking request is the
 interactive selector. Add a `t`-key thinking picker to the `/subagents` hub / clarify launch
 (`src/tui/subagent-hub.ts`, `src/runs/foreground/chain-clarify.ts`) that shows the effective
 level and passes an override through to spawn. Low risk, self-contained.

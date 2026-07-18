@@ -4,16 +4,20 @@
 
 ## Released
 
-- **v0.41.0** — Runaway containment, interrupt semantics, budget accounting, model fallback, sequential single-pass template rendering, and validation hardening.
-- **v0.41.1** — Completed single-pass rendering across chain modes, corrected control/config behavior, and added regression hardening from the v0.41.0 review.
-- **v0.42.0** — Made stream-budget accounting delta-aware and credited parsed JSON bytes so snapshot amplification no longer false-kills coherent runs.
-- **v0.42.1** — Changed the 1 GiB raw backstop to measure cumulative unaccounted/unparsed bytes, preserving protection against genuine raw floods without charging fully parsed amplified streams.
+- **M0** — Thinking-level dispatch controls — v0.35.0 (2026-06-01)
+- **M1** — Model lanes, JSON configuration shortcut, and six-role visible roster — v0.36.0 (2026-06-06)
+- **M6** — Durable async OM completion, runaway containment, interrupt semantics, budget accounting, model fallback, and runtime hardening — v0.41.0 (2026-07-12)
+- **M7** — Chain-rendering, control, configuration, and regression hardening — v0.41.1 (2026-07-13)
+- **M8** — Delta-aware stream accounting that avoids snapshot-amplification false kills — v0.42.0 (2026-07-14)
+- **M9** — Cumulative unaccounted-byte backstop for genuinely unparsed stream floods — v0.42.1 (2026-07-14)
+- **M10** — Commit-engineer user agent with isolated Git safety proof (2026-07-14)
 
 ## Current
 
-- **v0.42.2** — Restore chain-default clarify precedence: chains background only with `clarify: false`; add the missing routing truth-table regression before changing the one owning expression.
+- **M11** — Restore chain-default clarify precedence and add the routing truth-table regression — v0.42.2
 
 ## Planned
 
-- **Next minor candidate — Live run handles** — Attach to active async runs, steer or queue follow-ups, detach, and abort through stable run handles; begin with a bounded delta-native duplex child-transport spike so the feature does not inherit full-snapshot event amplification.
-- **Later candidates** — Acceptance gates/rubric loops, lane-editing TUI, live-status/conversation-viewer polish, and the remaining bounded polish in `docs/IMPLEMENTATION_PLAN.md`. Warm worker pools stay parked until startup cost becomes material.
+- **M12** — Live run handles for attach, steering, follow-up queuing, detach, abort, and compact live inspection
+- **M13** — Acceptance gates and bounded rubric-driven revision loops
+- **M2** — Lane-editing TUI over user-scope `subagents.modelLanes` (deferred; original ID retained)

@@ -70,7 +70,7 @@
 - [x] Render timeout escalation notices from configured grace and actual intercom route availability.
 - [x] Validate legacy config JSON at the input boundary without crashing startup or dispatch.
 - [x] Add end-to-end runaway fallback, hard-kill escalation, interrupted lifecycle suppression, and degraded OM outbox tests.
-- [x] Repair tracked stale docs; locally correct ignored historical `pre-plan.md` without changing ignore policy.
+- [x] Repair tracked stale docs; correct the historical upstream-adoption notes now archived at `docs/history/legacy-planning/pre-plan-upstream-adoption-2026-05-28.md`.
 - [x] Review README/AGENTS accuracy; no contract text change required unless the gate identifies drift.
 - [x] Release v0.41.1 via package version and dated CHANGELOG section.
 - [x] Run one fresh deep combined review and final verification; no duplicate review of unchanged Outcome 1 scope.

@@ -1,7 +1,5 @@
 .pi/todos/
 .DS_Store
-AGENTS.md
-pre-plan.md
 package-lock.json
 node_modules/
 .fallow/
@@ -11,9 +9,3 @@ node_modules/
 .claude/
 context.md
 .pi/*
-!.pi/pmti/
-!.pi/pmti/project/
-!.pi/pmti/project/**
-!.pi/pmti/milestones/
-!.pi/pmti/milestones/**
-.pi/pmti/tasks/

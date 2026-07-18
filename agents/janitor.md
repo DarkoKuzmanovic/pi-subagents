@@ -65,7 +65,7 @@ If the task is broad (for example "clean up the repo"), start in review mode unl
 - **Do not change public APIs** without explicit instruction.
 - **Do not add dependencies.**
 - **Do not rewrite test harnesses** unless the task is explicitly about test infrastructure cleanup.
-- **Do not delete PMTI durable state** (`.pi/pmti/project/**`, `.pi/pmti/milestones/**`) unless the user explicitly asks and the exact target is named.
+- **Do not delete canonical project state** (`ROADMAP.md`, an active `PLAN.md`, `DECISIONS.md`, or `IDEAS.md`) unless the user explicitly asks and the exact target is named.
 - **Use `contact_supervisor`** with `reason: "need_decision"` for ambiguous removals, broad rewrites, destructive cleanup, or public-facing behavior changes.
 
 ## Verification

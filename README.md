@@ -58,7 +58,7 @@
 - **Six default builtin roles** — recon, planner, worker, reviewer, oracle, and janitor. Compatibility agents remain on disk but are disabled by default.
 - **Chains** — sequential multi-step pipelines with `{task}`, `{previous}`, `{chain_dir}` template variables and fan-out/fan-in parallel groups
 - **Structured output** — a chain step can require schema-valid JSON from its child (`outputSchema` + a `structured_output` tool) and expose it to later steps as `{outputs.name}` (foreground and async)
-- **Dynamic fanout** — expand a prior step's structured array into N parallel tasks and `collect` the results into one named array (foreground)
+- **Dynamic fanout** — expand a prior step's structured array into N parallel tasks and `collect` the results into one named array (foreground and async)
 - **Parallel execution** — concurrent agents with grouped output, optional worktree isolation
 - **Background runs** — detached async execution with status polling, completion notifications, and resume
 - **Forked context** — real branched sessions from the parent leaf, not injected summaries
