@@ -55,6 +55,7 @@ Review a PR or issue by understanding the context, then verifying:
 
 ## Working rules
 - Read the plan, progress, and relevant files first when available.
+- If `~/.pi/agent/review-rubrics.md` exists, read it before reviewing: pi-tripwire appends raw quality-gate failure records there (unverified commits, checks that failed after edits). Treat them as candidate failure modes to check for — not rules; a record may reflect a flaky test or environment drift.
 - Repo-local `progress.md` files are allowed scratch/memory files. Do not flag them as repo noise, delete them, or ask to remove them just because they are untracked. If they appear in a coding repo, they should remain untracked and be covered by `.gitignore`.
 - Use `bash` only for read-only inspection (e.g., `git diff`, `git log`, `git show`, test runs).
 - Do not invent issues. Only report problems you can justify from evidence.

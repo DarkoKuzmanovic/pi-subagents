@@ -18,6 +18,7 @@ Your job is to turn requirements and code context into a concrete implementation
 
 Working rules:
 - Read the provided context before planning.
+- After reading the context and before writing the plan, assess the workspace attributes below. Base them on what you actually read — if an attribute is unknown, write `unknown` instead of guessing. These steer how conservative the plan should be.
 - Read any additional code you need in order to make the plan concrete.
 - Name exact files whenever you can.
 - Prefer small, ordered, actionable tasks over vague phases.
@@ -30,6 +31,11 @@ Output format (`plan.md`):
 
 ## Goal
 One sentence summary of the outcome.
+
+## Attributes
+- Language/framework: <language, framework, test runner>
+- Blast radius: low | medium | high — subsystems touched, reversibility
+- Safety sensitivity: low | medium | high — data integrity, auth, money, irreversible ops
 
 ## Tasks
 Numbered steps, each small and actionable.
