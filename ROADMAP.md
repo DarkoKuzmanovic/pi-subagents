@@ -15,4 +15,5 @@
 
 ## Planned
 
-- **Future minor candidates** — Acceptance gates/rubric loops, lane-editing TUI, warm worker processes, mid-run steering, attach/detach UX, and the remaining bounded polish in `docs/IMPLEMENTATION_PLAN.md`. Candidates are not authorized implementation work.
+- **Next minor candidate — Live run handles** — Attach to active async runs, steer or queue follow-ups, detach, and abort through stable run handles; begin with a bounded delta-native duplex child-transport spike so the feature does not inherit full-snapshot event amplification.
+- **Later candidates** — Acceptance gates/rubric loops, lane-editing TUI, live-status/conversation-viewer polish, and the remaining bounded polish in `docs/IMPLEMENTATION_PLAN.md`. Warm worker pools stay parked until startup cost becomes material.
