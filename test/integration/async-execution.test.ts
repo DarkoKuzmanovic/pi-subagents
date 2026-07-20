@@ -15,6 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createEventBus, createMockPi, createTempDir, events, makeAgent, makeMinimalCtx, removeTempDir, tryImport } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
+import { DEFAULT_CONTROL_CONFIG } from "../../src/runs/shared/subagent-control.ts";
 
 interface AsyncExecutionResult {
 	content: Array<{ text?: string }>;
@@ -166,6 +167,16 @@ function readRunEventTypes(id: string): string[] {
 		.filter(Boolean)
 		.map((line) => (JSON.parse(line) as { type?: unknown }).type)
 		.filter((type): type is string => typeof type === "string");
+}
+
+function readStepTerminalEventTypes(id: string, stepIndex: number): string[] {
+	const eventsPath = path.join(ASYNC_DIR, id, "events.jsonl");
+	return fs.readFileSync(eventsPath, "utf-8")
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as { type?: unknown; stepIndex?: unknown })
+		.filter((event) => event.stepIndex === stepIndex && (event.type === "subagent.step.completed" || event.type === "subagent.step.failed"))
+		.map((event) => event.type as string);
 }
 
 describe("async execution utilities", { skip: !available ? "pi packages not available" : undefined }, () => {
@@ -1654,5 +1665,149 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8"));
 		assert.deepEqual(status.steps[0].recentTools.map((tool: { tool: string; args: string }) => ({ tool: tool.tool, args: tool.args })), [{ tool: "bash", args: "ls" }]);
 		assert.deepEqual(status.steps[0].recentOutput, ["file-a", "file-b", "Done streaming"]);
+	});
+
+	it("stops dispatching a background chain synchronously once the shared run wall-clock deadline fires", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ delay: 600, output: "Too late" });
+
+		const id = `async-chain-wall-clock-sync-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+
+		executeAsyncChain(id, {
+			chain: [
+				{ agent: "slow", task: "First slow task" },
+				{ agent: "slow", task: "Second slow task (must never spawn)" },
+			],
+			agents: [makeAgent("slow")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+			controlConfig: {
+				...DEFAULT_CONTROL_CONFIG,
+				runWallClockTimeoutMs: 300,
+				stepInactivityTimeoutMs: 999_999,
+			},
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 12_000);
+		assert.equal(mockPi.callCount(), 1, "second chain step must not spawn after the shared run deadline");
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, false);
+		assert.equal(payload.results.length, 1);
+		assert.equal(payload.results[0]?.success, false);
+		assert.match(payload.results[0]?.error ?? payload.results[0]?.output ?? "", /wall-clock limit/);
+
+		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.state, "failed");
+
+		assert.deepEqual(readStepTerminalEventTypes(id, 0), ["subagent.step.failed"]);
+		assert.ok(!readRunEventTypes(id).includes("subagent.step.completed"), "timed-out child must not emit subagent.step.completed");
+	});
+
+	it("stops dispatching queued background parallel tasks synchronously once the shared run wall-clock deadline fires", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ delay: 600, output: "Too late" });
+
+		const id = `async-parallel-wall-clock-sync-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+
+		executeAsyncChain(id, {
+			chain: [{
+				parallel: [
+					{ agent: "slow", task: "First slow task" },
+					{ agent: "slow", task: "Queued slow task" },
+					{ agent: "slow", task: "Never-started slow task" },
+				],
+				concurrency: 1,
+			}],
+			agents: [makeAgent("slow")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+			controlConfig: {
+				...DEFAULT_CONTROL_CONFIG,
+				runWallClockTimeoutMs: 300,
+				stepInactivityTimeoutMs: 999_999,
+			},
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 12_000);
+		assert.equal(mockPi.callCount(), 1, "queued parallel tasks must not spawn after the shared run deadline");
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, false);
+		assert.equal(payload.results.length, 3);
+		assert.equal(payload.results.every((child) => child.success === false), true);
+		for (const child of payload.results) {
+			assert.match(child.error ?? child.output ?? "", /wall-clock limit/);
+		}
+
+		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.state, "failed");
+
+		assert.deepEqual(readStepTerminalEventTypes(id, 0), ["subagent.step.failed"]);
+		assert.ok(!readRunEventTypes(id).includes("subagent.step.completed"), "timed-out children must not emit subagent.step.completed");
+	});
+
+	it("does not launch a background fallback model after the shared run wall-clock deadline", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			delay: 600,
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "primary failed after the deadline" }],
+					model: "openai/gpt-5-mini",
+					errorMessage: "rate limit exceeded",
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+				},
+			}],
+			exitCode: 1,
+		});
+		mockPi.onCall({ output: "Fallback must never start" });
+
+		const id = `async-fallback-wall-clock-sync-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Do work",
+			agentConfig: makeAgent("worker", {
+				model: "openai/gpt-5-mini",
+				fallbackModels: ["anthropic/claude-sonnet-4"],
+			}),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			availableModels: [
+				{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
+				{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+			],
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+			controlConfig: {
+				...DEFAULT_CONTROL_CONFIG,
+				runWallClockTimeoutMs: 300,
+				stepInactivityTimeoutMs: 999_999,
+			},
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 12_000);
+		assert.equal(mockPi.callCount(), 1, "fallback model must not spawn after the shared run deadline");
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, false);
+		assert.equal(payload.results.length, 1);
+		assert.equal(payload.results[0]?.success, false);
+		assert.match(payload.results[0]?.error ?? payload.results[0]?.output ?? "", /wall-clock limit/);
+		assert.doesNotMatch(payload.results[0]?.output ?? "", /Retrying with/);
+
+		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.state, "failed");
+		assert.deepEqual(readStepTerminalEventTypes(id, 0), ["subagent.step.failed"]);
 	});
 });

@@ -45,7 +45,7 @@ import {
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, resolveItemTemplate, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
 import { allocateDynamicOmSlots, loadOmManifest, publishChildOmOutbox } from "./async-om-outbox.ts";
 import { dynamicOmChildKey } from "../shared/om-logical-keys.ts";
-import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
+import { buildPiArgs, cleanupTempDir, stripKnownThinkingSuffix } from "../shared/pi-args.ts";
 import { cleanupStructuredOutputRuntime, createStructuredOutputRuntime, readStructuredOutput, resetStructuredOutputCapture, type StructuredOutputRuntime } from "../shared/structured-output.ts";
 import { isStorableStepResult, outputEntryFromAsyncResult, renderChainTemplate } from "../shared/chain-outputs.ts";
 import type { ChainOutputMap } from "../../shared/types.ts";
@@ -609,6 +609,7 @@ interface SingleStepContext {
 	piPackageRoot?: string;
 	piArgv1?: string;
 	registerInterrupt?: (interrupt: (() => void) | undefined) => void;
+	shouldStopDispatch?: () => boolean;
 	childIntercomTarget?: string;
 	orchestratorIntercomTarget?: string;
 	onChildEvent?: (event: ChildEvent) => void;
@@ -672,6 +673,7 @@ async function runSingleStep(
 	// model-candidate loop throws (SF-2). readStructuredOutput itself never throws.
 	try {
 		for (let index = 0; index < candidates.length; index++) {
+			if (ctx.shouldStopDispatch?.()) break;
 			const candidate = candidates[index];
 			// Clear any capture written by a prior failed attempt so the final attempt must write its own.
 			resetStructuredOutputCapture(structuredRuntime);
@@ -761,12 +763,13 @@ async function runSingleStep(
 				usage: run.usage,
 			};
 			modelAttempts.push(attempt);
-			if (candidate) attemptedModels.push(candidate);
+			if (candidate) attemptedModels.push(stripKnownThinkingSuffix(candidate));
 			completionGuardTriggeredFinal = completionGuardTriggered;
 			finalOutputSnapshot = outputSnapshot;
 			finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error };
 			if (attempt.success || completionGuardTriggered) break;
 			if (!isRetryableModelFailure(error) || index === candidates.length - 1) break;
+			if (ctx.shouldStopDispatch?.()) break;
 			attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
 		}
 
@@ -1001,6 +1004,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const logPath = path.join(asyncDir, `subagent-log-${id}.md`);
 	const controlConfig = config.controlConfig ?? DEFAULT_CONTROL_CONFIG;
 	let interrupted = false;
+	// Distinct from `interrupted` (user pause): once the shared run wall-clock deadline
+	// fires, no further step may be dispatched — neither a later chain step nor a queued
+	// item inside a concurrency-limited parallel group. Terminal state is "failed", never
+	// "paused" or later recomputed "complete".
+	let runTimedOut = false;
 	let currentActivityState: ActivityState | undefined;
 	let activityTimer: NodeJS.Timeout | undefined;
 	const tokenLedger = createStepTokenLedger();
@@ -1146,6 +1154,53 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		// Kill the child process
 		activeChildInterrupts.get(flatIndex)?.();
 	};
+
+	const markPendingStepRunTimeout = (flatIndex: number): void => {
+		const step = statusPayload.steps[flatIndex];
+		if (!step || step.status !== "pending") return;
+		const skippedAt = Date.now();
+		step.status = "failed";
+		step.activityState = undefined;
+		step.error = `Timed out: run exceeded ${Math.floor(Math.max(0, skippedAt - overallStartTime) / 1000)}s wall-clock limit`;
+		step.startedAt = skippedAt;
+		step.endedAt = skippedAt;
+		step.durationMs = 0;
+		step.exitCode = -1;
+		appendRunEvent(eventsPath, {
+			type: "subagent.step.failed",
+			ts: skippedAt,
+			runId: id,
+			stepIndex: flatIndex,
+			agent: step.agent,
+			exitCode: -1,
+			durationMs: 0,
+		});
+		statusPayload.lastUpdate = skippedAt;
+	};
+
+	const handleRunTimeout = (now: number): boolean => {
+		if (!controlConfig.enabled) return false;
+		if (interrupted) return false;
+		if (runTimedOut) return true;
+		const reason = nextRunTimeoutTrigger(controlConfig, { startedAt: overallStartTime, now });
+		if (!reason) return false;
+		runTimedOut = true;
+		for (let index = 0; index < statusPayload.steps.length; index++) {
+			if (statusPayload.steps[index]?.status === "running") {
+				killStep(index, reason);
+			}
+		}
+		// Pending work is terminal once the run deadline fires; leaving it pending would
+		// allow a later chain/queue path to dispatch it or report an ambiguous run state.
+		for (let index = 0; index < statusPayload.steps.length; index++) {
+			markPendingStepRunTimeout(index);
+		}
+		statusPayload.state = "failed";
+		statusPayload.endedAt = now;
+		statusPayload.lastUpdate = now;
+		writeAtomicJson(statusPath, statusPayload);
+		return true;
+	};
 	const syncTopLevelCurrentTool = (): void => {
 		const activeStep = statusPayload.steps
 			.filter((step) => step.status === "running" && typeof step.currentTool === "string" && step.currentTool.length > 0)
@@ -1283,21 +1338,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		let changed = false;
 		let runLastActivityAt = statusPayload.lastActivityAt ?? overallStartTime;
 
-		// Check run wall-clock timeout first (kills ALL running steps)
-		const runTimeoutReason = nextRunTimeoutTrigger(controlConfig, { startedAt: overallStartTime, now });
-		if (runTimeoutReason) {
-			for (let index = 0; index < statusPayload.steps.length; index++) {
-				if (statusPayload.steps[index]?.status === "running") {
-					killStep(index, runTimeoutReason);
-					changed = true;
-				}
-			}
-			statusPayload.state = "failed";
-			statusPayload.endedAt = now;
-			statusPayload.lastUpdate = now;
-			writeAtomicJson(statusPath, statusPayload);
-			return changed;
-		}
+		// Check run wall-clock timeout first (kills ALL running and pending steps).
+		if (handleRunTimeout(now)) return true;
 
 		for (let index = 0; index < statusPayload.steps.length; index++) {
 			const step = statusPayload.steps[index]!;
@@ -1458,7 +1500,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	let flatIndex = 0;
 
 	for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
-		if (interrupted) break;
+		if (interrupted || handleRunTimeout(Date.now())) break;
 		if (!shouldDispatchWithBudget(tokenBudget)) {
 			appendBudgetSkippedRunnerSteps({
 				results,
@@ -1547,6 +1589,14 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					concurrency,
 					async (task, taskIdx) => {
 						const fi = groupStartFlatIndex + taskIdx;
+						// Check synchronously before dispatching: the run deadline may have
+						// breached while this queued item waited for a concurrency slot.
+						if (handleRunTimeout(Date.now())) {
+							// runTimedOut is now latched and pending siblings were marked
+							// failed by handleRunTimeout; return the durable failure state.
+							const failure = statusPayload.steps[fi];
+							return { agent: task.agent, output: failure?.error ?? "Run timed out", exitCode: failure?.exitCode ?? -1 as number | null, error: failure?.error, skipped: failure?.status === "failed" };
+						}
 						if (aborted && failFast) {
 							const skippedAt = Date.now();
 							statusPayload.steps[fi].status = "failed";
@@ -1602,9 +1652,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							registerInterrupt: (interrupt) => {
 								activeChildInterrupts.set(fi, interrupt);
 							},
+							shouldStopDispatch: () => interrupted || handleRunTimeout(Date.now()),
 							onChildEvent: (event) => updateStepFromChildEvent(fi, event),
 							nestedRoute: config.nestedRoute,
 						});
+						handleRunTimeout(Date.now());
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
 						}
@@ -1637,11 +1689,16 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 						// Do not emit a terminal step event for an interrupted (paused) child: its exitCode is
 						// forced to 0 but the step is paused, not completed. run.paused already signals it (H1).
+						// A timed-out child resolved through the interrupt path must emit step.failed using the
+						// durable killStep state; it must never emit step.completed even though exitCode is 0.
 						if (!interrupted) {
+							const timedOutStep = statusPayload.steps[fi];
+							const terminalExitCode = wasTimedOut ? timedOutStep.exitCode ?? -1 : singleResult.exitCode;
+							const terminalError = wasTimedOut ? timedOutStep.error : singleResult.error;
 							appendRunEvent(eventsPath, {
-								type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
+								type: terminalExitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
 								ts: taskEndTime, runId: id, stepIndex: fi, agent: task.agent,
-								exitCode: singleResult.exitCode, durationMs: taskDuration,
+								exitCode: terminalExitCode, durationMs: taskDuration, error: terminalError,
 							});
 						}
 						if (singleResult.completionGuardTriggered) {
@@ -1687,11 +1744,13 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				}
 
 				parallelResults.forEach((pr, prIndex) => {
+					const fi = groupStartFlatIndex + prIndex;
+					const prTimedOut = statusPayload.steps[fi]?.activityState === "timed_out";
 					results.push({
 						agent: pr.agent,
 						output: pr.output,
-						error: pr.error,
-						success: pr.exitCode === 0,
+						error: prTimedOut ? statusPayload.steps[fi]?.error ?? pr.error : pr.error,
+						success: !prTimedOut && pr.exitCode === 0,
 						skipped: pr.skipped,
 						sessionFile: pr.sessionFile,
 						intercomTarget: pr.intercomTarget,
@@ -1721,7 +1780,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				// can reference {outputs.<as>}. Only on full success — a hard failure breaks below and
 				// downstream never runs, mirroring the foreground contract.
 				if (group.collect && group.dynamicStep && group.dynamicItems) {
-					const hardFailure = parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1);
+					const hardFailure = runTimedOut || parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1);
 					if (!hardFailure) {
 						const collectAgent = group.dynamicAgent ?? group.dynamicStep.parallel.agent;
 						const collected = collectDynamicResults(group.dynamicStep, group.dynamicItems, parallelResults);
@@ -1744,10 +1803,10 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					ts: Date.now(),
 					runId: id,
 					stepIndex,
-					success: parallelResults.every((r) => r.exitCode === 0 || r.exitCode === -1),
+					success: !runTimedOut && parallelResults.every((r) => r.exitCode === 0 || r.exitCode === -1),
 				});
 
-				if (parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1)) {
+				if (runTimedOut || parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1)) {
 					// For dynamic fanout, surface the per-item key of each failed item (mirrors the
 					// foreground "Item K (agent, key X)" diagnostics) so status.json/results identify
 					// which expanded items failed rather than just naming the agent.
@@ -1887,6 +1946,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			steps.splice(stepIndex + 1, 0, group);
 			continue;
 		} else {
+			if (handleRunTimeout(Date.now())) break;
 			const seqStep = step as SubagentStep;
 			const stepStartTime = Date.now();
 			statusPayload.currentStep = flatIndex;
@@ -1924,9 +1984,11 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				registerInterrupt: (interrupt) => {
 					activeChildInterrupts.set(flatIndex, interrupt);
 				},
+				shouldStopDispatch: () => interrupted || handleRunTimeout(Date.now()),
 				onChildEvent: (event) => updateStepFromChildEvent(flatIndex, event),
 				nestedRoute: config.nestedRoute,
 			});
+			handleRunTimeout(Date.now());
 			if (seqStep.sessionFile) {
 				latestSessionFile = seqStep.sessionFile;
 			}
@@ -1935,11 +1997,15 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			if (seqStep.as && isStorableStepResult(singleResult)) {
 				outputs[seqStep.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
 			}
+			// A run-timeout kill reuses the same interrupt path as a user pause, which always
+			// resolves the child with exitCode 0 and a suppressed error. Trust the durable
+			// killStep-recorded step state instead of the raw child result.
+			const wasTimedOut = statusPayload.steps[flatIndex].activityState === "timed_out";
 			results.push({
 				agent: singleResult.agent,
 				output: singleResult.output,
-				error: singleResult.error,
-				success: singleResult.exitCode === 0,
+				error: wasTimedOut ? statusPayload.steps[flatIndex].error : singleResult.error,
+				success: !wasTimedOut && singleResult.exitCode === 0,
 				sessionFile: singleResult.sessionFile,
 				intercomTarget: singleResult.intercomTarget,
 				model: singleResult.model,
@@ -1962,10 +2028,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			// actually succeeded, and the stale-run reconciler would then mark a completed run
 			// as "failed". Recording success first lets the reconciler salvage it as complete.
 			//
-			// Preserve killStep's writes when the step was killed by inactivity timeout,
+			// Preserve killStep's writes when the step was killed by inactivity/run timeout,
 			// and interruptRunner's "paused" state when the run was interrupted. Without this,
 			// a timed-out/interrupted child returns exitCode 0 and overwrites status to "complete".
-			const wasTimedOut = statusPayload.steps[flatIndex].activityState === "timed_out";
 			if (!wasTimedOut && !interrupted) {
 				statusPayload.steps[flatIndex].status = singleResult.exitCode === 0 ? "complete" : "failed";
 				statusPayload.steps[flatIndex].endedAt = stepEndTime;
@@ -2016,15 +2081,21 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 			// See the parallel block: suppress the terminal step event for an interrupted (paused)
 			// child so consumers can't observe a "completed" step inside a paused run (H1).
+			// A timed-out child resolved through the interrupt path must emit step.failed using the
+			// durable killStep state; it must never emit step.completed even though exitCode is 0.
 			if (!interrupted) {
+				const timedOutStep = statusPayload.steps[flatIndex];
+				const terminalExitCode = wasTimedOut ? timedOutStep.exitCode ?? -1 : singleResult.exitCode;
+				const terminalError = wasTimedOut ? timedOutStep.error : singleResult.error;
 				appendRunEvent(eventsPath, {
-					type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
+					type: terminalExitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
 					ts: stepEndTime,
 					runId: id,
 					stepIndex: flatIndex,
 					agent: seqStep.agent,
-					exitCode: singleResult.exitCode,
+					exitCode: terminalExitCode,
 					durationMs: stepEndTime - stepStartTime,
+					error: terminalError,
 					tokens: stepTokens,
 				});
 			}
@@ -2043,7 +2114,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			flatIndex++;
-			if (singleResult.exitCode !== 0) {
+			if (wasTimedOut || singleResult.exitCode !== 0) {
 				break;
 			}
 		}
@@ -2089,8 +2160,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		id,
 		agent: agentName,
 		mode: resultMode,
-		success: !interrupted && results.every((r) => r.success),
-		state: interrupted ? "paused" : results.every((r) => r.success) ? "complete" : "failed",
+		success: !interrupted && !runTimedOut && results.every((r) => r.success),
+		state: interrupted ? "paused" : runTimedOut ? "failed" : results.every((r) => r.success) ? "complete" : "failed",
 		summary: interrupted ? "Paused after interrupt. Waiting for explicit next action." : summary,
 		results: results.map((r) => ({
 			agent: r.agent,
@@ -2106,7 +2177,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			artifactPaths: r.artifactPaths,
 			truncated: r.truncated,
 		})),
-		exitCode: interrupted || results.every((r) => r.success) ? 0 : 1,
+		exitCode: interrupted || (!runTimedOut && results.every((r) => r.success)) ? 0 : 1,
 		timestamp: extra.endedAt,
 		durationMs: extra.endedAt - overallStartTime,
 		truncated,
@@ -2168,7 +2239,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	}
 	const effectiveSessionFile = sessionFile ?? latestSessionFile;
 	const runEndedAt = Date.now();
-	statusPayload.state = interrupted ? "paused" : results.every((r) => r.success) ? "complete" : "failed";
+	statusPayload.state = interrupted ? "paused" : runTimedOut ? "failed" : results.every((r) => r.success) ? "complete" : "failed";
 	statusPayload.activityState = undefined;
 	statusPayload.endedAt = runEndedAt;
 	statusPayload.lastUpdate = runEndedAt;
