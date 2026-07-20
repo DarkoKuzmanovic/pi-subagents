@@ -1,7 +1,7 @@
 # v0.42.2 — Restore chain-default clarify precedence
 
 **Milestone:** M11
-**Status:** approved design; implementation not started
+**Status:** implemented — v0.42.2 (2026-07-20)
 
 ## Invariant
 

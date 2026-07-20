@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.42.2] - 2026-07-20
+
+### Fixed
+
+- **Chain-default clarify precedence restored against asyncByDefault.** When `asyncByDefault: true` is configured, chain runs now require explicit `clarify: false` to enter background mode. Previously an implicit or inherited `asyncByDefault` could silently bypass the chain-default clarification flow, skipping the preview/edit TUI for chain workflows. Single and top-level parallel calls retain their existing rule (`clarify !== true` decides background).
+- **Executor-level truth-table regression.** Added nine executor-routing cases covering chain, single, and top-level parallel calls across omitted/explicit `async` and `clarify`, config-supplied `asyncByDefault: true`, and chains containing parallel groups.
+
+### Tests
+
+- Added executor-level regressions for chain-default clarify precedence, config-supplied async defaults, unchanged single/top-level-parallel routing, and chain parallel-group behavior.
+- Made detached background cases await their result files so late mock calls cannot leak into later integration tests.
+
+### Documentation
+
+- Replaced stale `pi install npm:pi-subagents` with GitHub-based installation (`pi install git:github.com/DarkoKuzmanovic/pi-subagents`) plus an optional immutable tag-pin example.
+- Restructured README for progressive disclosure: quick start first, core concepts and common workflows next, advanced orchestration and reference later. Consolidated `pi-intercom` and web research under optional companions while retaining their valid npm installation commands.
+- Added M11 to ROADMAP Released and marked the v0.42.2 design plan implemented.
+
 ## [0.42.1] - 2026-07-19
 
 ### Changed

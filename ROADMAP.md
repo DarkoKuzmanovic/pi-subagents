@@ -11,10 +11,9 @@
 - **M8** — Delta-aware stream accounting that avoids snapshot-amplification false kills — v0.42.0 (2026-07-14)
 - **M9** — Cumulative unaccounted-byte backstop for genuinely unparsed stream floods — v0.42.1 (2026-07-14)
 - **M10** — Commit-engineer user agent with isolated Git safety proof (2026-07-14)
+- **M11** — Restore chain-default clarify precedence and add the routing truth-table regression — v0.42.2 (2026-07-20)
 
 ## Current
-
-- **M11** — Restore chain-default clarify precedence and add the routing truth-table regression — v0.42.2
 
 ## Planned
 
