@@ -771,6 +771,60 @@ export interface NestedRunResolutionScope {
 }
 
 // ============================================================================
+// Live control (M12.1) — direct acknowledged child-control transport spike.
+// Internal only: no public subagent tool action or UI consumes these yet.
+// ============================================================================
+
+export type LiveControlMode = "steer" | "followUp";
+
+export type LiveControlRequestState = "submitted" | "delivery-attempted" | "accepted-by-pi" | "rejected" | "outcome-unknown";
+
+export type LiveControlDisposition = "started-turn" | "queued-steer" | "queued-follow-up";
+
+/** Child-generated, atomically published ownership marker for one (rootRunId, childKey) slot. */
+export interface LiveControlOwnerEpoch {
+	schemaVersion: 2;
+	rootRunId: string;
+	capabilityToken: string;
+	childKey: string;
+	epoch: string;
+	pid: number;
+	startedAt: number;
+	closedAt?: number;
+}
+
+/** One durable steer/follow-up control request, bound to an exact owner epoch and sequence. */
+export interface LiveControlRequestRecord {
+	schemaVersion: 2;
+	type: "subagent.live-control.request";
+	rootRunId: string;
+	capabilityToken: string;
+	childKey: string;
+	epoch: string;
+	sequence: number;
+	requestId: string;
+	mode: LiveControlMode;
+	text: string;
+	ts: number;
+}
+
+/** Durable terminal (or in-flight) state for one live control request. Never claims model delivery. */
+export interface LiveControlResultRecord {
+	schemaVersion: 2;
+	type: "subagent.live-control.result";
+	rootRunId: string;
+	capabilityToken: string;
+	childKey: string;
+	epoch: string;
+	sequence: number;
+	requestId: string;
+	state: LiveControlRequestState;
+	disposition?: LiveControlDisposition;
+	message: string;
+	ts: number;
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 

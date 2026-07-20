@@ -700,6 +700,7 @@ export function executeAsyncSingle(
 		worktreeSetupHook: params.worktreeSetupHook,
 		worktreeSetupHookTimeoutMs: params.worktreeSetupHookTimeoutMs,
 		controlConfig: params.controlConfig,
+		nestedRoute: params.nestedRoute,
 		controlIntercomTarget: params.controlIntercomTarget,
 		childIntercomTarget: params.childIntercomTarget,
 		availableModels: params.availableModels,

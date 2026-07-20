@@ -7,6 +7,12 @@ import {
 	TEMP_ROOT_DIR,
 	type AsyncJobState,
 	type AsyncStatus,
+	type LiveControlDisposition,
+	type LiveControlMode,
+	type LiveControlOwnerEpoch,
+	type LiveControlRequestRecord,
+	type LiveControlRequestState,
+	type LiveControlResultRecord,
 	type NestedRouteInfo,
 	type NestedRunSummary,
 	type NestedRunState,
@@ -26,6 +32,7 @@ import {
 	SUBAGENT_PARENT_RUN_ID_ENV,
 } from "./pi-args.ts";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
+import { writeDurableJson } from "../../shared/durable-json.ts";
 
 export const NESTED_EVENTS_DIR = path.join(TEMP_ROOT_DIR, "nested-subagent-events");
 const ROUTE_FILE = "route.json";
@@ -816,4 +823,357 @@ export function nestedResultsPath(rootRunId: string, id: string): string {
 	assertSafeId("rootRunId", rootRunId);
 	assertSafeId("id", id);
 	return path.join(RESULTS_DIR, "nested", rootRunId, `${id}.json`);
+}
+
+
+// ============================================================================
+// Live control v2 (M12.1) — direct acknowledged child-control transport spike.
+// Reuses the existing capability-token-scoped route directory, under a
+// dedicated `live-control/` subtree so v1 interrupt/resume readers (which only
+// scan route.controlInbox / route.eventSink) never observe v2 records.
+// Internal protocol only: no public subagent tool action or UI consumes this yet.
+// ============================================================================
+
+export const MAX_LIVE_CONTROL_TEXT_BYTES = 16 * 1024;
+const MAX_LIVE_CONTROL_RECORD_BYTES = MAX_LIVE_CONTROL_TEXT_BYTES + 4096;
+
+function liveControlRoot(route: NestedRoute): string {
+	return path.join(commonRouteRoot(route), "live-control");
+}
+
+function liveControlOwnersDir(route: NestedRoute): string {
+	return path.join(liveControlRoot(route), "owners");
+}
+
+function liveControlOwnerFile(route: NestedRoute, childKey: string): string {
+	return path.join(liveControlOwnersDir(route), `${childKey}.epoch.json`);
+}
+
+function liveControlSequenceFile(route: NestedRoute, childKey: string): string {
+	return path.join(liveControlOwnersDir(route), `${childKey}.seq.json`);
+}
+
+function liveControlRequestDir(route: NestedRoute, childKey: string): string {
+	return path.join(liveControlRoot(route), "requests", childKey);
+}
+
+function liveControlStateDir(route: NestedRoute, childKey: string): string {
+	return path.join(liveControlRoot(route), "state", childKey);
+}
+
+function liveControlEntryName(sequence: number, requestId: string): string {
+	return `${String(sequence).padStart(10, "0")}-${requestId}.json`;
+}
+
+/** Atomically (fsynced) publish a new owner epoch for one (rootRunId, childKey) slot, rotating out any prior epoch. */
+export function publishLiveControlOwnerEpoch(route: NestedRoute, childKey: string, options: { now?: number; pid?: number } = {}): LiveControlOwnerEpoch {
+	validateRouteShape(route);
+	assertSafeId("childKey", childKey);
+	const owner: LiveControlOwnerEpoch = {
+		schemaVersion: 2,
+		rootRunId: route.rootRunId,
+		capabilityToken: route.capabilityToken,
+		childKey,
+		epoch: randomUUID(),
+		pid: options.pid ?? process.pid,
+		startedAt: options.now ?? Date.now(),
+	};
+	writeDurableJson(liveControlOwnerFile(route, childKey), owner, { exclusive: false });
+	return owner;
+}
+
+export function readLiveControlOwnerEpoch(route: NestedRoute, childKey: string): LiveControlOwnerEpoch | undefined {
+	validateRouteShape(route);
+	assertSafeId("childKey", childKey);
+	try {
+		const parsed = JSON.parse(fs.readFileSync(liveControlOwnerFile(route, childKey), "utf-8")) as Partial<LiveControlOwnerEpoch>;
+		if (parsed.schemaVersion !== 2 || typeof parsed.epoch !== "string" || typeof parsed.pid !== "number" || typeof parsed.startedAt !== "number") return undefined;
+		if (parsed.rootRunId !== route.rootRunId || parsed.capabilityToken !== route.capabilityToken || parsed.childKey !== childKey) return undefined;
+		return {
+			schemaVersion: 2,
+			rootRunId: route.rootRunId,
+			capabilityToken: route.capabilityToken,
+			childKey,
+			epoch: parsed.epoch,
+			pid: parsed.pid,
+			startedAt: parsed.startedAt,
+			...(typeof parsed.closedAt === "number" ? { closedAt: parsed.closedAt } : {}),
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+/** Mark orderly shutdown. A no-op if a newer epoch has already superseded the one being closed. */
+export function closeLiveControlOwnerEpoch(route: NestedRoute, childKey: string, epoch: string, now = Date.now()): void {
+	const current = readLiveControlOwnerEpoch(route, childKey);
+	if (!current || current.epoch !== epoch) return;
+	writeDurableJson(liveControlOwnerFile(route, childKey), { ...current, closedAt: now }, { exclusive: false });
+}
+
+/** Allocate the next monotonic per-child-key sequence number. Not epoch-scoped: never reset by owner rotation. */
+export function allocateLiveControlSequence(route: NestedRoute, childKey: string): number {
+	validateRouteShape(route);
+	assertSafeId("childKey", childKey);
+	const file = liveControlSequenceFile(route, childKey);
+	let next = 1;
+	try {
+		const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as { next?: unknown };
+		if (typeof parsed.next === "number" && Number.isInteger(parsed.next) && parsed.next > 0) next = parsed.next;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	writeDurableJson(file, { next: next + 1 }, { exclusive: false });
+	return next;
+}
+
+/**
+ * Peek the highest sequence number already allocated for this child key, without allocating a new one.
+ * Used to fix a replacement owner's expected FIFO baseline to the continued global sequence *before*
+ * that owner's epoch is published, so a parent can never observe the new epoch ahead of the baseline.
+ */
+export function readLiveControlSequenceBaseline(route: NestedRoute, childKey: string): number {
+	validateRouteShape(route);
+	assertSafeId("childKey", childKey);
+	const file = liveControlSequenceFile(route, childKey);
+	try {
+		const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as { next?: unknown };
+		if (typeof parsed.next === "number" && Number.isInteger(parsed.next) && parsed.next > 0) return parsed.next - 1;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	return 0;
+}
+
+export interface SubmitLiveControlRequestInput {
+	childKey: string;
+	epoch: string;
+	mode: LiveControlMode;
+	text: string;
+	now?: number;
+	requestId?: string;
+	sequence?: number;
+}
+
+/**
+ * Bounded per-(route, childKey) scan for an existing durable result matching one requestId,
+ * regardless of which sequence it was originally consumed at. requestId is the idempotency key
+ * within one route+child, independent of sequence: this lets submitLiveControlRequest recognize
+ * an exact retry and reuse its original durable slot instead of allocating a new sequence or
+ * rewriting request/state files (which could downgrade an already-terminal state).
+ */
+function findLiveControlResultByRequestId(route: NestedRoute, childKey: string, requestId: string): LiveControlResultRecord | undefined {
+	const dir = liveControlStateDir(route, childKey);
+	let entries: string[] = [];
+	try {
+		entries = fs.readdirSync(dir).filter((entry) => entry.endsWith(`-${requestId}.json`));
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		return undefined;
+	}
+	let bestTerminal: LiveControlResultRecord | undefined;
+	let bestNonTerminal: LiveControlResultRecord | undefined;
+	for (const entry of entries) {
+		const match = /^(\d{10})-/.exec(entry);
+		if (!match) continue;
+		const sequence = Number(match[1]);
+		const record = readLiveControlRequestState(route, childKey, sequence, requestId);
+		if (!record) continue;
+		const isTerminal = record.state === "accepted-by-pi" || record.state === "rejected";
+		if (isTerminal) {
+			if (!bestTerminal || record.sequence < bestTerminal.sequence) bestTerminal = record;
+		} else if (!bestNonTerminal || record.sequence < bestNonTerminal.sequence) {
+			bestNonTerminal = record;
+		}
+	}
+	return bestTerminal ?? bestNonTerminal;
+}
+
+/** Submit one bounded steer/follow-up request and its initial durable 'submitted' state. */
+export function submitLiveControlRequest(route: NestedRoute, input: SubmitLiveControlRequestInput): LiveControlRequestRecord {
+	validateRouteShape(route);
+	assertSafeId("childKey", input.childKey);
+	if (input.mode !== "steer" && input.mode !== "followUp") throw new Error("Live control request mode must be 'steer' or 'followUp'.");
+	if (Buffer.byteLength(input.text, "utf-8") > MAX_LIVE_CONTROL_TEXT_BYTES) {
+		throw new Error(`Live control request text exceeds the maximum of ${MAX_LIVE_CONTROL_TEXT_BYTES} bytes.`);
+	}
+
+	// requestId is the idempotency key within this route+child, independent of sequence: check it
+	// before allocating a sequence or touching the request/state files, so an exact retry reuses the
+	// original durable slot instead of allocating a fresh sequence or downgrading terminal state.
+	if (input.requestId !== undefined) {
+		assertSafeId("requestId", input.requestId);
+		const existing = findLiveControlResultByRequestId(route, input.childKey, input.requestId);
+		if (existing) {
+			return {
+				schemaVersion: 2,
+				type: "subagent.live-control.request",
+				rootRunId: route.rootRunId,
+				capabilityToken: route.capabilityToken,
+				childKey: input.childKey,
+				epoch: existing.epoch,
+				sequence: existing.sequence,
+				requestId: existing.requestId,
+				mode: input.mode,
+				text: input.text,
+				ts: existing.ts,
+			};
+		}
+	}
+
+	const sequence = input.sequence ?? allocateLiveControlSequence(route, input.childKey);
+	const requestId = input.requestId ?? randomUUID();
+	const now = input.now ?? Date.now();
+	const record: LiveControlRequestRecord = {
+		schemaVersion: 2,
+		type: "subagent.live-control.request",
+		rootRunId: route.rootRunId,
+		capabilityToken: route.capabilityToken,
+		childKey: input.childKey,
+		epoch: input.epoch,
+		sequence,
+		requestId,
+		mode: input.mode,
+		text: input.text,
+		ts: now,
+	};
+	const dir = liveControlRequestDir(route, input.childKey);
+	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+	const name = liveControlEntryName(sequence, requestId);
+	const tmp = path.join(dir, `.${name}.tmp`);
+	fs.writeFileSync(tmp, JSON.stringify(record), { mode: 0o600 });
+	fs.renameSync(tmp, path.join(dir, name));
+
+	writeLiveControlRequestState(route, {
+		schemaVersion: 2,
+		type: "subagent.live-control.result",
+		rootRunId: route.rootRunId,
+		capabilityToken: route.capabilityToken,
+		childKey: input.childKey,
+		epoch: input.epoch,
+		sequence,
+		requestId,
+		state: "submitted",
+		message: "Request submitted; awaiting owner delivery.",
+		ts: now,
+	});
+
+	return record;
+}
+
+function parseLiveControlRequestRecord(content: string, route: NestedRoute): LiveControlRequestRecord | undefined {
+	if (Buffer.byteLength(content, "utf-8") > MAX_LIVE_CONTROL_RECORD_BYTES) return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(content);
+	} catch {
+		return undefined;
+	}
+	if (!parsed || typeof parsed !== "object") return undefined;
+	const raw = parsed as Record<string, unknown>;
+	if (raw.schemaVersion !== 2 || raw.type !== "subagent.live-control.request") return undefined;
+	if (raw.rootRunId !== route.rootRunId || raw.capabilityToken !== route.capabilityToken) return undefined;
+	if (!isSafeNestedId(raw.childKey) || !isSafeNestedId(raw.requestId)) return undefined;
+	if (typeof raw.epoch !== "string" || raw.epoch.length === 0) return undefined;
+	if (typeof raw.sequence !== "number" || !Number.isInteger(raw.sequence) || raw.sequence < 1) return undefined;
+	if (raw.mode !== "steer" && raw.mode !== "followUp") return undefined;
+	if (typeof raw.text !== "string" || Buffer.byteLength(raw.text, "utf-8") > MAX_LIVE_CONTROL_TEXT_BYTES) return undefined;
+	if (typeof raw.ts !== "number") return undefined;
+	return {
+		schemaVersion: 2,
+		type: "subagent.live-control.request",
+		rootRunId: route.rootRunId,
+		capabilityToken: route.capabilityToken,
+		childKey: raw.childKey,
+		epoch: raw.epoch,
+		sequence: raw.sequence,
+		requestId: raw.requestId,
+		mode: raw.mode,
+		text: raw.text,
+		ts: raw.ts,
+	};
+}
+
+/** Read pending v2 requests for one child key, oldest sequence first. Malformed/oversized/wrong-capability entries are silently skipped. */
+export function readPendingLiveControlRequests(route: NestedRoute, childKey: string): Array<{ record: LiveControlRequestRecord; filePath: string }> {
+	validateRouteShape(route);
+	assertSafeId("childKey", childKey);
+	const dir = liveControlRequestDir(route, childKey);
+	let entries: string[] = [];
+	try {
+		entries = fs.readdirSync(dir).filter((entry) => entry.endsWith(".json") && !entry.startsWith(".")).sort();
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	const pending: Array<{ record: LiveControlRequestRecord; filePath: string }> = [];
+	for (const entry of entries) {
+		const filePath = path.join(dir, entry);
+		if (!containedPath(dir, filePath)) continue;
+		try {
+			const stat = fs.statSync(filePath);
+			if (!stat.isFile() || stat.size > MAX_LIVE_CONTROL_RECORD_BYTES) continue;
+			const content = fs.readFileSync(filePath, "utf-8");
+			const record = parseLiveControlRequestRecord(content, route);
+			if (record && record.childKey === childKey) pending.push({ record, filePath });
+		} catch {
+			continue;
+		}
+	}
+	return pending;
+}
+
+export function deleteLiveControlRequestFile(filePath: string): void {
+	try {
+		fs.unlinkSync(filePath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+}
+
+export function readLiveControlRequestState(route: NestedRoute, childKey: string, sequence: number, requestId: string): LiveControlResultRecord | undefined {
+	validateRouteShape(route);
+	assertSafeId("childKey", childKey);
+	assertSafeId("requestId", requestId);
+	const file = path.join(liveControlStateDir(route, childKey), liveControlEntryName(sequence, requestId));
+	try {
+		const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<LiveControlResultRecord>;
+		if (parsed.schemaVersion !== 2 || parsed.type !== "subagent.live-control.result") return undefined;
+		if (parsed.rootRunId !== route.rootRunId || parsed.capabilityToken !== route.capabilityToken) return undefined;
+		if (parsed.childKey !== childKey || parsed.requestId !== requestId || parsed.sequence !== sequence) return undefined;
+		if (typeof parsed.state !== "string" || typeof parsed.message !== "string" || typeof parsed.ts !== "number" || typeof parsed.epoch !== "string") return undefined;
+		return {
+			schemaVersion: 2,
+			type: "subagent.live-control.result",
+			rootRunId: route.rootRunId,
+			capabilityToken: route.capabilityToken,
+			childKey,
+			epoch: parsed.epoch,
+			sequence,
+			requestId,
+			state: parsed.state as LiveControlRequestState,
+			...(parsed.disposition ? { disposition: parsed.disposition as LiveControlDisposition } : {}),
+			message: parsed.message,
+			ts: parsed.ts,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+/** Persist (fsynced) the durable state for one request. Called with 'delivery-attempted' before pi.sendUserMessage, then a terminal state after. */
+export function writeLiveControlRequestState(route: NestedRoute, record: LiveControlResultRecord): void {
+	validateRouteShape(route);
+	assertSafeId("childKey", record.childKey);
+	assertSafeId("requestId", record.requestId);
+	if (Buffer.byteLength(record.message, "utf-8") > MAX_LIVE_CONTROL_TEXT_BYTES) {
+		throw new Error("Live control result message exceeds the maximum bounded size.");
+	}
+	const file = path.join(liveControlStateDir(route, record.childKey), liveControlEntryName(record.sequence, record.requestId));
+	writeDurableJson(file, record, { exclusive: false });
+}
+
+/** Read-side interpretation only: a request stuck at 'delivery-attempted' is ambiguous, never claimed accepted or replayed. */
+export function deriveLiveControlOutcome(record: LiveControlResultRecord | undefined): LiveControlRequestState {
+	if (!record) return "outcome-unknown";
+	return record.state === "delivery-attempted" ? "outcome-unknown" : record.state;
 }

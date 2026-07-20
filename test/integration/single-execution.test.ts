@@ -25,6 +25,7 @@ import {
 	tryImport,
 } from "../support/helpers.ts";
 import { INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT } from "../../src/shared/types.ts";
+import { createNestedRoute } from "../../src/runs/shared/nested-events.ts";
 
 interface ModelAttempt {
 	success?: boolean;
@@ -929,6 +930,47 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.ok(extensionArgs.some((arg) => arg.endsWith("src/runs/shared/subagent-prompt-runtime.ts")));
 		assert.ok(extensionArgs.includes("./custom-tool.ts"));
 		assert.ok(extensionArgs.includes("./allowed-ext.ts"));
+	});
+
+	it("routes a real NestedRoute through the launch boundary to child env and extensions without intercom setup", async () => {
+		const route = createNestedRoute(`fg-reach-${Date.now().toString(36)}`);
+		try {
+			mockPi.onCall({
+				echoEnv: [
+					"PI_SUBAGENT_PARENT_ROOT_RUN_ID",
+					"PI_SUBAGENT_PARENT_EVENT_SINK",
+					"PI_SUBAGENT_PARENT_CONTROL_INBOX",
+					"PI_SUBAGENT_PARENT_CAPABILITY_TOKEN",
+					"PI_SUBAGENT_CHILD_AGENT",
+					"PI_SUBAGENT_CHILD_INDEX",
+				],
+			});
+			const agents = makeAgentConfigs(["echo"]);
+
+			// Real launch/argument-building boundary: runSync -> buildPiArgs -> spawned mock pi.
+			// No intercomEvents/allowIntercomDetach is passed, proving no pi-intercom setup is required.
+			const result = await runSync(tempDir, agents, "echo", "Task", {
+				runId: "fg-reachability",
+				index: 4,
+				nestedRoute: route,
+			});
+
+			assert.equal(result.exitCode, 0);
+			assert.deepEqual(JSON.parse(result.finalOutput ?? "{}"), {
+				PI_SUBAGENT_PARENT_ROOT_RUN_ID: route.rootRunId,
+				PI_SUBAGENT_PARENT_EVENT_SINK: route.eventSink,
+				PI_SUBAGENT_PARENT_CONTROL_INBOX: route.controlInbox,
+				PI_SUBAGENT_PARENT_CAPABILITY_TOKEN: route.capabilityToken,
+				PI_SUBAGENT_CHILD_AGENT: "echo",
+				PI_SUBAGENT_CHILD_INDEX: "4",
+			});
+
+			const args = readCallArgs();
+			const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
+			assert.ok(extensionArgs.some((arg) => arg.endsWith("src/runs/shared/subagent-prompt-runtime.ts")));
+		} finally {
+			fs.rmSync(path.dirname(route.eventSink), { recursive: true, force: true });
+		}
 	});
 
 	it("treats forced drain after final assistant output as cleanup success", async () => {

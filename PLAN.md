@@ -1,0 +1,120 @@
+# PLAN — M12 live run handles
+
+## Scope decision
+
+- **Tier:** Full
+- **Risk:** contained protected — live cross-process steering is a public control and concurrency/integrity boundary, but it does not own credentials, destructive migration, or persistent user data.
+- **Delivery:** local
+- **Evidence:** one repository and one release boundary; three independently verifiable user outcomes; unresolved transport ownership fork; existing async, nested-control, intercom, status, and interrupt paths must remain compatible; deterministic mock/integration coverage is available.
+- **Allowed ceremony:** one planner dispatch; one supervised wave per outcome; one fresh combined `reviewer` `lane:deep` at each protected outcome boundary; optional bounded Pitaj consultations do not replace review.
+- **Outcome dispatch ceiling:** 5 child calls per contained-protected outcome; session ceiling 12 child calls / 180 child-runtime minutes / 2 compactions.
+- **Promotion triggers:** a second repository, destructive state migration, shared credentials, or a new integrity boundary capable of corrupting durable state.
+- **Re-grill triggers:** the file-route spike fails and requires a socket/daemon; the product surface expands beyond live run control and inspection; true mid-token interruption becomes a requirement.
+
+## Run metrics
+
+- **started-at:** 2026-07-20T15:09:26+02:00
+- **first-worker-at:** 2026-07-20T15:23:52+02:00
+- **time-to-first-worker:** 14m26s
+- **dispatches:** 11
+- **review-bundles:** 3
+- **review-dispatches:** 3
+- **worker-retries:** 0
+- **oracle:** 0
+- **completed-outcomes:** 1
+- **child-runtime-minutes:** 89
+- **compactions:** 2
+
+## M12 — Live run handles
+
+**Counters:** dispatches: 11/12 · review-bundles: 3 · review-dispatches: 3 · fix-cycles: 3/3 · oracle: 0 · worker-retries: 0 · direct-edits: 3
+
+- [x] **M12.1 — Prove a direct, acknowledged child-control transport**
+  - **Risk:** contained protected — wrong-target, duplicate, stale-epoch, reordered, or falsely acknowledged steering would violate control integrity.
+  - **Counters:** dispatches: 10/11 · review-bundles: 3 · review-dispatches: 3 · fix-cycles: 3/3 · oracle: 0 · worker-retries: 0 · direct-edits: 0
+  - [x] Add protocol-first RED tests for backward-compatible route versioning, exact owner/session epoch publication, monotonic per-owner sequence, duplicate/gap rejection, same-live-epoch parent restart, stale-epoch child restart, directory/file permissions, malformed/oversized/wrong-capability input, idle-child delivery, and internal protocol reprojection only.
+  - [x] Extend `nested-events.ts` and internal shared types with same-directory atomic+fsynced owner registration, ordered steer/follow-up requests, and durable states `submitted`, `delivery-attempted`, `accepted-by-pi`, `rejected`, and `outcome-unknown`; accepted results carry the actual Pi disposition (`started-turn`, `queued-steer`, or `queued-follow-up`) and legacy interrupt/resume records remain unchanged.
+  - [x] Start a single-flight v2 owner listener from the always-loaded child prompt runtime, not fanout authorization: atomically publish a child-generated epoch at session start, close it on orderly shutdown, persist+fsync `delivery-attempted` before calling Pi, call documented `pi.sendUserMessage`, then persist an honest terminal acknowledgement.
+  - [x] Propagate the exact route/child identity through the shared `buildPiArgs` path used by both foreground `execution.ts` and async `subagent-runner.ts`; preserve separate Pi processes and existing lifecycle ownership without sockets or mandatory intercom.
+  - [x] Add deterministic foreground and async integration coverage for active steer/follow-up, idle immediate-turn behavior, no-intercom operation, FIFO/duplicate/out-of-sequence rejection, same-epoch parent restart, child epoch rotation, child exit, interrupt/abort, shutdown terminalization, and post-send/pre-ack ambiguity; await terminal async result files before teardown.
+  - [x] Use fake clocks/timers for deterministic poll-step, ordering, and byte/count assertions; separately record non-gating real request-to-accept p50/p95/max plus bounded-burst route file/event bytes. Prove records contain only bounded user control text and compact metadata, never child output or transcript snapshots.
+  - [x] Run focused unit/integration gates, typecheck, full `test:all`, and one fresh `reviewer` `lane:deep`; stop at the M12.1 boundary before public actions or UI.
+  - **Likely files:** `src/runs/shared/nested-events.ts`, `src/shared/types.ts`, `src/runs/shared/subagent-prompt-runtime.ts`, `src/runs/shared/pi-args.ts`, foreground/async launch wiring, and their existing unit/integration tests. `fanout-child.ts` changes only if legacy/v2 inbox isolation requires it.
+  - **Governing risks:** honest Pi-acceptance semantics and unavoidable crash ambiguity; capability + owner epoch + sequence enforcement; single-flight FIFO with durable out-of-sequence rejection; startup/shutdown/abort terminalization; same-directory fsync durability; no pre-approved polling threshold.
+  - **Rollback:** stop emitting v2 records and disable the direct child listener; legacy interrupt/resume, status, completion, cleanup, and optional intercom remain intact. Escalate to a child-owned authenticated socket only if measured evidence fails and the re-grill trigger is invoked.
+  - **Acceptance:** foreground and async separate Pi children accept steer/follow-up through the versioned file route; acknowledgements say only `accepted-by-pi` with actual disposition, never model delivery; same-live-epoch submitted requests survive parent restart, stale-epoch requests never reach a replacement child, attempted requests never replay, legacy controls remain green, latency/volume evidence is recorded, and no public handle/recovery/UI contract is frozen.
+  - **Documentation:** README — no user-facing delta during internal spike; AGENTS — update only if the spike establishes a durable transport invariant.
+- [ ] **M12.2 — Expose stable run-handle control actions**
+  - Unblocked by the M12.1 transport `PASS`; freeze names/behavior only after M12.2 design evidence. Expected boundary: steer, queued follow-up, orderly wrap-up, and existing abort without silent mode downgrade.
+- [ ] **M12.3 — Recover handles and attach/detach compact inspection across live and completed runs**
+  - Blocked on M12.1 owner epochs and M12.2 handle identity; combine durable recovery, compact live attach/detach, activity/attention state, and bounded completed-run inspection without changing completion or cleanup.
+
+## Conventions
+
+- Follow root `AGENTS.md`: ESM TypeScript, no `any`, no non-null assertions, type-only imports where appropriate, Node's built-in test runner and existing shims.
+- Preserve separate child-process isolation; do not replace child Pi processes with in-process sessions.
+- Installed Pi documentation is authoritative. Relevant sources read before planning: `docs/extensions.md`, `docs/session-format.md`, and shipped examples `send-user-message.ts`, `input-transform-streaming.ts`, `event-bus.ts`, `file-trigger.ts`, and `handoff.ts`.
+- `accepted-by-pi` means the owning Pi session accepted or queued `sendUserMessage`; its disposition records `started-turn`, `queued-steer`, or `queued-follow-up`. It never claims the model consumed or obeyed the message.
+- Do not silently downgrade steer to follow-up. Return the actual delivery outcome.
+- Do not make optional `pi-intercom` a runtime dependency for M12.
+- Existing status, interrupt, resume, nested-run, completion, cleanup, and intercom paths remain backward compatible.
+- Public/shared contracts and concurrency/integrity changes require typecheck plus the full unit/integration gate.
+- Workers do not commit; the orchestrator owns explicit-path staging and gated commits on `crew/m12-live-handles`.
+
+## Grill decisions
+
+- The user authorized autonomous execution; ask only when a load-bearing product choice cannot be resolved safely from evidence.
+- Start with the existing atomic capability-token-scoped file route. Add dedicated IPC only if measured latency, backpressure, or owner resolution fails.
+- The target child extension process owns validation, serialization, `sendUserMessage`, and definitive acknowledgement.
+- Parent-side request creation means `submitted`, not delivered. Child acknowledgement means `accepted-by-pi` with an explicit disposition, not model delivery or compliance.
+- A crash after `sendUserMessage` but before acknowledgement is `outcome-unknown` and is never blindly replayed.
+- A `submitted` request may be consumed only by the same still-live epoch after parent restart. Epoch rotation rejects stale submitted requests; `delivery-attempted` after any owner loss becomes `outcome-unknown` and is never replayed.
+- Persist and fsync `delivery-attempted` before `sendUserMessage` using a same-directory temporary file plus atomic rename; owner directories/files remain `0700`/`0600`.
+- When the child is idle, send without `deliverAs` and record `started-turn`; while busy, preserve the requested explicit mode and record `queued-steer` or `queued-follow-up`. Never silently change one busy mode into the other.
+- The exact next sequence is accepted; duplicate request IDs reuse the durable result, conflicting duplicates and gaps are durably rejected without blocking. Wrong-capability, malformed, or oversized records are ignored/quarantined without invoking Pi; authenticated semantic errors receive durable rejection.
+- Child epoch publication and bounded internal acknowledgement reprojection belong to M12.1 transport proof; public handle recovery and inspection remain M12.3.
+- Public action names, attach UI, transcript UI, lifecycle events, and pending-work completion semantics remain outside M12.1.
+- Delivery stays local; no push, PR, issue, tag, release, or publish is authorized by this Crew run.
+
+## Gate log
+
+- 2026-07-20 — M12 authorized by user after v0.42.2 release; root `PLAN.md` was absent and `ROADMAP.md` listed M12 first under Planned.
+- 2026-07-20 — Scope classified Full / contained protected / local because the transport owner is unresolved and the milestone spans multiple control/inspection outcomes over a public concurrency boundary.
+- 2026-07-20 — Installed Pi docs confirm child extensions can call `pi.sendUserMessage` with explicit `steer` or `followUp`; steering is queued after the current assistant turn's tool calls, not injected mid-token.
+- 2026-07-20 — Pitaj Sol architecture consult recommended extending the existing file route with a child-owned endpoint and durable acknowledgement; optional intercom remains compatibility-only and sockets are evidence-triggered fallback.
+- 2026-07-20 — Planner refined M12 to three independent outcomes, merged durable live/completed inspection into one acceptance boundary, ordered M12.1 TDD around the versioned file route and child-owned `sendUserMessage`, and surfaced missing performance thresholds. Its stray lowercase `plan.md` output was moved to `/tmp`; the canonical refinements were integrated into root `PLAN.md` and counters were preserved.
+- 2026-07-20 — Pitaj Fable returned `REVISE`: rename misleading live acknowledgements, lock idle/submitted/gap/fsync/epoch policies, prove async owner reachability, and remove public-recovery scope creep. Source evidence confirmed both foreground `execution.ts` and async `subagent-runner.ts` use shared `buildPiArgs`, which always loads `subagent-prompt-runtime.ts`; all seven revisions are now locked above before worker dispatch.
+- 2026-07-20 — M12.1 first hard worker produced partial route/owner code plus 26 focused tests, then returned mid-run without launch wiring or verification. Independent focused run: `23` pass, `3` fail (conflicting duplicate, sequence gap, post-send/pre-ack unknown). Classified incomplete implementation because code exists, not startup/transport/no-write; one bounded completion worker is authorized.
+- 2026-07-20 — M12.1 fresh completion worker fixed the three inherited protocol failures and wired the always-loaded prompt runtime lifecycle; independent focused run is now `26/26` green. The worker stopped mid-task after `64` assistant turns, `72` successful tools, one child compaction at ~270k tokens, and zero tool failures. Session forensics classified task/context exhaustion, not harness/model failure. Pitaj Sol agreed to freeze protocol design and authorize one final narrowly bounded worker for exactly foreground+async process-harness reachability, minimal env wiring only, and verification; Pitaj usage was reset by the user before continuing.
+- 2026-07-20 — Narrow reachability worker added foreground+async real launch-boundary tests and found one async single→chain propagation bug; the one-line `nestedRoute` forwarder fix is green. Independent gates: focused unit `26/26`, focused integration `96/96`, typecheck clean, full unit `1091` pass / `47` skip / `0` fail, full integration `400` pass / `1` opt-in live skip / `0` fail. Local file-route benchmark at the production 250ms poll interval: 30 samples p50 `249.98ms`, p95 `251.98ms`, max `252.02ms`; 100-request burst accepted `100/100` in `36.19ms`, peaking at `232` files / `106877` bytes / `580` max bytes and settling to `132` files / `51596` bytes. Alternative epoch-rotation repro exposed a blocker: after owner 1 accepted sequence 1, owner 2 allocated sequence 2 but initialized expected sequence at 1, durably rejecting the first valid replacement-owner request as a gap. One protocol fix cycle is authorized before review.
+- 2026-07-20 — M12.1 fix worker added an epoch-rotation regression and aligned replacement-owner consumption with the durable monotonic allocator by snapshotting the highest-issued sequence before owner epoch publication. Independent post-fix gate: focused unit+integration `123/123`, typecheck clean, full unit `1092` pass / `47` skip / `0` fail, full integration `400` pass / `1` opt-in live skip / `0` fail. The original replacement-owner repro now accepts both requests.
+- 2026-07-20 — Fresh deep combined review returned `FIX-FIRST`. Reviewer and independent repro both confirm the locked request-idempotency invariant is broken: reusing one `requestId` at the next sequence invokes Pi twice, while retrying the exact same sequence/requestId overwrites the durable `accepted-by-pi` result with `submitted`. The review also recorded non-blocking gaps for real-Pi end-to-end delivery proof and stale inherited route-env clearing. M12.1 is not committed or complete; its declared `5/5` child-call and `1/1` fix-cycle caps are exhausted, so the Crew wave is stopped pending an explicit budget-replan decision.
+- 2026-07-20 — User explicitly authorized a bounded M12.1 budget replan after the final-review blocker: outcome ceiling amended from `5` to `7` child calls and from `1` to `2` fix cycles, exclusively for one requestId-idempotency fix and one focused delta review. No other scope is reopened.
+- 2026-07-20 — Bounded idempotency worker added RED coverage and fixed both reproduced defects: standard submit retries now reuse the durable requestId result before allocating or writing, and owner-side raw cross-sequence duplicates reuse the prior result without invoking Pi or blocking FIFO. Independent post-fix gates: focused unit+integration `125/125`, typecheck clean, full unit `1094` pass / `47` skip / `0` fail, full integration `400` pass / `1` opt-in live skip / `0` fail. Focused delta review is the final M12.1 gate.
+- 2026-07-20 — Focused delta reviewer verified the two original accepted-path idempotency defects are fixed and returned `PASS`, but also reproduced a remaining owner-boundary hole: requestIds durably rejected for gap, stale epoch, or sequence conflict are stored in `resultByRequestId` without entering the duplicate gate, so a later authenticated raw exact-next duplicate can still invoke Pi and overwrite rejected with accepted. Pitaj Fable adjudicated the `PASS` as unsound against the locked owner-boundary invariant; budget exhaustion is not a severity input. M12.1 remains `FIX-FIRST`, uncommitted, at `7/7` calls and `2/2` fix cycles pending explicit user authorization for any further budget replan.
+- 2026-07-20 — User explicitly authorized a final bounded M12.1 budget replan to `9` child calls and `3` fix cycles, exclusively for one write-once owner requestId/result correction with RED gap/stale/conflict coverage and one final focused review. No public/API, env-clearing, real-Pi-smoke, rotation-liveness, or M12.2 scope is reopened.
+- 2026-07-20 — Final write-once worker fixed the three rejected-first repros and added RED gap/stale/conflict coverage, but independent alternative-path verification found the ordering remains incomplete: an already `accepted-by-pi` requestId followed by a stale raw duplicate is rejected before the authoritative cache check, producing a later higher-sequence rejected record. `findLiveControlResultByRequestId` then selects that newest duplicate, so a legitimate standard retry resolves to the stale rejected epoch/sequence instead of the original accepted result. M12.1 remains uncommitted and blocked at `8/9` calls with the final fix cycle in flight; the remaining scheduled reviewer call cannot repair this and any correction dispatch requires explicit budget authorization.
+- 2026-07-20 — User explicitly authorized completing the same in-flight write-once fix cycle with one correction worker plus the required final reviewer; only the M12.1 child-call cap is amended from `9` to `11` (fix cycles remain `3/3`). Correction scope is accepted→stale duplicate ordering, preservation of attempted ambiguity, original authoritative durable-result selection, and its RED regression.
+- 2026-07-20 — Write-once correction worker moved authoritative requestId reuse ahead of stale-epoch demotion while preserving no-cache delivery-attempted ambiguity, and changed durable retry lookup away from newest-sequence duplicate selection. Independent exact repro now yields one Pi call, original seq1/current epoch, and `accepted-by-pi`/`started-turn` after accepted→stale seq2→standard retry. Independent gates: focused unit+integration `129/129`, typecheck clean; first full run had one unrelated async-dynamic-fanout response-order failure, which passed `10/10` in isolation and the immediate full rerun passed unit `1098`/`47` skipped/`0` failed and integration `400`/`1` skipped/`0` failed. Final focused review is the remaining gate.
+- 2026-07-20 — Final fresh deep review returned `PASS` after production-faithful accepted/rejected/stale/gap/conflict/attempted reproductions and focused `33/33` plus clean typecheck. It accepted the explicit epoch model: sanctioned durable submit retries reuse route+child history across owner restart, while out-of-band raw records forged for a replacement epoch are treated as new epoch-bound requests. Lowest-sequence terminal selection remains a documented proxy for future cross-epoch recovery work. Reviewer tool-write audit found only `/tmp/repro-m121*.mjs` scratch scripts; no repository files were written. M12.1 is gated for local commit.
+
+## Confidence gaps
+
+- M12.1 proved exact owner/epoch registration, ordering, durable acknowledgement, and sanctioned requestId idempotency on the existing file route; no socket fallback was triggered.
+- Exactly-once delivery is impossible across the post-send/pre-ack crash window; the product must expose ambiguity honestly.
+- Polling latency and bounded-burst file volume are now measured locally; no pre-approved product threshold exists, so the evidence remains non-gating until M12.2 surface design.
+- Known M12.2 liveness limitation: an old owner can allocate a fresh global sequence between replacement baseline snapshot and epoch publication, causing fail-safe but potentially persistent gap rejection until another rotation; no silent misdelivery occurs.
+- Cross-epoch raw-file injection is intentionally outside the sanctioned submit path: the in-memory owner cache is epoch-scoped, while standard durable submit retries remain route+child-idempotent across owner restart. Revisit only if M12.3 exposes raw cross-epoch recovery.
+
+## Rejected alternatives
+
+- Mandatory `pi-intercom`: rejected because it is optional and absent locally; M12 core control must stand alone.
+- Immediate socket/daemon sidecar: rejected until the existing durable file route fails measured acceptance.
+- In-process child sessions: rejected because separate-process crash isolation is an invariant.
+- Full public RunHandle API before the spike: rejected because it would freeze an ownership contract before transport evidence exists.
+
+## Deferred
+
+- Pending-work-aware parent/chain completion semantics.
+- Stable public lifecycle events and cross-extension RPC.
+- Awaiting-input indicators, terminal-title integration, and broader dashboard work.

@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { createEventBus, createMockPi, createTempDir, events, makeAgent, makeMinimalCtx, removeTempDir, tryImport } from "../support/helpers.ts";
 import type { MockPi } from "../support/helpers.ts";
 import { DEFAULT_CONTROL_CONFIG } from "../../src/runs/shared/subagent-control.ts";
+import { createNestedRoute } from "../../src/runs/shared/nested-events.ts";
 
 interface AsyncExecutionResult {
 	content: Array<{ text?: string }>;
@@ -288,6 +289,59 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(chainResult.content[0]?.text ?? "", /Async chain:/);
 		assert.match(chainResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
 		await waitForAsyncResultFile(chainId, 10_000);
+	});
+
+	it("routes a real NestedRoute through the async launch boundary to child env and extensions without intercom setup", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const route = createNestedRoute(`bg-reach-${Date.now().toString(36)}`);
+		try {
+			mockPi.onCall({
+				echoEnv: [
+					"PI_SUBAGENT_PARENT_ROOT_RUN_ID",
+					"PI_SUBAGENT_PARENT_EVENT_SINK",
+					"PI_SUBAGENT_PARENT_CONTROL_INBOX",
+					"PI_SUBAGENT_PARENT_CAPABILITY_TOKEN",
+					"PI_SUBAGENT_CHILD_AGENT",
+					"PI_SUBAGENT_CHILD_INDEX",
+				],
+			});
+			const id = `async-reachability-${Date.now().toString(36)}`;
+			const sessionRoot = path.join(tempDir, "sessions");
+
+			// Real launch/argument-building boundary: executeAsyncSingle -> subagent-runner -> buildPiArgs
+			// -> spawned mock pi. No childIntercomTarget/controlIntercomTarget is passed, proving no
+			// pi-intercom setup is required.
+			executeAsyncSingle!(id, {
+				agent: "worker",
+				task: "Do work",
+				agentConfig: makeAgent("worker"),
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false,
+				sessionRoot,
+				maxSubagentDepth: 2,
+				nestedRoute: route,
+			});
+
+			const resultPath = await waitForAsyncResultFile(id, 10_000);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			assert.equal(payload.success, true, `run should succeed: ${JSON.stringify(payload.results)}`);
+			assert.deepEqual(JSON.parse(payload.results[0]?.output ?? "{}"), {
+				PI_SUBAGENT_PARENT_ROOT_RUN_ID: route.rootRunId,
+				PI_SUBAGENT_PARENT_EVENT_SINK: route.eventSink,
+				PI_SUBAGENT_PARENT_CONTROL_INBOX: route.controlInbox,
+				PI_SUBAGENT_PARENT_CAPABILITY_TOKEN: route.capabilityToken,
+				PI_SUBAGENT_CHILD_AGENT: "worker",
+				PI_SUBAGENT_CHILD_INDEX: "0",
+			});
+
+			const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
+			assert.ok(callFile, "expected a recorded mock pi call");
+			const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+			const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
+			assert.ok(extensionArgs.some((arg) => arg.endsWith("src/runs/shared/subagent-prompt-runtime.ts")));
+		} finally {
+			fs.rmSync(path.dirname(route.eventSink), { recursive: true, force: true });
+		}
 	});
 
 	it("async chain stops launching later steps after the output token budget is exhausted", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
