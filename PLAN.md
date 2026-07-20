@@ -104,3 +104,15 @@
 ## Deferred
 
 - Remove the confirmed stale `~/.pi/agent/BRAIN.md:133` recon eager-off shim row in a separate Pi-config maintenance change; `agents/recon.md` has no matching `extensions:`/shim entry, but global BRAIN is outside this repository outcome.
+
+## Handoff — 2026-07-20
+
+- **Done:** M11.1 restored chain-specific async/clarify precedence with a nine-case executor regression and package version `0.42.2`; M11.2 replaced the stale package install path, rewrote README for progressive disclosure, and reconciled CHANGELOG, ROADMAP, and the v0.42.2 design plan. AGENTS was verified accurate and left unchanged.
+- **Verification:** Mandatory verifier `PASS`; focused routing `1/1`; typecheck exit `0`; `npm run test:all` exit `0` with unit `1112` tests / `1065` pass / `0` fail / `47` skipped and integration `399` tests / `398` pass / `0` fail / `1` skipped; README gate exit `0` with `50` headings, `48` anchors, `98` balanced fences, no broken or missing TOC links.
+- **Review:** M11.1 deep review passed after its accepted test-matrix improvement and async-test cleanup. M11.2 standard review returned `FIX-FIRST`; all three source-backed findings were repaired and verified before the final verifier pass.
+- **Commits:** intended `2` outcome commits, actual `3` run commits after this handoff record: `44f3bf6 fix(m11.1): restore chain clarify routing`; `e8db628 docs(m11.2): refresh v0.42.2 guidance`; `chore(crew): record M11 handoff`.
+- **Next:** choose local branch close-out. No push, PR, issue, tag, GitHub Release, npm publish, or other remote write has occurred.
+- **Open questions:** remote v0.42.2 tag/release/publication remains a separate authorization; the global `BRAIN.md:133` stale shim row remains deferred outside this repository run.
+- **Confidence gaps:** deterministic local gates are complete; only the opt-in `PI_LIVE_SMOKE=1` real-model smoke was not run.
+- **Metrics:** finished `2026-07-20T14:25:48+02:00`; elapsed `52m15s`; time-to-first-worker `1m08s`; dispatches `6`; worker retries `0`; child runtime `23m` rounded; review bundles `2`; review dispatches `2`; verifier dispatches `1`; fix cycles `2`; oracle calls `0`; compactions `0`.
+- **Friction:** review-driven test expansion exposed an unawaited detached-runner leak; the documentation draft over-corrected valid companion npm commands; early orchestration summaries captured only the integration tail of `test:all`. Each was corrected before the verifier gate.
