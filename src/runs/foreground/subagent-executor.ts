@@ -2644,7 +2644,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (lineageUnsupportedError) return buildRequestedModeError(effectiveParams, lineageUnsupportedError);
 		const requestedAsync = effectiveParams.async ?? deps.asyncByDefault;
 		const backgroundRequestedWhileClarifying = (hasChain || hasTasks) && requestedAsync && effectiveParams.clarify === true;
-		const effectiveAsync = requestedAsync && effectiveParams.clarify !== true;
+		const effectiveAsync = requestedAsync && (hasChain ? effectiveParams.clarify === false : effectiveParams.clarify !== true);
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
 		const artifactConfig: ArtifactConfig = {
 			...DEFAULT_ARTIFACT_CONFIG,

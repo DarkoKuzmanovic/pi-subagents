@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
 import { createEventBus, createMockPi, createTempDir, events, removeTempDir, tryImport } from "../support/helpers.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT } from "../../src/shared/types.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT, RESULTS_DIR } from "../../src/shared/types.ts";
 
 interface ExecutorModule {
 	createSubagentExecutor?: (...args: unknown[]) => {
@@ -21,6 +21,7 @@ interface ExecutorModule {
 			details?: {
 				context?: "fresh" | "fork" | "lineage";
 				results?: Array<{ detached?: boolean; exitCode?: number; skills?: string[] }>;
+				asyncId?: string;
 			};
 		}>;
 	};
@@ -43,6 +44,15 @@ const createSubagentExecutor = executorMod?.createSubagentExecutor;
 const asyncAvailable = asyncExecutionMod?.isAsyncAvailable?.() === true;
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
+
+async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Promise<void> {
+	const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+	const deadline = Date.now() + timeoutMs;
+	while (!fs.existsSync(resultPath)) {
+		if (Date.now() > deadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+}
 
 interface SessionStubOptions {
 	sessionFile?: string;
@@ -1066,6 +1076,84 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.equal(result.isError, true);
 		assert.match(result.content[0]?.text ?? "", /parallel chain step 1/i);
 		assert.match(result.content[0]?.text ?? "", /task 2 \(second\) sets cwd/i);
+	});
+
+	it("routes single, parallel, and chain requests through the async/foreground truth table", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {
+		const cases: Array<{
+			name: string;
+			config?: Record<string, unknown>;
+			params: Record<string, unknown>;
+			expectBackground: boolean;
+		}> = [
+			{
+				name: "chain omits clarify and stays foreground even when async is requested",
+				params: { chain: [{ agent: "echo", task: "step" }], async: true },
+				expectBackground: false,
+			},
+			{
+				name: "chain omits clarify and stays foreground when asyncByDefault config enables background",
+				config: { asyncByDefault: true },
+				params: { chain: [{ agent: "echo", task: "step" }] },
+				expectBackground: false,
+			},
+			{
+				name: "chain with clarify true stays foreground",
+				params: { chain: [{ agent: "echo", task: "step" }], async: true, clarify: true },
+				expectBackground: false,
+			},
+			{
+				name: "chain with clarify false backgrounds",
+				params: { chain: [{ agent: "echo", task: "step" }], async: true, clarify: false },
+				expectBackground: true,
+			},
+			{
+				name: "chain containing a parallel group omits clarify and stays foreground",
+				params: { chain: [{ parallel: [{ agent: "echo", task: "p1" }] }], async: true },
+				expectBackground: false,
+			},
+			{
+				name: "single call omits clarify and backgrounds when async is requested",
+				params: { agent: "echo", task: "solo", async: true },
+				expectBackground: true,
+			},
+			{
+				name: "single call with clarify true stays foreground",
+				params: { agent: "echo", task: "solo", async: true, clarify: true },
+				expectBackground: false,
+			},
+			{
+				name: "top-level parallel omits clarify and backgrounds when async is requested",
+				params: { tasks: [{ agent: "echo", task: "p1" }], async: true },
+				expectBackground: true,
+			},
+			{
+				name: "top-level parallel with clarify true stays foreground",
+				params: { tasks: [{ agent: "echo", task: "p1" }], async: true, clarify: true },
+				expectBackground: false,
+			},
+		];
+
+		for (const [index, testCase] of cases.entries()) {
+			mockPi.reset();
+			mockPi.onCall({ output: "ok" });
+			const executor = testCase.config ? makeExecutorWithConfig(testCase.config) : makeExecutor();
+			const result = await executor.execute(
+				`routing-truth-${index}`,
+				testCase.params,
+				new AbortController().signal,
+				undefined,
+				makeCtx(makeSessionManagerRecorder().manager),
+			);
+
+			assert.equal(result.isError, undefined, testCase.name);
+			if (testCase.expectBackground) {
+				const asyncId = result.details?.asyncId;
+				assert.ok(asyncId, `${testCase.name}: expected asyncId`);
+				await waitForAsyncResultFile(asyncId);
+			} else {
+				assert.equal(result.details?.asyncId, undefined, `${testCase.name}: expected no asyncId (foreground)`);
+			}
+		}
 	});
 
 	it("creates isolated forked sessions per chain step (including counted parallel steps)", async () => {
