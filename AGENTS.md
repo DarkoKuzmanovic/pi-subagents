@@ -9,6 +9,10 @@
 - Executors stop on ambiguity. The orchestrator or user owns architecture choices, tradeoffs, approvals, and remote actions.
 - User-settings writes preserve unrelated fields, reject malformed shapes, use atomic replacement, create the parent directory when needed, and end JSON with a trailing newline.
 
+### Async integration tests
+
+- A test that detaches or backgrounds an async run must await its terminal result file before resetting shared mocks, removing temporary state, or finishing. Receiving an async ID proves handoff, not completion; otherwise late child calls can leak into later tests.
+
 ## Project state
 
 - `ROADMAP.md` is the durable strategic milestone list using `M<n>` IDs.
