@@ -2,15 +2,23 @@
 
 ## [Unreleased]
 
-## [0.42.1] - 2026-07-14
+## [0.42.1] - 2026-07-19
+
+### Changed
+
+- Tightened the bundled recon protocol for reliable artifact-first handoffs, added planner blast-radius and safety attributes, taught reviewers to consult captured quality-gate records, and clarified that Crew owns orchestration policy while the `pi-subagents` skill supplies mechanics.
 
 ### Fixed
 
 - **The raw hard-cap backstop no longer false-kills fully-parsed JSON streams.** It measured *total* raw stdout bytes, so a production GLM run whose `--mode json` snapshot re-serialization amplified ~8 MB of real accounted content into 1,024 MB of cumulative raw bytes (121x amplification) was aborted even though every byte had been successfully parsed and credited. The backstop now measures *cumulative unaccounted (unparsed)* raw bytes (`rawBytes - creditedRawBytes`) instead, so fully-parsed amplified streams never count toward it while genuinely unaccounted raw floods—including unparsed bursts that repeatedly reset the rolling no-progress window—still trip it. The 1 GiB default threshold is unchanged; only what it measures changed.
 
+- **Background run wall-clock deadlines now stop every dispatch path.** A distinct terminal timeout latch synchronously gates later chain steps, queued parallel items, and intra-step fallback-model retries at the absolute deadline instead of relying on the 1-second monitor tick. Running and pending work is recorded as failed, dynamic collection and downstream dispatch stop, explicit user interrupts remain paused, and timeout-killed children can no longer be rewritten or emitted as complete through the interrupt path's raw exit code `0`.
+- **Background fallback metadata now matches foreground semantics.** `attemptedModels` strips known effective-thinking suffixes while the final `model` retains the suffix actually dispatched, keeping fallback history stable without losing the effective model identity.
+
 ### Tests
 
 - Added a regression reproducing the captured GLM 121x/1 GiB false kill (survives now). Added focused coverage for the cumulative-unaccounted boundary (exactly-at survives, one byte over trips) and for repeated sub-threshold unparsed bursts separated by credited progress eventually tripping the cumulative cap.
+- Added real detached-runner regressions that finish a child after a 300 ms run deadline but before the 1-second watchdog tick, proving synchronous cutoff for sequential, queued-parallel, and fallback-model dispatch. The tests also pin failed status/result/event semantics and the unsuffixed `attemptedModels` contract.
 
 ### Documentation
 
