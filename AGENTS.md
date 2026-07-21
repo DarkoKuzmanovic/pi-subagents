@@ -30,6 +30,10 @@ A smaller, artifact-first prompt can improve completion and recovery, but it can
 
 Foreground subagent runs live entirely in-memory (`SubagentState.foregroundControls`). They have no durable on-disk presence and no standalone process — `process.pid` is the host Pi process, not the run. PID-based liveness checks are useless for the reload recovery scenario: after an extension reload, the in-memory map is empty but `isProcessAlive(process.pid)` returns true (host still alive), so a durable store would falsely resolve a dead foreground run as live. Never use PID liveness to recover foreground handles from a durable store. Foreground runs are only resolvable while in-memory; the durable handle store should refuse to resolve `kind: "foreground"` as live. (Learned 2026-07-22 during M12.3 review — grok-4.5 caught the flaw.)
 
+### Run-handle and attachment persistence
+
+Every foreground and async launch records a durable `RunHandleRecord` (`src/runs/shared/run-handle-store.ts`, under `TEMP_ROOT_DIR/run-handles/`, fsynced, `0700`/`0600`) so a run that started before an extension reload can be found again via `recover`. Handles are deleted on completion/cleanup. The `recover`/`inspect`/`attach`/`detach` tool actions surface this: `recover` reports resolvability (never implying steerable), `inspect` returns a compact state summary for live or completed runs, and `attach` verifies live-control capability (owner epoch + capability token) before steering — distinguishing steering-capable from inspection-only. Nested descendants are not recorded as separate handles; they are rediscovered through their parent's route and the durable nested registry. The foreground non-recoverability invariant above is enforced at the resolver layer (`recoveredHandleToResolved` returns `undefined` for `kind: "foreground"`), not by skipping the record.
+
 <!-- BEGIN CARTOGRAPHER MANAGED MAP POINTER -->
 ## Cartographer maps
 

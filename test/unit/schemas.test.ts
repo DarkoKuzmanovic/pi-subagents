@@ -207,7 +207,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		const actionSchema = SubagentParams?.properties?.action;
 		assert.ok(actionSchema, "action schema should exist");
 		assert.equal(actionSchema.type, "string");
-		assert.deepEqual(actionSchema.enum, ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "steer", "follow-up", "wrap-up", "doctor"]);
+		assert.deepEqual(actionSchema.enum, ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "steer", "follow-up", "wrap-up", "recover", "inspect", "attach", "detach", "doctor"]);
 		const description = String(actionSchema.description ?? "");
 		assert.match(description, /Management\/control action/);
 		assert.match(description, /Omit for execution mode/);
@@ -215,6 +215,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(description, /accepted-by-pi/);
 		assert.match(description, /outcome-unknown/);
 		assert.match(description, /never silently downgraded/);
+		assert.match(description, /recover/);
+		assert.match(description, /inspect/);
+		assert.match(description, /attach/);
+		assert.match(description, /detach/);
 	});
 
 	it("documents live-control message and requestId shapes", () => {

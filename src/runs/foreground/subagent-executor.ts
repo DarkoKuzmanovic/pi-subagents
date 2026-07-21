@@ -57,6 +57,8 @@ import { buildRevivedAsyncTask, resolveAsyncResumeTarget } from "../background/a
 import { createNestedRoute, readNestedControlResults, resolveInheritedNestedRouteFromEnv, resolveNestedAsyncDir, resolveNestedParentAddressFromEnv, updateForegroundNestedProjection, writeNestedControlRequest, writeNestedEvent, type NestedRunResolutionScope } from "../shared/nested-events.ts";
 import { resolveSubagentRunId, type ResolvedSubagentRunId } from "../background/run-id-resolver.ts";
 import { performLiveControlAction, type LiveControlToolAction } from "../shared/live-control-client.ts";
+import { recordRunHandle, recoverRunHandle, deleteRunHandle } from "../shared/run-handle-store.ts";
+import { attachToRun, detachFromRun, inspectRun, type RunInspection } from "../shared/run-inspection.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
 import { inspectSubagentStatus } from "../background/run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "../background/top-level-async.ts";
@@ -125,6 +127,7 @@ export interface SubagentParamsLike {
 	task?: string;
 	message?: string;
 	requestId?: string;
+	attachmentId?: string;
 	chain?: ChainStep[];
 	tasks?: TaskParam[];
 	concurrency?: number;
@@ -230,6 +233,37 @@ function nestedResolutionScopeForExecutor(deps: ExecutorDeps): NestedRunResoluti
 		routes: route ? [route] : [],
 		...(address ? { descendantOf: { parentRunId: address.parentRunId, ...(address.parentStepIndex !== undefined ? { parentStepIndex: address.parentStepIndex } : {}) } } : {}),
 	};
+}
+
+/** Route for a resolved run target, when known from in-memory state (used for the recover action's honest capability-token surfacing). */
+function routeForResolved(resolved: ResolvedSubagentRunId, state: SubagentState): NestedRouteInfo | undefined {
+	if (resolved.kind === "foreground") return state.foregroundControls.get(resolved.id)?.nestedRoute;
+	if (resolved.kind === "async") return state.asyncJobs.get(resolved.id)?.nestedRoute;
+	return resolved.match.route;
+}
+
+/** Compact single-line text summary of a RunInspection. No transcript/output fields. */
+function formatRunInspectionText(inspection: RunInspection): string {
+	const parts: string[] = [`id: ${inspection.id}`, `kind: ${inspection.kind}`, `state: ${inspection.state}`];
+	if (inspection.mode) parts.push(`mode: ${inspection.mode}`);
+	if (inspection.agent) parts.push(`agent: ${inspection.agent}`);
+	if (inspection.agents?.length) parts.push(`agents: ${inspection.agents.join(", ")}`);
+	if (typeof inspection.pid === "number") parts.push(`pid: ${inspection.pid}`);
+	if (inspection.activityState) parts.push(`activity: ${inspection.activityState}`);
+	if (typeof inspection.turnCount === "number") parts.push(`turns: ${inspection.turnCount}`);
+	if (typeof inspection.toolCount === "number") parts.push(`tools: ${inspection.toolCount}`);
+	if (inspection.totalTokens) parts.push(`tokens: ${inspection.totalTokens.total}`);
+	if (inspection.currentTool) parts.push(`currentTool: ${inspection.currentTool}`);
+	if (inspection.steps) {
+		const stepsText = inspection.steps.statuses?.length
+			? inspection.steps.statuses.map((step) => `${step.agent}:${step.status}`).join(", ")
+			: `${inspection.steps.count} step(s)`;
+		parts.push(`steps: ${stepsText}`);
+	}
+	if (typeof inspection.startedAt === "number") parts.push(`startedAt: ${new Date(inspection.startedAt).toISOString()}`);
+	if (typeof inspection.endedAt === "number") parts.push(`endedAt: ${new Date(inspection.endedAt).toISOString()}`);
+	if (inspection.error) parts.push(`error: ${inspection.error}`);
+	return parts.join(" | ");
 }
 
 const LIVE_CONTROL_ACTIONS = new Set<LiveControlToolAction>(["steer", "follow-up", "wrap-up"]);
@@ -2558,6 +2592,109 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
 				}
 			}
+			if (params.action === "recover") {
+				const targetRunId = (paramsWithResolvedCwd.id ?? paramsWithResolvedCwd.runId)?.trim();
+				if (!targetRunId) {
+					return { content: [{ type: "text", text: "Action 'recover' requires id (or legacy runId)." }], isError: true, details: { mode: "management", results: [] } };
+				}
+				try {
+					const resolved = resolveSubagentRunId(targetRunId, { state: deps.state, nested: nestedResolutionScopeForExecutor(deps) });
+					if (resolved) {
+						const routeInfo = routeForResolved(resolved, deps.state);
+						const capabilityNote = routeInfo ? ` Capability token: ${routeInfo.capabilityToken}.` : "";
+						return {
+							content: [{
+								type: "text",
+								text: `Run '${targetRunId}' resolved (kind: ${resolved.kind}, state: live).${capabilityNote} Recovering a handle does not itself grant steering \u2014 use action='attach' to verify live control capability before steer/follow-up/wrap-up.`,
+							}],
+							details: { mode: "management", results: [] },
+						};
+					}
+					const raw = recoverRunHandle(targetRunId);
+					if (raw) {
+						if (raw.kind === "foreground") {
+							return {
+								content: [{
+									type: "text",
+									text: `A foreground handle was recorded for '${targetRunId}' but foreground runs are only resolvable while in-memory. This run is not recoverable after an extension reload and is not controllable in this session.`,
+								}],
+								details: { mode: "management", results: [] },
+							};
+						}
+						return {
+							content: [{
+								type: "text",
+								text: `A durable handle exists for '${targetRunId}' (kind: ${raw.kind}, recorded ${new Date(raw.startedAt).toISOString()}) but it could not be resolved to a live or completed run. It may have been cleaned up.`,
+							}],
+							details: { mode: "management", results: [] },
+						};
+					}
+					return { content: [{ type: "text", text: `No run handle found for '${targetRunId}'.` }], isError: true, details: { mode: "management", results: [] } };
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
+				}
+			}
+			if (params.action === "inspect") {
+				const targetRunId = (paramsWithResolvedCwd.id ?? paramsWithResolvedCwd.runId)?.trim();
+				if (!targetRunId) {
+					return { content: [{ type: "text", text: "Action 'inspect' requires id (or legacy runId)." }], isError: true, details: { mode: "management", results: [] } };
+				}
+				try {
+					const inspection = inspectRun(targetRunId, { state: deps.state, nested: nestedResolutionScopeForExecutor(deps) }, { index: paramsWithResolvedCwd.index });
+					if (!inspection) {
+						return { content: [{ type: "text", text: `No run matched '${targetRunId}' for inspection.` }], isError: true, details: { mode: "management", results: [] } };
+					}
+					return { content: [{ type: "text", text: formatRunInspectionText(inspection) }], details: { mode: "management", results: [] } };
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
+				}
+			}
+			if (params.action === "attach") {
+				const targetRunId = (paramsWithResolvedCwd.id ?? paramsWithResolvedCwd.runId)?.trim();
+				if (!targetRunId) {
+					return { content: [{ type: "text", text: "Action 'attach' requires id (or legacy runId)." }], isError: true, details: { mode: "management", results: [] } };
+				}
+				try {
+					const result = attachToRun(targetRunId, { state: deps.state, nested: nestedResolutionScopeForExecutor(deps) }, { index: paramsWithResolvedCwd.index });
+					// switch (not if/else) on the boolean discriminant: this cross-module
+					// union does not narrow correctly via if-statements under the active
+					// tsc, but switch narrowing is reliable and verified clean.
+					switch (result.ok) {
+						case true: {
+							const capability = result.attachment.epoch
+								? "steering-capable (live control owner verified; steer/follow-up/wrap-up may be used)"
+								: "inspection-only (no live control owner verified; steer/follow-up/wrap-up are not available for this attachment)";
+							return {
+								content: [{
+									type: "text",
+									text: `Attached to '${targetRunId}' (attachmentId: ${result.attachment.attachmentId}, kind: ${result.attachment.kind}). ${capability}.`,
+								}],
+								details: { mode: "management", results: [] },
+							};
+						}
+						case false:
+							return { content: [{ type: "text", text: result.error }], isError: true, details: { mode: "management", results: [] } };
+					}
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
+				}
+			}
+			if (params.action === "detach") {
+				const attachmentId = (paramsWithResolvedCwd.attachmentId ?? paramsWithResolvedCwd.id)?.trim();
+				if (!attachmentId) {
+					return { content: [{ type: "text", text: "Action 'detach' requires attachmentId (or id)." }], isError: true, details: { mode: "management", results: [] } };
+				}
+				try {
+					detachFromRun(attachmentId);
+					return { content: [{ type: "text", text: `Detached '${attachmentId}'.` }], details: { mode: "management", results: [] } };
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
+				}
+			}
 			if (params.action === "status") {
 				const targetRunId = paramsWithResolvedCwd.id ?? paramsWithResolvedCwd.runId;
 				if (targetRunId) {
@@ -2798,6 +2935,22 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (foregroundControl) {
 			deps.state.foregroundControls.set(runId, foregroundControl);
 			deps.state.lastForegroundControlId = runId;
+			// Nested descendants are not recorded as separate handles: this run's own
+			// route (foregroundControl.nestedRoute, whether inherited or newly created)
+			// already lets a distant ancestor rediscover this run and, from it, its
+			// own children via the durable file-based nested registry — no standalone
+			// recordRunHandle({kind:"nested"}) call is needed at nested launch.
+			try {
+				recordRunHandle({
+					id: runId,
+					kind: "foreground",
+					pid: process.pid,
+					...(foregroundControl.nestedRoute ? { route: foregroundControl.nestedRoute } : {}),
+					startedAt: foregroundControl.startedAt,
+				});
+			} catch (error) {
+				console.error(`Failed to record run handle for foreground run '${runId}':`, error);
+			}
 		}
 
 		const writeNestedForegroundEvent = (type: "subagent.nested.started" | "subagent.nested.completed", result?: AgentToolResult<Details>): void => {
@@ -2889,6 +3042,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} finally {
 			if (foregroundControl) {
 				clearPendingForegroundControlNotices(deps.state, runId);
+				try {
+					deleteRunHandle(runId);
+				} catch (error) {
+					console.error(`Failed to delete run handle for foreground run '${runId}':`, error);
+				}
 				deps.state.foregroundControls.delete(runId);
 				if (deps.state.lastForegroundControlId === runId) {
 					deps.state.lastForegroundControlId = null;

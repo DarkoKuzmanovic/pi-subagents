@@ -46,6 +46,7 @@
   - [Management actions](#management-actions)
   - [Parameter reference](#parameter-reference)
   - [Live run control: steer, follow-up, wrap-up](#live-run-control-steer-follow-up-wrap-up)
+  - [Recovery and inspection](#recovery-and-inspection)
 - [Worktree isolation](#worktree-isolation)
 - [Configuration reference](#configuration-reference)
 - [Files, logs, and observability](#files-logs-and-observability)
@@ -843,7 +844,7 @@ Agent definitions are not loaded into context by default. Management actions let
 | ----------------- | ----------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent`           | string                        | -                        | Agent name for single mode, or target for management actions.                                                                          |
 | `task`            | string                        | -                        | Task string for single mode.                                                                                                           |
-| `action`          | string                        | -                        | `list`, `get`, `create`, `update`, `delete`, `status`, `interrupt`, `resume`, `steer`, `follow-up`, `wrap-up`, or `doctor`.              |
+| `action`          | string                        | -                        | `list`, `get`, `create`, `update`, `delete`, `status`, `interrupt`, `resume`, `steer`, `follow-up`, `wrap-up`, `recover`, `inspect`, `attach`, `detach`, or `doctor`. |
 | `chainName`       | string                        | -                        | Chain name for management actions.                                                                                                     |
 | `config`          | object/string                 | -                        | Agent or chain config for create/update.                                                                                               |
 | `output`          | `string \| false`             | agent default            | Override single-agent output file.                                                                                                     |
@@ -907,6 +908,24 @@ subagent({ action: "steer", id: "<run-id>", message: "...", requestId: "req-1" }
 ```
 
 Every response reports the **actual durable disposition**, never a guess: `accepted-by-pi` with `started-turn` (the run was idle), `queued-steer`, or `queued-follow-up`; `rejected` with the durable reason; `submitted` when the owner has not acknowledged within the wait window; or `outcome-unknown` when delivery was attempted but never acknowledged (the crash window — never silently retried). Acceptance means the owning Pi session accepted or queued the message, not that the model acted on it. `steer` is never silently downgraded to `follow-up`. Delivery rides the child's 250ms control poll, so expect sub-second latency in the common case; a steer queues after the current turn's tool calls — it does not interrupt mid-token.
+
+### Recovery and inspection
+
+`recover`, `inspect`, `attach`, and `detach` let you find, observe, and gain control of a run — including after an extension reload or parent crash, when in-memory state is empty. Target a run by `id` (an unambiguous prefix works).
+
+```ts
+subagent({ action: "recover", id: "<run-id>" });
+subagent({ action: "inspect", id: "<run-id>" });
+subagent({ action: "attach", id: "<run-id>", index: 1 });
+subagent({ action: "detach", attachmentId: "<attachment-id>" });
+```
+
+- **`recover`** reports whether a run is currently resolvable (live in-memory, or durably recorded on disk). A durable handle is recorded at every foreground and async launch and deleted on completion/cleanup, so a run that started before a reload can be found again. **Recovering a handle never itself grants steering** — use `attach` to verify live-control capability before `steer`/`follow-up`/`wrap-up`. Foreground runs are only resolvable while in-memory: after a reload they are not recoverable (their host process is the parent, so PID liveness is useless), and `recover` reports this honestly.
+- **`inspect`** returns a compact state summary for any run — live or completed. For completed async runs it reads the result file; for completed nested runs it reads the registry. No transcript or output fields are included.
+- **`attach`** verifies live-control capability (owner epoch + capability token) and records a durable `attachmentId`. The response distinguishes **steering-capable** (live owner verified; `steer`/`follow-up`/`wrap-up` may be used) from **inspection-only** (no live owner, e.g. a completed or result-only async run — control actions are not available). A recovered async or nested handle must be attached before steering.
+- **`detach`** revokes an attachment by `attachmentId` (falls back to `id`). Idempotent.
+
+Nested descendants are not recorded as separate handles: a nested run is rediscovered via its parent's route and the durable file-based nested registry, so `recover`/`inspect` reach it through the parent.
 
 ## Worktree isolation
 

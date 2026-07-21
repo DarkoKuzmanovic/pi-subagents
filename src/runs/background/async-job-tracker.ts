@@ -17,6 +17,7 @@ import { readStatus } from "../../shared/utils.ts";
 import { normalizeParallelGroups } from "./parallel-groups.ts";
 import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-reconciler.ts";
 import { hasLiveNestedDescendants, updateAsyncJobNestedProjection } from "../shared/nested-events.ts";
+import { recordRunHandle, deleteRunHandle } from "../shared/run-handle-store.ts";
 
 interface AsyncJobTrackerOptions {
 	completionRetentionMs?: number;
@@ -44,6 +45,11 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		if (existingTimer) clearTimeout(existingTimer);
 		const timer = setTimeout(() => {
 			state.cleanupTimers.delete(asyncId);
+			try {
+				deleteRunHandle(asyncId);
+			} catch (error) {
+				console.error(`Failed to delete run handle for async run '${asyncId}':`, error);
+			}
 			state.asyncJobs.delete(asyncId);
 			if (state.lastUiContext) {
 				rerenderWidget(state.lastUiContext);
@@ -247,6 +253,18 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		updatedAt: now,
 		nestedRoute: info.nestedRoute,
 		});
+		try {
+			recordRunHandle({
+				id: info.id,
+				kind: "async",
+				asyncDir,
+				...(typeof info.pid === "number" ? { pid: info.pid } : {}),
+				...(info.nestedRoute ? { route: info.nestedRoute } : {}),
+				startedAt: now,
+			});
+		} catch (error) {
+			console.error(`Failed to record run handle for async run '${info.id}':`, error);
+		}
 		ensurePoller();
 		if (state.lastUiContext) {
 			rerenderWidget(state.lastUiContext);
