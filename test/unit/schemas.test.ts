@@ -32,6 +32,8 @@ interface SubagentParamsSchema {
 			enum?: string[];
 			description?: string;
 		};
+		message?: { type?: string; description?: string };
+		requestId?: { type?: string; description?: string };
 		control?: {
 			properties?: {
 				needsAttentionAfterMs?: { minimum?: number };
@@ -205,11 +207,32 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		const actionSchema = SubagentParams?.properties?.action;
 		assert.ok(actionSchema, "action schema should exist");
 		assert.equal(actionSchema.type, "string");
-		assert.deepEqual(actionSchema.enum, ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "doctor"]);
+		assert.deepEqual(actionSchema.enum, ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "steer", "follow-up", "wrap-up", "recover", "inspect", "attach", "detach", "doctor"]);
 		const description = String(actionSchema.description ?? "");
 		assert.match(description, /Management\/control action/);
 		assert.match(description, /Omit for execution mode/);
 		assert.doesNotMatch(description, /orchestration\./);
+		assert.match(description, /accepted-by-pi/);
+		assert.match(description, /outcome-unknown/);
+		assert.match(description, /never silently downgraded/);
+		assert.match(description, /recover/);
+		assert.match(description, /inspect/);
+		assert.match(description, /attach/);
+		assert.match(description, /detach/);
+	});
+
+	it("documents live-control message and requestId shapes", () => {
+		const messageSchema = SubagentParams?.properties?.message;
+		assert.equal(messageSchema?.type, "string");
+		assert.match(String(messageSchema?.description ?? ""), /steer/);
+		assert.match(String(messageSchema?.description ?? ""), /follow-up/);
+		assert.match(String(messageSchema?.description ?? ""), /wrap-up needs no message/);
+		assert.match(String(messageSchema?.description ?? ""), /never silently downgraded/);
+
+		const requestIdSchema = SubagentParams?.properties?.requestId;
+		assert.equal(requestIdSchema?.type, "string");
+		assert.match(String(requestIdSchema?.description ?? ""), /idempotency/);
+		assert.match(String(requestIdSchema?.description ?? ""), /rather than delivering twice/);
 	});
 
 	it("includes subagent control fields", () => {

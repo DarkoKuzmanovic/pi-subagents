@@ -1,8 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { JsonSchemaObject } from "../../shared/types.ts";
+import { POLL_INTERVAL_MS, type JsonSchemaObject } from "../../shared/types.ts";
 import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV, validateStructuredOutputValue } from "./structured-output.ts";
+import { createLiveControlOwnerListener, type LiveControlOwnerListener } from "./live-control-owner.ts";
+import { isSafeNestedId, resolveInheritedNestedRouteFromEnv } from "./nested-events.ts";
+import { SUBAGENT_CHILD_INDEX_ENV } from "./pi-args.ts";
 
 const SUBAGENT_INHERIT_PROJECT_CONTEXT_ENV = "PI_SUBAGENT_INHERIT_PROJECT_CONTEXT";
 const SUBAGENT_INHERIT_SKILLS_ENV = "PI_SUBAGENT_INHERIT_SKILLS";
@@ -135,6 +138,17 @@ export function stripParentOnlySubagentMessages(messages: unknown[]): unknown[] 
 }
 
 export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
+	let liveControlListener: LiveControlOwnerListener | undefined;
+	let liveControlTimer: NodeJS.Timeout | undefined;
+
+	function stopLiveControlOwner(): void {
+		if (liveControlTimer) {
+			clearInterval(liveControlTimer);
+			liveControlTimer = undefined;
+		}
+		liveControlListener?.close();
+		liveControlListener = undefined;
+	}
 	const structuredOutputPath = process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
 	const structuredSchemaPath = process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
 	if (structuredOutputPath && structuredSchemaPath) {
@@ -213,5 +227,31 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 		}
 		if (rewritten === event.systemPrompt) return;
 		return { systemPrompt: rewritten };
+	});
+
+	// Live control v2 (M12.1): a single-flight direct steer/follow-up listener bound to this
+	// child's own owner epoch. Always loaded (not fanout-only) so any foreground or async child
+	// — not just ones authorized to run the `subagent` tool themselves — can accept parent steering.
+	pi.on("session_start", (_event, ctx) => {
+		stopLiveControlOwner();
+		const route = resolveInheritedNestedRouteFromEnv();
+		const childKey = process.env[SUBAGENT_CHILD_INDEX_ENV];
+		if (!route || !childKey || !isSafeNestedId(childKey)) return;
+		liveControlListener = createLiveControlOwnerListener({
+			route,
+			childKey,
+			sendUserMessage: (text, options) => pi.sendUserMessage(text, options),
+			isBusy: () => !ctx.isIdle(),
+		});
+		liveControlTimer = setInterval(() => {
+			void liveControlListener?.pollOnce().catch((error) => {
+				console.error("Live control owner poll failed:", error);
+			});
+		}, POLL_INTERVAL_MS);
+		liveControlTimer.unref?.();
+	});
+
+	pi.on("session_shutdown", () => {
+		stopLiveControlOwner();
 	});
 }

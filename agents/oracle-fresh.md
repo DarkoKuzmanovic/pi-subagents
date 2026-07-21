@@ -1,5 +1,6 @@
 ---
 name: oracle-fresh
+modelPromptRole: oracle
 disabled: true
 description: Drift-check oracle that reads chain artifacts instead of forking the parent — cheaper alternative to oracle for chain-based workflows
 tools: read, grep, find, ls, bash, contact_supervisor, intercom
