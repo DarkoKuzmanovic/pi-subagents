@@ -16,18 +16,18 @@
 - **started-at:** 2026-07-20T15:09:26+02:00
 - **first-worker-at:** 2026-07-20T15:23:52+02:00
 - **time-to-first-worker:** 14m26s
-- **dispatches:** 11
-- **review-bundles:** 3
-- **review-dispatches:** 3
-- **worker-retries:** 0
+- **dispatches:** 15 (11 prior session + 4 this session)
+- **review-bundles:** 4
+- **review-dispatches:** 4
+- **worker-retries:** 1
 - **oracle:** 0
-- **completed-outcomes:** 1
+- **completed-outcomes:** 2
 - **child-runtime-minutes:** 89
 - **compactions:** 2
 
 ## M12 — Live run handles
 
-**Counters:** dispatches: 11/12 · review-bundles: 3 · review-dispatches: 3 · fix-cycles: 3/3 · oracle: 0 · worker-retries: 0 · direct-edits: 3
+**Counters:** dispatches: 15 · review-bundles: 4 · review-dispatches: 4 · fix-cycles: 3/3 (M12.1) · oracle: 0 · worker-retries: 1 · direct-edits: 3 (M12.2 docs)
 
 - [x] **M12.1 — Prove a direct, acknowledged child-control transport**
   - **Risk:** contained protected — wrong-target, duplicate, stale-epoch, reordered, or falsely acknowledged steering would violate control integrity.
@@ -44,8 +44,21 @@
   - **Rollback:** stop emitting v2 records and disable the direct child listener; legacy interrupt/resume, status, completion, cleanup, and optional intercom remain intact. Escalate to a child-owned authenticated socket only if measured evidence fails and the re-grill trigger is invoked.
   - **Acceptance:** foreground and async separate Pi children accept steer/follow-up through the versioned file route; acknowledgements say only `accepted-by-pi` with actual disposition, never model delivery; same-live-epoch submitted requests survive parent restart, stale-epoch requests never reach a replacement child, attempted requests never replay, legacy controls remain green, latency/volume evidence is recorded, and no public handle/recovery/UI contract is frozen.
   - **Documentation:** README — no user-facing delta during internal spike; AGENTS — update only if the spike establishes a durable transport invariant.
-- [ ] **M12.2 — Expose stable run-handle control actions**
-  - Unblocked by the M12.1 transport `PASS`; freeze names/behavior only after M12.2 design evidence. Expected boundary: steer, queued follow-up, orderly wrap-up, and existing abort without silent mode downgrade.
+- [x] **M12.2 — Expose stable run-handle control actions**
+  - **Risk:** contained protected — a public control contract over the live concurrency boundary; wrong-target or dishonestly reported steering violates control integrity.
+  - **Counters:** dispatches: 4/5 · review-bundles: 1 · review-dispatches: 1 · fix-cycles: 0/1 · oracle: 0 · worker-retries: 1 · direct-edits: 3
+  - **Design evidence (gathered inline this session):** the M12.1 parent-side transport client already exists — `submitLiveControlRequest`, `readLiveControlRequestState`, `deriveLiveControlOutcome`, `readLiveControlOwnerEpoch` in `src/runs/shared/nested-events.ts`; the tool surface is `SUBAGENT_ACTIONS` in `src/extension/schemas.ts` with the action switch in `src/runs/foreground/subagent-executor.ts` (~L2490: status/resume/interrupt); nested target resolution via `findNestedRunMatchesById` and route+childKey projections (`updateForegroundNestedProjection`, `updateAsyncJobNestedProjection`).
+  - [x] Add protocol-first RED tests for the new public actions `steer`, `follow-up`, and `wrap-up` on the subagent tool: target a live run by run id (and a nested child by id/index) across foreground and async; assert honest disposition reporting (`accepted-by-pi` + `started-turn`/`queued-steer`/`queued-follow-up`, durable `rejected` with reason, `outcome-unknown` surfaced, bounded wait on `submitted`); wrong-target/stale-run errors; duplicate requestId reuse; legacy status/interrupt/resume unchanged.
+  - [x] Implement the parent-side control path: resolve target run → nested route + childKey → `submitLiveControlRequest` → read durable state via `readLiveControlRequestState`/`deriveLiveControlOutcome`; extend `SUBAGENT_ACTIONS`, schema descriptions, and the action switch; always report the actual disposition — never silently downgrade steer to follow-up.
+  - [x] Implement `wrap-up` as a canonical steer payload (orchestrator-locked): an exported `WRAP_UP_DIRECTIVE` constant sent via the steer path — steer, not follow-up, because wrap-up must cut into the current trajectory. No wire-protocol change; disposition reported as-is; existing abort/interrupt path unchanged.
+  - [x] Foreground + async integration coverage: idle/busy dispositions, no-intercom operation, duplicate requestId reuse, child exit mid-request, post-send/pre-ack ambiguity surfaced honestly.
+  - [x] Run focused unit/integration gates, typecheck, full `test:all`, and one fresh `reviewer` `lane:deep`; stop at the M12.2 boundary — no handle recovery, attach/detach, or inspection UI (M12.3).
+  - **Likely files:** `src/extension/schemas.ts`, `src/runs/foreground/subagent-executor.ts` (action switch), a new parent-side control module under `src/runs/shared/` or `src/runs/background/`, and their existing unit/integration tests. `src/runs/shared/nested-events.ts` stays unchanged (wrap-up needs no protocol kind).
+  - **Governing risks:** public contract freeze (names/behavior are expensive to un-freeze); honest disposition reporting incl. `outcome-unknown`; no silent mode downgrade; wrong-target protection via run-id resolution plus M12.1 capability/epoch enforcement.
+  - **Rollback:** remove the new actions from the enum/switch; the M12.1 transport remains internal and green.
+  - **Acceptance:** a user can steer, queue a follow-up, and request orderly wrap-up of a live foreground or async run (including a nested child) through the subagent tool; every response reports the actual durable disposition; duplicate submissions reuse the durable result; legacy management actions stay green; no M12.3 recovery/inspection contract is frozen.
+  - **Documentation:** README — updated (parameter-table action row, new "Live run control: steer, follow-up, wrap-up" section with dispositions/idempotency/limitations, TOC entry); AGENTS — added the durable live-control disposition invariant.
+  - **Routing (user-directed 2026-07-21):** after the first lane:hard worker returned mid-task, the user directed M12.2 worker dispatches to `openai-codex/gpt-5.6-sol` with `thinking: "medium"` (explicit override of lane defaults).
 - [ ] **M12.3 — Recover handles and attach/detach compact inspection across live and completed runs**
   - Blocked on M12.1 owner epochs and M12.2 handle identity; combine durable recovery, compact live attach/detach, activity/attention state, and bounded completed-run inspection without changing completion or cleanup.
 
@@ -97,6 +110,12 @@
 - 2026-07-20 — User explicitly authorized completing the same in-flight write-once fix cycle with one correction worker plus the required final reviewer; only the M12.1 child-call cap is amended from `9` to `11` (fix cycles remain `3/3`). Correction scope is accepted→stale duplicate ordering, preservation of attempted ambiguity, original authoritative durable-result selection, and its RED regression.
 - 2026-07-20 — Write-once correction worker moved authoritative requestId reuse ahead of stale-epoch demotion while preserving no-cache delivery-attempted ambiguity, and changed durable retry lookup away from newest-sequence duplicate selection. Independent exact repro now yields one Pi call, original seq1/current epoch, and `accepted-by-pi`/`started-turn` after accepted→stale seq2→standard retry. Independent gates: focused unit+integration `129/129`, typecheck clean; first full run had one unrelated async-dynamic-fanout response-order failure, which passed `10/10` in isolation and the immediate full rerun passed unit `1098`/`47` skipped/`0` failed and integration `400`/`1` skipped/`0` failed. Final focused review is the remaining gate.
 - 2026-07-20 — Final fresh deep review returned `PASS` after production-faithful accepted/rejected/stale/gap/conflict/attempted reproductions and focused `33/33` plus clean typecheck. It accepted the explicit epoch model: sanctioned durable submit retries reuse route+child history across owner restart, while out-of-band raw records forged for a replacement epoch are treated as new epoch-bound requests. Lowest-sequence terminal selection remains a documented proxy for future cross-epoch recovery work. Reviewer tool-write audit found only `/tmp/repro-m121*.mjs` scratch scripts; no repository files were written. M12.1 is gated for local commit.
+- 2026-07-21 — Session resumed under a new orchestrator (session ceilings reset; run metrics continue). Scope envelope re-checked: no promotion or re-grill trigger fired; M12.2/M12.3 remain independent. M12.2 slice detailed inline from orchestrator-gathered design evidence (no recon dispatch needed).
+- 2026-07-21 — Orchestrator-locked the M12.2 wrap-up mechanism after review pushback: canonical `WRAP_UP_DIRECTIVE` steer payload, not a dedicated wire-protocol kind. The frozen contract is the action name/behavior, not the wire kind; a future native Pi wrap-up API can upgrade behavior behind the same action.
+- 2026-07-21 — M12.2 first worker (lane:hard) returned mid-task after the client module (`src/runs/shared/live-control-client.ts`, canonical `WRAP_UP_DIRECTIVE`, honest disposition mapping) plus 11/11 green unit tests, before tool-surface wiring or integration coverage. Classified incomplete implementation (code exists; not startup/transport/no-write); one bounded completion worker authorized, worker-retries 1. User then directed M12.2 worker routing to `openai-codex/gpt-5.6-sol` at `thinking:"medium"`. Orchestrator note: run gates via package scripts (`npm run test:unit` / `test:integration` / `test:all` / `typecheck`); ad-hoc `node --import tsx` invocations fail to resolve the support loader.
+- 2026-07-21 — M12.2 completion worker (`gpt-5.6-sol` @ thinking:medium) wired `SUBAGENT_ACTIONS` + executor action branch, target resolution (foreground/async/nested, index-guarded), and integration coverage. Independent orchestrator verification reproduced its claims exactly: typecheck exit 0, focused 25 unit + 5 integration green, full unit 1110 pass / 47 skip / 0 fail, full integration 405 pass / 1 opt-in skip / 0 fail, `git diff --check` clean, no `nested-events.ts` modification, no M12.3 scope creep. Orchestrator reconciled docs inline (README live-control section + parameter table + TOC; AGENTS invariant) as 2 direct edits. Dispatching fresh `reviewer` `lane:deep` at the protected boundary.
+- 2026-07-21 — Fresh deep review returned `PASS` at the M12.2 protected boundary: all gates independently reproduced (typecheck 0; focused 25 unit + 5 integration; full unit 1110/47skip/0fail; integration 405/1skip/0fail), no stubs/mock-only tests, no silent downgrade, wrap-up canonical steer payload confirmed, nested-events.ts frozen, legacy actions unaffected, adversarial inputs handled, docs verified against source. One should-fix (transient `delivery-attempted` breaking the poll loop as a false `outcome-unknown` during healthy delivery) accepted for pre-freeze repair — a logic edit, so dispatched to a fix worker (`gpt-5.6-sol` @ medium, run 46f52307) rather than direct-edited; two nits (README blank line fixed inline by orchestrator; asyncJobs fallback comment folded into the fix worker). Should-fix repairs self-verify with focused checks + full gates; no re-review per finding semantics.
+- 2026-07-21 — Should-fix repair landed (run 46f52307): `delivery-attempted` now keeps polling like `submitted` and concludes `outcome-unknown` only at deadline or owner close/rotation; dead `asyncJobs` fallback scan removed (map is always keyed by `asyncId`). Orchestrator self-verified independently: typecheck 0, focused 14 unit + 6 integration green, full unit 1113/47skip/0fail, full integration 406/1skip/0fail, `git diff --check` clean, no re-review per should-fix semantics. M12.2 ticked; committing the gated slice on `crew/m12-live-handles`.
 
 ## Confidence gaps
 
@@ -112,6 +131,7 @@
 - Immediate socket/daemon sidecar: rejected until the existing durable file route fails measured acceptance.
 - In-process child sessions: rejected because separate-process crash isolation is an invariant.
 - Full public RunHandle API before the spike: rejected because it would freeze an ownership contract before transport evidence exists.
+- Dedicated `wrap-up` wire-protocol kind (M12.2): rejected because it reopens the thrice-reviewed M12.1 protocol for zero guarantee gain — delivery to the model is text either way and compliance is never guaranteed. Canonical steer payload keeps M12.2 inside the proven transport envelope.
 
 ## Deferred
 

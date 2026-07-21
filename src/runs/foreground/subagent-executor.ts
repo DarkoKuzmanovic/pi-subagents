@@ -56,6 +56,7 @@ import {
 import { buildRevivedAsyncTask, resolveAsyncResumeTarget } from "../background/async-resume.ts";
 import { createNestedRoute, readNestedControlResults, resolveInheritedNestedRouteFromEnv, resolveNestedAsyncDir, resolveNestedParentAddressFromEnv, updateForegroundNestedProjection, writeNestedControlRequest, writeNestedEvent, type NestedRunResolutionScope } from "../shared/nested-events.ts";
 import { resolveSubagentRunId, type ResolvedSubagentRunId } from "../background/run-id-resolver.ts";
+import { performLiveControlAction, type LiveControlToolAction } from "../shared/live-control-client.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
 import { inspectSubagentStatus } from "../background/run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "../background/top-level-async.ts";
@@ -123,6 +124,7 @@ export interface SubagentParamsLike {
 	agent?: string;
 	task?: string;
 	message?: string;
+	requestId?: string;
 	chain?: ChainStep[];
 	tasks?: TaskParam[];
 	concurrency?: number;
@@ -227,6 +229,56 @@ function nestedResolutionScopeForExecutor(deps: ExecutorDeps): NestedRunResoluti
 	return {
 		routes: route ? [route] : [],
 		...(address ? { descendantOf: { parentRunId: address.parentRunId, ...(address.parentStepIndex !== undefined ? { parentStepIndex: address.parentStepIndex } : {}) } } : {}),
+	};
+}
+
+const LIVE_CONTROL_ACTIONS = new Set<LiveControlToolAction>(["steer", "follow-up", "wrap-up"]);
+
+function isLiveControlToolAction(value: string): value is LiveControlToolAction {
+	return LIVE_CONTROL_ACTIONS.has(value as LiveControlToolAction);
+}
+
+function liveControlChildKey(label: string, mode: SubagentRunMode | undefined, index: number | undefined, knownChildCount?: number): string {
+	if (index !== undefined) {
+		if (!Number.isInteger(index) || index < 0) throw new Error(`${label} index must be a non-negative integer.`);
+		if (knownChildCount !== undefined && index >= knownChildCount) throw new Error(`${label} has ${knownChildCount} children. Index ${index} is out of range.`);
+		return String(index);
+	}
+	if (mode === "parallel" || mode === "chain" || (knownChildCount !== undefined && knownChildCount > 1)) {
+		throw new Error(`${label} targets a ${mode ?? "multi-child"} run. Provide index to choose the exact live child.`);
+	}
+	return "0";
+}
+
+function resolveLiveControlTarget(params: SubagentParamsLike, deps: ExecutorDeps): { route: NestedRouteInfo; childKey: string } {
+	const requested = (params.id ?? params.runId)?.trim();
+	if (!requested) throw new Error(`Action '${params.action ?? "live-control"}' requires id (or legacy runId) for the target live run.`);
+	const resolved = resolveSubagentRunId(requested, { state: deps.state, nested: nestedResolutionScopeForExecutor(deps) });
+	if (!resolved) throw new Error(`No live subagent run matched '${requested}'. Inspect action='status' and provide a live run id.`);
+
+	if (resolved.kind === "foreground") {
+		const control = deps.state.foregroundControls.get(resolved.id);
+		if (!control?.nestedRoute) throw new Error(`Foreground run '${resolved.id}' has no live-control route.`);
+		return {
+			route: control.nestedRoute,
+			childKey: liveControlChildKey(`Foreground run '${resolved.id}'`, control.mode, params.index),
+		};
+	}
+
+	if (resolved.kind === "async") {
+		const job = deps.state.asyncJobs.get(resolved.id);
+		if (!job || (job.status !== "queued" && job.status !== "running")) throw new Error(`Async run '${resolved.id}' is not live in this session.`);
+		if (!job.nestedRoute) throw new Error(`Async run '${resolved.id}' has no live-control route.`);
+		return {
+			route: job.nestedRoute,
+			childKey: liveControlChildKey(`Async run '${resolved.id}'`, job.mode, params.index, job.agents?.length ?? job.stepsTotal),
+		};
+	}
+
+	if (resolved.match.run.state !== "running") throw new Error(`Nested run '${resolved.id}' is not live (state: ${resolved.match.run.state}).`);
+	return {
+		route: resolved.match.route,
+		childKey: liveControlChildKey(`Nested run '${resolved.id}'`, resolved.match.run.mode, params.index, resolved.match.run.agents?.length ?? resolved.match.run.steps?.length),
 	};
 }
 
@@ -2486,6 +2538,25 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					}],
 					details: { mode: "management", results: [] },
 				};
+			}
+			if (isLiveControlToolAction(params.action)) {
+				try {
+					const target = resolveLiveControlTarget(paramsWithResolvedCwd, deps);
+					const result = await performLiveControlAction({
+						...target,
+						action: params.action,
+						text: paramsWithResolvedCwd.message,
+						requestId: paramsWithResolvedCwd.requestId,
+					});
+					return {
+						content: [{ type: "text", text: result.message }],
+						...(result.ok ? {} : { isError: true }),
+						details: { mode: "management", results: [] },
+					};
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
+				}
 			}
 			if (params.action === "status") {
 				const targetRunId = paramsWithResolvedCwd.id ?? paramsWithResolvedCwd.runId;

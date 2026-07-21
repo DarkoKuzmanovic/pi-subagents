@@ -146,19 +146,20 @@ export const SubagentParams = Type.Object({
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({
 		enum: [...SUBAGENT_ACTIONS],
-		description: "Management/control action. Omit for execution mode."
+		description: "Management/control action. steer and follow-up target a live run by id and require message; wrap-up targets a live run but needs no message. Live-control results report only the durable Pi disposition: accepted-by-pi with started-turn/queued-steer/queued-follow-up, rejected, submitted, or outcome-unknown. steer is never silently downgraded to follow-up. Omit for execution mode."
 	})),
 	id: Type.Optional(Type.String({
-		description: "Run id or prefix for action='status', action='interrupt', or action='resume'."
+		description: "Run id or unambiguous prefix for action='status', action='interrupt', action='resume', action='steer', action='follow-up', or action='wrap-up'. Live multi-child targets require index."
 	})),
 	runId: Type.Optional(Type.String({
-		description: "Target run ID for action='interrupt' or action='resume'. Defaults to the most recently active controllable run for interrupt. Prefer id for new calls."
+		description: "Legacy target run ID for interrupt/resume/live-control actions. Prefer id for new calls; live multi-child targets require index."
 	})),
 	dir: Type.Optional(Type.String({
 		description: "Async run directory for action='status' or action='resume'."
 	})),
-	index: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based child index for actions that target a specific child." })),
-	message: Type.Optional(Type.String({ description: "Follow-up message for action='resume'. Use index to choose a child from multi-child runs." })),
+	index: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based child index for actions that target a specific child. Required for steer/follow-up/wrap-up on parallel or chain runs; single runs default to index 0." })),
+	message: Type.Optional(Type.String({ description: "Follow-up text for action='resume', or control text for action='steer'/'follow-up'. wrap-up needs no message and always uses the canonical wrap-up directive. steer is never silently downgraded." })),
+	requestId: Type.Optional(Type.String({ description: "Optional idempotency key for steer/follow-up/wrap-up retries. Reusing it returns the original durable result rather than delivering twice." })),
 	// Chain identifier for management (can't reuse 'chain' — that's the execution array)
 	chainName: Type.Optional(Type.String({
 		description: "Chain name for get/update/delete management actions"

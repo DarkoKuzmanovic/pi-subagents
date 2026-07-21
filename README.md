@@ -45,6 +45,7 @@
   - [Execution examples](#execution-examples)
   - [Management actions](#management-actions)
   - [Parameter reference](#parameter-reference)
+  - [Live run control: steer, follow-up, wrap-up](#live-run-control-steer-follow-up-wrap-up)
 - [Worktree isolation](#worktree-isolation)
 - [Configuration reference](#configuration-reference)
 - [Files, logs, and observability](#files-logs-and-observability)
@@ -842,7 +843,7 @@ Agent definitions are not loaded into context by default. Management actions let
 | ----------------- | ----------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent`           | string                        | -                        | Agent name for single mode, or target for management actions.                                                                          |
 | `task`            | string                        | -                        | Task string for single mode.                                                                                                           |
-| `action`          | string                        | -                        | `list`, `get`, `create`, `update`, `delete`, `status`, `interrupt`, `resume`, or `doctor`.                                             |
+| `action`          | string                        | -                        | `list`, `get`, `create`, `update`, `delete`, `status`, `interrupt`, `resume`, `steer`, `follow-up`, `wrap-up`, or `doctor`.              |
 | `chainName`       | string                        | -                        | Chain name for management actions.                                                                                                     |
 | `config`          | object/string                 | -                        | Agent or chain config for create/update.                                                                                               |
 | `output`          | `string \| false`             | agent default            | Override single-agent output file.                                                                                                     |
@@ -892,6 +893,20 @@ subagent({ action: "doctor" });
 ```
 
 `resume` sends the follow-up directly when an async child is still reachable over intercom. After completion, it revives the child by starting a new async child from the stored child session file. Multi-child async runs and remembered foreground single, parallel, or chain runs can be revived by passing `index` to choose the child. Revive starts a new child process from the old session context; it does not restart the same OS process, and it requires the chosen child to have a persisted `.jsonl` session file. Revived multi-child async runs attach the revived child's results as an update to the original run.
+
+### Live run control: steer, follow-up, wrap-up
+
+`steer`, `follow-up`, and `wrap-up` deliver control text to a **live** run (foreground or async) through the durable live-control file route. Target a run by `id` (an unambiguous prefix works); parallel and chain runs require `index` to pick the exact child. `steer` and `follow-up` require `message`; `wrap-up` needs none and always sends the canonical wrap-up directive over the steer path.
+
+```ts
+subagent({ action: "steer", id: "<run-id>", message: "switch to plan B" });
+subagent({ action: "follow-up", id: "<run-id>", index: 1, message: "also cover the edge case" });
+subagent({ action: "wrap-up", id: "<run-id>" });
+// Idempotent retry: reusing requestId returns the original durable result instead of delivering twice.
+subagent({ action: "steer", id: "<run-id>", message: "...", requestId: "req-1" });
+```
+
+Every response reports the **actual durable disposition**, never a guess: `accepted-by-pi` with `started-turn` (the run was idle), `queued-steer`, or `queued-follow-up`; `rejected` with the durable reason; `submitted` when the owner has not acknowledged within the wait window; or `outcome-unknown` when delivery was attempted but never acknowledged (the crash window — never silently retried). Acceptance means the owning Pi session accepted or queued the message, not that the model acted on it. `steer` is never silently downgraded to `follow-up`. Delivery rides the child's 250ms control poll, so expect sub-second latency in the common case; a steer queues after the current turn's tool calls — it does not interrupt mid-token.
 
 ## Worktree isolation
 
