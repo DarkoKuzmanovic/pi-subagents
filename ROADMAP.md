@@ -12,11 +12,11 @@
 - **M9** — Cumulative unaccounted-byte backstop for genuinely unparsed stream floods — v0.42.1 (2026-07-14)
 - **M10** — Commit-engineer user agent with isolated Git safety proof (2026-07-14)
 - **M11** — Restore chain-default clarify precedence and add the routing truth-table regression — v0.42.2 (2026-07-20)
+- **M12** — Live run handles: acknowledged cross-process steering/follow-up/wrap-up transport, durable run-handle recovery, and compact attach/detach inspection across live and completed runs (2026-07-22)
 
 ## Current
 
 ## Planned
 
-- **M12** — Live run handles for attach, steering, follow-up queuing, detach, abort, and compact live inspection
 - **M13** — Acceptance gates and bounded rubric-driven revision loops
 - **M2** — Lane-editing TUI over user-scope `subagents.modelLanes` (deferred; original ID retained)
