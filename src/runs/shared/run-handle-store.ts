@@ -4,16 +4,20 @@
  * Records run identity at launch so the parent can recover handles after an
  * extension reload or parent crash, when in-memory state (foregroundControls,
  * asyncJobs) is empty. Each handle is a small JSON file under
- * TEMP_ROOT_DIR/run-handles/, written atomically with owner-only permissions.
+ * TEMP_ROOT_DIR/run-handles/, written with fsynced durable JSON and owner-only
+ * permissions.
  *
- * Recovery validates liveness: foreground handles check PID, async handles
- * check the async directory, nested handles check the route directory. Stale
- * handles return undefined and are not silently treated as live.
+ * Recovery validates liveness: foreground handles check PID (best-effort for
+ * inspection only — the resolver never treats store-recovered foreground as
+ * live), async handles check the async directory or result file, nested handles
+ * check the route directory. Stale handles return undefined and are not
+ * silently treated as live.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { TEMP_ROOT_DIR, type NestedRouteInfo } from "../../shared/types.ts";
-import { writeAtomicJson } from "../../shared/atomic-json.ts";
+import { ASYNC_DIR, RESULTS_DIR, TEMP_ROOT_DIR, type NestedRouteInfo } from "../../shared/types.ts";
+import { writeDurableJson } from "../../shared/durable-json.ts";
+import { containedPath, NESTED_EVENTS_DIR } from "./nested-events.ts";
 import { isSafeNestedPathId } from "./nested-path.ts";
 
 export const RUN_HANDLES_DIR = path.join(TEMP_ROOT_DIR, "run-handles");
@@ -70,6 +74,29 @@ function isProcessAlive(pid: number, kill: KillFn = process.kill): boolean {
 	}
 }
 
+function assertPathContainment(record: Pick<RunHandleRecord, "asyncDir" | "route">): void {
+	if (typeof record.asyncDir === "string" && !containedPath(ASYNC_DIR, record.asyncDir)) {
+		throw new Error("asyncDir is outside the subagent async run root.");
+	}
+	if (record.route) {
+		if (!containedPath(NESTED_EVENTS_DIR, record.route.eventSink)) {
+			throw new Error("Nested event sink is outside the subagent nested event root.");
+		}
+		if (!containedPath(NESTED_EVENTS_DIR, record.route.controlInbox)) {
+			throw new Error("Nested control inbox is outside the subagent nested event root.");
+		}
+	}
+}
+
+function pathsAreContained(record: Pick<RunHandleRecord, "asyncDir" | "route">): boolean {
+	if (typeof record.asyncDir === "string" && !containedPath(ASYNC_DIR, record.asyncDir)) return false;
+	if (record.route) {
+		if (!containedPath(NESTED_EVENTS_DIR, record.route.eventSink)) return false;
+		if (!containedPath(NESTED_EVENTS_DIR, record.route.controlInbox)) return false;
+	}
+	return true;
+}
+
 function parseHandleRecord(raw: string, expectedId: string): RunHandleRecord | undefined {
 	try {
 		const parsed = JSON.parse(raw) as Partial<RunHandleRecord>;
@@ -106,6 +133,12 @@ function parseHandleRecord(raw: string, expectedId: string): RunHandleRecord | u
 			}
 		}
 		if (typeof parsed.updatedAt === "number") record.updatedAt = parsed.updatedAt;
+
+		// Kind invariants on read: reject incomplete records.
+		if (kind === "async" && typeof record.asyncDir !== "string") return undefined;
+		if (kind === "nested" && !record.route) return undefined;
+		if (!pathsAreContained(record)) return undefined;
+
 		return record;
 	} catch {
 		return undefined;
@@ -115,7 +148,9 @@ function parseHandleRecord(raw: string, expectedId: string): RunHandleRecord | u
 function validateLiveness(record: RunHandleRecord): boolean {
 	switch (record.kind) {
 		case "foreground":
-			// Foreground runs are in-process; if the PID is dead, the run is gone.
+			// Foreground runs are in-process; PID liveness is best-effort for
+			// inspection. The run-id resolver never maps store-recovered
+			// foreground handles to live ResolvedSubagentRunId values.
 			if (typeof record.pid === "number" && record.pid > 0) {
 				return isProcessAlive(record.pid);
 			}
@@ -123,11 +158,11 @@ function validateLiveness(record: RunHandleRecord): boolean {
 			return false;
 
 		case "async":
-			// Async runs have a directory on disk. If the directory exists, the
-			// run may still be live (or completed but not yet cleaned up).
+			// Async runs remain recoverable while their run directory exists
+			// (live or not-yet-cleaned) or a result file is still on disk
+			// (completed-run inspection after dir cleanup).
 			if (record.asyncDir && fs.existsSync(record.asyncDir)) return true;
-			// Directory gone — check if there's a result file.
-			// If neither exists, the run is stale.
+			if (fs.existsSync(path.join(RESULTS_DIR, `${record.id}.json`))) return true;
 			return false;
 
 		case "nested":
@@ -141,9 +176,22 @@ function validateLiveness(record: RunHandleRecord): boolean {
 	}
 }
 
+function ensureOwnerOnlyDir(dirPath: string): void {
+	fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+	// mkdirSync mode is not applied when the directory already exists; enforce 0700.
+	try {
+		const mode = (fs.statSync(dirPath) as unknown as { mode: number }).mode & 0o777;
+		if (mode !== 0o700) {
+			(fs as unknown as { chmodSync(path: string, mode: number): void }).chmodSync(dirPath, 0o700);
+		}
+	} catch {
+		// Best-effort; writeDurableJson will still reject looser modes.
+	}
+}
+
 /**
- * Record a run handle at launch time. Writes atomically with owner-only
- * permissions so the handle survives extension reload or parent crash.
+ * Record a run handle at launch time. Writes with fsynced durable JSON and
+ * owner-only permissions so the handle survives extension reload or parent crash.
  */
 export function recordRunHandle(input: {
 	id: string;
@@ -155,6 +203,18 @@ export function recordRunHandle(input: {
 	updatedAt?: number;
 }): void {
 	assertSafeHandleId("id", input.id);
+
+	if (input.kind === "async" && typeof input.asyncDir !== "string") {
+		throw new Error('kind "async" requires asyncDir.');
+	}
+	if (input.kind === "nested" && !input.route) {
+		throw new Error('kind "nested" requires route.');
+	}
+
+	assertPathContainment({
+		asyncDir: input.asyncDir,
+		route: input.route,
+	});
 
 	const record: RunHandleRecord = {
 		schemaVersion: 2,
@@ -169,9 +229,10 @@ export function recordRunHandle(input: {
 	if (typeof input.updatedAt === "number") record.updatedAt = input.updatedAt;
 
 	const filePath = handleFilePath(input.id);
-	fs.mkdirSync(RUN_HANDLES_DIR, { recursive: true, mode: 0o700 });
-	writeAtomicJson(filePath, record);
-	// Ensure owner-only permissions on the file (writeAtomicJson doesn't set mode)
+	ensureOwnerOnlyDir(RUN_HANDLES_DIR);
+	// exclusive:false so re-recording the same id (updatedAt / re-launch) overwrites.
+	writeDurableJson(filePath, record, { exclusive: false });
+	// Ensure owner-only permissions on the file after durable write.
 	try {
 		(fs as unknown as { chmodSync(path: string, mode: number): void }).chmodSync(filePath, 0o600);
 	} catch {

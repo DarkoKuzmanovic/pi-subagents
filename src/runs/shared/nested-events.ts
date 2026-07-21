@@ -98,7 +98,7 @@ function assertSafeId(label: string, value: string): void {
 	assertSafeNestedId(label, value);
 }
 
-function containedPath(base: string, candidate: string): boolean {
+export function containedPath(base: string, candidate: string): boolean {
 	const resolvedBase = path.resolve(base);
 	const resolvedCandidate = path.resolve(candidate);
 	return resolvedCandidate === resolvedBase || resolvedCandidate.startsWith(`${resolvedBase}${path.sep}`);

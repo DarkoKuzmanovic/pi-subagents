@@ -60,7 +60,11 @@ function asyncPrefixMatches(prefix: string, asyncDirRoot: string, resultsDir: st
 function recoveredHandleToResolved(handle: RecoveredRunHandle, asyncDirRoot: string, resultsDir: string): ResolvedSubagentRunId | undefined {
 	switch (handle.kind) {
 		case "foreground":
-			return { kind: "foreground", id: handle.id };
+			// Foreground runs live only in the in-memory foregroundControls map.
+			// After extension reload that map is empty; PID-based liveness is
+			// useless here because process.pid is the host (still alive). Never
+			// resolve store-recovered foreground handles as live.
+			return undefined;
 		case "async": {
 			const asyncDir = handle.asyncDir ?? path.join(asyncDirRoot, handle.id);
 			const resultPath = path.join(resultsDir, `${handle.id}.json`);
