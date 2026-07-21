@@ -160,3 +160,33 @@
 - Pending-work-aware parent/chain completion semantics.
 - Stable public lifecycle events and cross-extension RPC.
 - Awaiting-input indicators, terminal-title integration, and broader dashboard work.
+
+## Handoff — 2026-07-22
+
+**Done this session:**
+- M12.3 Recovery API store module (`run-handle-store.ts`) — record/recover/delete/list with liveness validation, path containment, fsync, 0700/0600 perms. Resolver fallback wired. 34 tests. Committed a58817c + 6eb096d (review fixes).
+- M12.3 Attach/detach + compact inspection (`run-inspection.ts` + `run-attachment-store.ts`) — attachToRun/detachFromRun/inspectRun with owner-epoch + capability verification. Durable attachment store. 24 tests. Committed 982c445.
+- Completed-run inspection collapsed into inspectRun (no separate worker needed).
+- Fresh deep review (grok-4.5) on Recovery API returned FIX-FIRST; fix worker (grok-composer-2.5-fast) resolved all blockers + should-fixes.
+- Session-health checkpoint recorded (2 completed outcomes, 2 compactions, continue decision).
+
+**Next up:**
+- M12.3 Tool surface integration + launch-point wiring (the final M12.3 task): wire `recordRunHandle` into launch points (`foregroundControls.set`, `asyncJobs.set`, nested-run launch), wire `deleteRunHandle` into completion/cleanup, add `recover`/`inspect`/`attach`/`detach` actions to `SUBAGENT_ACTIONS` + executor switch, integration tests, then one fresh `reviewer` `lane:deep` at the protected boundary.
+- After M12.3 review passes: close-out via `finishing-development-branch` (Delivery: local → local merge to main).
+
+**Open questions:**
+- None unresolved from grill/plan. The M12.3 scope (4 parts) was confirmed by the user.
+
+**Confidence gaps:**
+- **Zero production call sites** for `recordRunHandle`, `attachToRun`, `detachFromRun`, `inspectRun` — all are library functions with tests but no wiring into the actual launch/executor paths. The tool-surface task makes them live; until then, M12.3 is not user-observable.
+- **Foreground recovery is intentionally a no-op** from the durable store (PID liveness is useless after reload). Foreground runs are only recoverable while in-memory. This is a known limitation, not a bug — but it means foreground run handles recorded at launch will be dead weight in the store after reload. Consider whether `deleteRunHandle` at foreground completion is sufficient, or whether foreground handles should be skipped entirely at launch.
+- **Fix-cycle budget exhausted** (1/1) for M12.3. If the tool-surface task's review returns a blocker, a ceiling renegotiation is needed before dispatching a fix worker. Dispatch budget is also tight (4/5 used; the tool-surface worker is the 5th, leaving no room for a fix worker without renegotiation).
+- **Async attach without live owner** — completed/result-only async runs attach without epoch verification. This is intentional (inspection-only, no control), but a caller that assumes "attached ⇒ can steer" would be wrong. The tool-surface action must make this distinction clear in its response.
+- **`inspectRun` for foreground** hardcodes `state: "running"` (line 208 of run-inspection.ts) — a foreground run that has actually finished but hasn't been removed from `foregroundControls` would report running. Low risk (foreground controls are removed on completion), but worth noting.
+
+**Run metrics (final this session):**
+- dispatches: 18 (11 prior + 4 prior + 3 this session)
+- review-bundles: 5
+- child-runtime-minutes: ~104 + this session's worker runtimes
+- compactions: 2
+- M12.3 outcome dispatches: 4/5 · fix-cycles: 1/1
