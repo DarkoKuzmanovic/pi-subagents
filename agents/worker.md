@@ -1,5 +1,6 @@
 ---
 name: worker
+modelPromptRole: worker
 description: Implementation agent for normal tasks and approved oracle handoffs
 systemPromptMode: replace
 inheritProjectContext: true

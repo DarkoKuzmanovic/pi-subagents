@@ -1,5 +1,6 @@
 ---
 name: oracle
+modelPromptRole: oracle
 description: High-context decision-consistency oracle that protects inherited state and prevents drift
 tools: read, grep, find, ls, bash, contact_supervisor, intercom
 thinking: high
