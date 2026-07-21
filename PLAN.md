@@ -157,10 +157,7 @@
 
 ## Deferred
 
-- Pending-work-aware parent/chain completion semantics.
-- Stable public lifecycle events and cross-extension RPC.
-- Awaiting-input indicators, terminal-title integration, and broader dashboard work.
-
+- Transferred to GitHub issues (#10, #11, #12) on 2026-07-22.
 ## Handoff — 2026-07-22
 
 **Done this session:**
