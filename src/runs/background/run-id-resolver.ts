@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { ASYNC_DIR, RESULTS_DIR, type SubagentState } from "../../shared/types.ts";
 import { findAsyncRunPrefixMatches, type AsyncRunLocation } from "./async-resume.ts";
 import { assertSafeNestedId, findNestedRunMatchesById, type NestedRoute, type NestedRunMatch, type NestedRunResolutionScope } from "../shared/nested-events.ts";
+import { recoverRunHandle, type RecoveredRunHandle } from "../shared/run-handle-store.ts";
 
 export type ResolvedSubagentRunId =
 	| { kind: "foreground"; id: string }
@@ -51,6 +52,37 @@ function asyncPrefixMatches(prefix: string, asyncDirRoot: string, resultsDir: st
 	return findAsyncRunPrefixMatches(prefix, asyncDirRoot, resultsDir);
 }
 
+/**
+ * Convert a recovered durable handle to the ResolvedSubagentRunId shape.
+ * Returns undefined if the handle's kind doesn't map cleanly (e.g. a nested
+ * handle whose route no longer resolves to a registry match).
+ */
+function recoveredHandleToResolved(handle: RecoveredRunHandle, asyncDirRoot: string, resultsDir: string): ResolvedSubagentRunId | undefined {
+	switch (handle.kind) {
+		case "foreground":
+			return { kind: "foreground", id: handle.id };
+		case "async": {
+			const asyncDir = handle.asyncDir ?? path.join(asyncDirRoot, handle.id);
+			const resultPath = path.join(resultsDir, `${handle.id}.json`);
+			return {
+				kind: "async",
+				id: handle.id,
+				location: {
+					asyncDir: fs.existsSync(asyncDir) ? asyncDir : null,
+					resultPath: fs.existsSync(resultPath) ? resultPath : null,
+					resolvedId: handle.id,
+				},
+			};
+		}
+		case "nested": {
+			if (!handle.route) return undefined;
+			const nestedMatches = findNestedRunMatchesById(handle.id, { scope: { routes: [handle.route] } });
+			if (nestedMatches.length === 0) return undefined;
+			return { kind: "nested", id: handle.id, match: nestedMatches[0] };
+		}
+	}
+}
+
 export function resolveSubagentRunId(id: string, deps: ResolveSubagentRunIdDeps = {}): ResolvedSubagentRunId | undefined {
 	assertSafeNestedId("id", id);
 	const asyncDirRoot = deps.asyncDirRoot ?? ASYNC_DIR;
@@ -63,6 +95,15 @@ export function resolveSubagentRunId(id: string, deps: ResolveSubagentRunIdDeps 
 	const exactNested = findNestedRunMatchesById(id, nestedScope ? { scope: nestedScope } : {});
 	if (exactNested.length > 1) throw new Error(`Nested run id '${id}' is ambiguous across authorized registries. Provide the full id after stale registries are cleaned up.`);
 	if (exactNested[0]) return { kind: "nested", id, match: exactNested[0] };
+
+	// Fallback: try the durable handle store. This recovers handles after
+	// extension reload or parent crash, when in-memory state is empty and
+	// on-disk scans didn't find the run by id.
+	const recovered = recoverRunHandle(id);
+	if (recovered) {
+		const resolved = recoveredHandleToResolved(recovered, asyncDirRoot, resultsDir);
+		if (resolved) return resolved;
+	}
 
 	const matches: ResolvedSubagentRunId[] = [];
 	for (const foregroundId of foregroundIds(deps.state).filter((candidate) => candidate.startsWith(id))) {
