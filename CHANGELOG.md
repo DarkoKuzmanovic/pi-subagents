@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-07-22
+
+### Added — M12: Live run handles
+
+Stable cross-process control and inspection of subagent runs while they are still live, plus durable recovery after an extension reload or parent crash.
+
+- **Acknowledged live-control transport (M12.1).** A durable file-based route delivers `steer`, `follow-up`, and `wrap-up` control text from the parent to a live child Pi process. The child owns acknowledgement and reports the actual durable disposition — `accepted-by-pi` with `started-turn` / `queued-steer` / `queued-follow-up`, `rejected`, `submitted`, or `outcome-unknown` — never claiming the model acted, only that Pi accepted or queued the message. Owner epochs and monotonic per-owner sequences enforce FIFO with durable out-of-sequence and duplicate rejection; `requestId` idempotency reuses the original durable result instead of delivering twice. The post-send/pre-ack crash window is surfaced honestly as `outcome-unknown` and never blindly replayed.
+- **Live-control actions on the subagent tool (M12.2).** `steer`, `follow-up`, and `wrap-up` are now first-class `subagent` actions. Target a run by `id` (unambiguous prefix works); parallel and chain runs require `index` to pick the exact child. `wrap-up` rides the steer path with a canonical directive rather than adding a wire-protocol kind. `steer` is never silently downgraded to `follow-up`.
+- **Run-handle recovery, attach/detach, and compact inspection (M12.3).** Every foreground and async launch records a durable `RunHandleRecord` (fsynced, owner-only `0700`/`0600`) under `TEMP_ROOT_DIR/run-handles/`, deleted on completion/cleanup. After an extension reload, `recover` finds a run by id again; `inspect` returns a compact state summary for any live or completed run; `attach` verifies live-control capability (owner epoch + capability token) and distinguishes steering-capable from inspection-only; `detach` revokes an attachment idempotently. Foreground runs are only resolvable while in-memory (PID liveness is useless after reload — `process.pid` is the host) and `recover` reports this honestly. Nested descendants are rediscovered via their parent's route and the durable nested registry, not recorded as separate handles.
+
+### Documentation
+
+- README: new "Live run control: steer, follow-up, wrap-up" and "Recovery and inspection" sections; action parameter table extended with `recover`, `inspect`, `attach`, `detach`, and `attachmentId`.
+- AGENTS: durable live-control disposition invariant; foreground non-recoverability after extension reload; run-handle and attachment persistence layer note.
+- ROADMAP: M12 moved from Planned to Released.
+
+### Tests
+
+- M12.1: 129 focused unit/integration tests covering route versioning, owner/session epoch publication, monotonic sequencing, duplicate/gap rejection, same-live-epoch parent restart, stale-epoch child restart, directory/file permissions, malformed/oversized/wrong-capability input, idle-child delivery, internal protocol reprojection, foreground/async integration, FIFO/duplicate/out-of-sequence rejection, child epoch rotation, interrupt/abort, shutdown terminalization, and post-send/pre-ack ambiguity.
+- M12.2: 25 unit + 5 integration tests covering steer/follow-up/wrap-up across foreground/async/nested, honest disposition reporting, duplicate requestId reuse, child exit mid-request, and post-send/pre-ack ambiguity.
+- M12.3: 34 unit (store) + 24 unit (inspection) + 7 integration tests covering recover/inspect/attach/detach across foreground/async/nested, recovery across parent restart, live vs completed inspection, handle recorded at launch and deleted at completion, and legacy action smoke.
+
+## [Unreleased]
+
 ## [0.42.2] - 2026-07-20
 
 ### Fixed
