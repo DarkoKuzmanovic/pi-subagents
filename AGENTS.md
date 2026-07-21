@@ -26,6 +26,10 @@
 
 A smaller, artifact-first prompt can improve completion and recovery, but it cannot make an unstable model/provider serialize native tool calls correctly. Evaluate recon models on two separate axes: whether they produce a usable grounded artifact, and whether their tool protocol remains clean. Recoverable malformed calls still indicate provider risk and should prevent promotion to the default orchestration model.
 
+### Foreground runs are non-recoverable after extension reload
+
+Foreground subagent runs live entirely in-memory (`SubagentState.foregroundControls`). They have no durable on-disk presence and no standalone process — `process.pid` is the host Pi process, not the run. PID-based liveness checks are useless for the reload recovery scenario: after an extension reload, the in-memory map is empty but `isProcessAlive(process.pid)` returns true (host still alive), so a durable store would falsely resolve a dead foreground run as live. Never use PID liveness to recover foreground handles from a durable store. Foreground runs are only resolvable while in-memory; the durable handle store should refuse to resolve `kind: "foreground"` as live. (Learned 2026-07-22 during M12.3 review — grok-4.5 caught the flaw.)
+
 <!-- BEGIN CARTOGRAPHER MANAGED MAP POINTER -->
 ## Cartographer maps
 
