@@ -71,11 +71,18 @@ export function parseChain(content: string, source: "user" | "project", filePath
 	const steps: ChainStepConfig[] = [];
 
 	for (let i = 0; i < matches.length; i++) {
-		const match = matches[i]!;
-		const agent = match[1]!.trim();
-		const lineEndOffset = body[match.index! + match[0].length] === "\n" ? 1 : 0;
-		const sectionStart = match.index! + match[0].length + lineEndOffset;
-		const sectionEnd = i + 1 < matches.length ? matches[i + 1]!.index! : body.length;
+		const match = matches[i];
+		if (!match) continue; // guarded by i < matches.length; defensive
+		const agentGroup = match[1];
+		if (!agentGroup) throw new Error(`chain-serializer: section ${i + 1} matched without an agent capture group`);
+		const agent = agentGroup.trim();
+		const matchIndex = match.index;
+		if (matchIndex === undefined) throw new Error(`chain-serializer: section ${i + 1} matched without a string index`);
+		const lineEndOffset = body[matchIndex + match[0].length] === "\n" ? 1 : 0;
+		const sectionStart = matchIndex + match[0].length + lineEndOffset;
+		const nextMatch = i + 1 < matches.length ? matches[i + 1] : undefined;
+		const nextIndex = nextMatch?.index;
+		const sectionEnd = nextIndex ?? body.length;
 		const sectionBody = body.slice(sectionStart, sectionEnd).trimEnd();
 		steps.push(parseStepBody(agent, sectionBody));
 	}

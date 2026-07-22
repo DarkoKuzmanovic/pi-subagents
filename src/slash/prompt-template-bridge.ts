@@ -147,10 +147,16 @@ function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegationRequ
 	if (!hasSingle && tasks.length === 0) return undefined;
 
 	const fallbackTask = tasks[0];
+	// Line 147 guarantees: either hasSingle (value.agent/task present) or tasks.length > 0.
+	// So fallbackTask is defined whenever hasSingle is false here. If that invariant
+	// ever breaks, fail loudly with an actionable error rather than an empty agent.
+	if (!hasSingle && !fallbackTask) throw new Error("prompt-template-bridge: fallback task missing when hasSingle is false");
+	const fallbackAgent = fallbackTask?.agent ?? "";
+	const fallbackTaskValue = fallbackTask?.task ?? "";
 	return {
 		requestId: value.requestId,
-		agent: hasSingle ? value.agent : fallbackTask!.agent,
-		task: hasSingle ? value.task : fallbackTask!.task,
+		agent: hasSingle ? value.agent : fallbackAgent,
+		task: hasSingle ? value.task : fallbackTaskValue,
 		...(tasks.length > 0 ? { tasks } : {}),
 		context: value.context,
 		model: value.model,

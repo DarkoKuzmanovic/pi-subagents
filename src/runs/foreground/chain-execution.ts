@@ -245,7 +245,11 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			const maxSubagentDepth = resolveChildMaxSubagentDepth(input.maxSubagentDepth, taskAgentConfig?.maxSubagentDepth);
 
 			const taskCwd = input.worktreeSetup
-				? input.worktreeSetup.worktrees[taskIndex]!.agentCwd
+				? (() => {
+					const worktree = input.worktreeSetup.worktrees[taskIndex];
+					if (!worktree) throw new Error(`chain worktree dispatch: no worktree at index ${taskIndex} (have ${input.worktreeSetup.worktrees.length})`);
+					return worktree.agentCwd;
+				})()
 				: resolveChildCwd(input.cwd ?? input.ctx.cwd, task.cwd);
 
 			const outputPath = typeof behavior.output === "string"
@@ -260,8 +264,12 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				input.foregroundControl.interrupt = () => {
 					if (interruptController.signal.aborted) return false;
 					interruptController.abort();
-					input.foregroundControl!.currentActivityState = undefined;
-					input.foregroundControl!.updatedAt = Date.now();
+					// fc captured at narrowing time (closure-narrowing safe).
+					const fc = input.foregroundControl;
+					if (fc) {
+						fc.currentActivityState = undefined;
+						fc.updatedAt = Date.now();
+					}
 					return true;
 				};
 			}
@@ -500,9 +508,14 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	);
 	const totalSteps = chainSteps.length;
 
-	const firstStep = chainSteps[0]!;
+	const firstStep = chainSteps[0];
+	if (!firstStep) throw new Error("chain-execution: chainSteps is empty");
 	const originalTask = params.task
-		?? (isParallelStep(firstStep) ? firstStep.parallel[0]!.task! : (firstStep as SequentialStep).task!);
+		?? (isParallelStep(firstStep) ? (() => {
+			const firstParallel = firstStep.parallel[0];
+			if (!firstParallel) throw new Error("chain-execution: parallel step has no tasks");
+			return firstParallel.task;
+		})() : (firstStep as SequentialStep).task);
 
 	const chainDir = createChainDir(runId, chainDirBase);
 	const hasParallelSteps = chainSteps.some((step) => isParallelStep(step) || isDynamicParallelStep(step));
@@ -700,7 +713,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					const outputPath = typeof behavior.output === "string"
 						? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 						: undefined;
-					const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Parallel chain step ${stepIndex + 1} task ${taskIndex + 1} (${step.parallel[taskIndex]!.agent})`);
+					const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Parallel chain step ${stepIndex + 1} task ${taskIndex + 1} (${step.parallel[taskIndex]?.agent ?? "<missing>"})`);
 					if (validationError) return buildChainExecutionErrorResult(validationError, {
 						results,
 						includeProgress,
@@ -902,7 +915,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				const outputPath = typeof behavior.output === "string"
 					? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 					: undefined;
-				const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Dynamic chain step ${stepIndex + 1} item ${taskIndex + 1} (${dynamicParallelStep.parallel[taskIndex]!.agent})`);
+				const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Dynamic chain step ${stepIndex + 1} item ${taskIndex + 1} (${dynamicParallelStep.parallel[taskIndex]?.agent ?? "<missing>"})`);
 				if (validationError) return buildChainExecutionErrorResult(validationError, {
 					results, includeProgress, allProgress, allArtifactPaths, artifactsDir, chainAgents, totalSteps, currentStepIndex: stepIndex,
 				});

@@ -1397,7 +1397,10 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			cwd: task.cwd,
 			...(modelOverrides[index] ? { model: modelOverrides[index] } : {}),
 			...(skillOverrides[index] !== undefined ? { skill: skillOverrides[index] } : {}),
-			...(task.output === true ? (agentConfigs[index]?.output ? { output: agentConfigs[index]!.output } : {}) : task.output !== undefined ? { output: task.output } : {}),
+			...(task.output === true ? (() => {
+				const cfg = agentConfigs[index];
+				return cfg?.output ? { output: cfg.output } : {};
+			})() : task.output !== undefined ? { output: task.output } : {}),
 			...(task.outputMode !== undefined ? { outputMode: task.outputMode } : {}),
 			...(task.reads !== undefined && task.reads !== true ? { reads: task.reads } : {}),
 			...(task.progress !== undefined ? { progress: task.progress } : {}),
@@ -1737,7 +1740,11 @@ function resolveParallelTaskCwd(
 	worktreeSetup: WorktreeSetup | undefined,
 	index: number,
 ): string {
-	if (worktreeSetup) return worktreeSetup.worktrees[index]!.agentCwd;
+	if (worktreeSetup) {
+		const worktree = worktreeSetup.worktrees[index];
+		if (!worktree) throw new Error(`resolveParallelTaskCwd: no worktree at index ${index} (have ${worktreeSetup.worktrees.length})`);
+		return worktree.agentCwd;
+	}
 	return resolveChildCwd(paramsCwd, task.cwd);
 }
 
@@ -1801,8 +1808,14 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			input.foregroundControl.interrupt = () => {
 				if (interruptController.signal.aborted) return false;
 				interruptController.abort();
-				input.foregroundControl!.currentActivityState = undefined;
-				input.foregroundControl!.updatedAt = Date.now();
+				// fc captured at narrowing time; input.foregroundControl is narrowed by
+				// the enclosing `if`, but TS re-accesses the property fresh inside the
+				// closure, so a local const holds the proven-defined reference.
+				const fc = input.foregroundControl;
+				if (fc) {
+					fc.currentActivityState = undefined;
+					fc.updatedAt = Date.now();
+				}
 				return true;
 			};
 		}
@@ -2093,7 +2106,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		for (let index = 0; index < tasks.length; index++) {
 			const taskCwd = resolveParallelTaskCwd(tasks[index]!, effectiveCwd, worktreeSetup, index);
 			const outputPath = resolveSingleOutputPath(behaviors[index]?.output, ctx.cwd, taskCwd);
-			const validationError = validateFileOnlyOutputMode(behaviors[index]?.outputMode, outputPath, `Parallel task ${index + 1} (${tasks[index]!.agent})`);
+			const validationError = validateFileOnlyOutputMode(behaviors[index]?.outputMode, outputPath, `Parallel task ${index + 1} (${tasks[index]?.agent ?? "<missing>"})`);
 			if (validationError) return buildParallelModeError(validationError);
 		}
 
@@ -2602,10 +2615,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					if (resolved) {
 						const routeInfo = routeForResolved(resolved, deps.state);
 						const capabilityNote = routeInfo ? ` Capability token: ${routeInfo.capabilityToken}.` : "";
+						// Derive the truthful state from the same sources inspectRun uses
+						// (status.json for async, nested summary for nested, in-memory for foreground).
+						// Previously this hardcoded `state: live` for every resolved run, including
+						// completed ones — misleading operators/models into steering dead work.
+						const inspection = inspectRun(targetRunId, { state: deps.state, nested: nestedResolutionScopeForExecutor(deps) });
+						const stateLabel = inspection?.state ?? "unknown";
 						return {
 							content: [{
 								type: "text",
-								text: `Run '${targetRunId}' resolved (kind: ${resolved.kind}, state: live).${capabilityNote} Recovering a handle does not itself grant steering \u2014 use action='attach' to verify live control capability before steer/follow-up/wrap-up.`,
+								text: `Run '${targetRunId}' resolved (kind: ${resolved.kind}, state: ${stateLabel}).${capabilityNote} Recovering a handle does not itself grant steering \u2014 use action='attach' to verify live control capability before steer/follow-up/wrap-up.`,
 							}],
 							details: { mode: "management", results: [] },
 						};

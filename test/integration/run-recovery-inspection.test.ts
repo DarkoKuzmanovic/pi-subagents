@@ -73,9 +73,12 @@ function trackRoute(rootRunId: string): NestedRoute {
 	return route;
 }
 
-function trackAsyncDir(id: string): string {
+function trackAsyncDir(id: string, status?: Record<string, unknown>): string {
 	const asyncDir = path.join(ASYNC_DIR, id);
 	fs.mkdirSync(asyncDir, { recursive: true, mode: 0o700 });
+	// A real recovered async run (lost from in-memory state after a reload)
+	// still has its status.json on disk; inspectRun derives state from it.
+	if (status) fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify(status), { mode: 0o600 });
 	asyncDirs.push(asyncDir);
 	return asyncDir;
 }
@@ -193,11 +196,11 @@ describe("subagent recovery and inspection actions", { skip: !createSubagentExec
 		const asyncRun = await executeAction(executor, { action: "recover", id: asyncId });
 		const nested = await executeAction(executor, { action: "recover", id: nestedId });
 
-		assert.match(text(foreground), /resolved \(kind: foreground, state: live\)/);
+		assert.match(text(foreground), /resolved \(kind: foreground, state: running\)/);
 		assert.match(text(foreground), new RegExp(route.capabilityToken));
 		assert.match(text(foreground), /use action='attach'/);
-		assert.match(text(asyncRun), /resolved \(kind: async, state: live\)/);
-		assert.match(text(nested), /resolved \(kind: nested, state: live\)/);
+		assert.match(text(asyncRun), /resolved \(kind: async, state: running\)/);
+		assert.match(text(nested), /resolved \(kind: nested, state: running\)/);
 	});
 
 	it("recovers async and nested handles after in-memory state loss but reports foreground as non-recoverable", async () => {
@@ -206,7 +209,14 @@ describe("subagent recovery and inspection actions", { skip: !createSubagentExec
 		const asyncId = uniqueId("reload-async");
 		const nestedId = uniqueId("reload-nested");
 		const foregroundId = uniqueId("reload-fg");
-		const asyncDir = trackAsyncDir(asyncId);
+		const asyncDir = trackAsyncDir(asyncId, {
+			// Model a real recovered async run: it is live on disk (status.json
+			// written at start) but lost from in-memory state after a reload.
+			runId: asyncId,
+			mode: "single",
+			state: "running",
+			startedAt: 1,
+		});
 		const route = trackRoute(uniqueId("reload-root"));
 		writeNestedEvent(route, {
 			type: "subagent.nested.started",
@@ -223,8 +233,8 @@ describe("subagent recovery and inspection actions", { skip: !createSubagentExec
 		const foreground = await executeAction(executor, { action: "recover", id: foregroundId });
 		const missing = await executeAction(executor, { action: "recover", id: uniqueId("missing") });
 
-		assert.match(text(asyncRun), /resolved \(kind: async, state: live\)/);
-		assert.match(text(nested), /resolved \(kind: nested, state: live\)/);
+		assert.match(text(asyncRun), /resolved \(kind: async, state: running\)/);
+		assert.match(text(nested), /resolved \(kind: nested, state: running\)/);
 		assert.match(text(foreground), /only resolvable while in-memory/);
 		assert.match(text(foreground), /not recoverable after an extension reload/);
 		assert.equal(missing.isError, true);

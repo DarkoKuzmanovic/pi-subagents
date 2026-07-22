@@ -202,7 +202,9 @@ export function resolveAsyncRunLocation(params: AsyncResumeParams, asyncDirRoot:
 	if (matching.length > 1) {
 		throw new Error(`Ambiguous async run id prefix '${requestedId}' matched: ${matching.map((match) => match.id).join(", ")}. Provide a longer id.`);
 	}
-	return matching[0]!.location;
+	const match = matching[0];
+	if (!match) throw new Error(`async-resume: prefix '${requestedId}' matched 0 runs after the length checks`);
+	return match.location;
 }
 
 function resultState(result: AsyncResultFile): AsyncStatus["state"] {

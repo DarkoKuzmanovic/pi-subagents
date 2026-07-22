@@ -959,9 +959,11 @@ function prepareParallelTaskRun(
 	taskIndex: number,
 ): { taskForRun: SubagentStep; taskCwd: string } {
 	if (!worktreeSetup) return { taskForRun: task, taskCwd: cwd };
+	const worktree = worktreeSetup.worktrees[taskIndex];
+	if (!worktree) throw new Error(`worktree dispatch: no worktree at index ${taskIndex} (have ${worktreeSetup.worktrees.length})`);
 	return {
 		taskForRun: { ...task, cwd: undefined },
-		taskCwd: worktreeSetup.worktrees[taskIndex]!.agentCwd,
+		taskCwd: worktree.agentCwd,
 	};
 }
 

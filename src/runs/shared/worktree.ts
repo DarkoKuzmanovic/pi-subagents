@@ -629,7 +629,9 @@ export function formatWorktreeDiffSummary(diffs: WorktreeDiff[]): string {
 		lines.push("");
 	}
 
-	const patchesDir = path.dirname(changed[0]!.patchPath);
+	const firstChanged = changed[0];
+	if (!firstChanged) throw new Error("worktree: formatWorktreeDiffSummary called with no changed diffs");
+	const patchesDir = path.dirname(firstChanged.patchPath);
 	lines.push(`Full patches: ${patchesDir}`);
 	return lines.join("\n").trimEnd();
 }

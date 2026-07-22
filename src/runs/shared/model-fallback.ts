@@ -36,7 +36,9 @@ export function resolveModelCandidate(
 		if (preferredMatch) return `${preferredMatch.fullId}${thinkingSuffix}`;
 	}
 	if (matches.length !== 1) return model;
-	return `${matches[0]!.fullId}${thinkingSuffix}`;
+	const match = matches[0];
+	if (!match) throw new Error(`model-fallback: expected exactly 1 match, got ${matches.length}`);
+	return `${match.fullId}${thinkingSuffix}`;
 }
 
 export function buildModelCandidates(

@@ -221,9 +221,20 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, asyncDir?: string
 		return { error: `cwd does not exist: ${cwd}` };
 	}
 
-	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
+	// Owner-only permissions: the cfg carries nestedRoute.capabilityToken.
+	// Matches the run-handle-store / nested-events convention (0o700 dir, 0o600 file).
+	// mkdirSync mode is not applied when the directory already exists; enforce 0700.
+	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true, mode: 0o700 });
+	try {
+		const mode = (fs.statSync(TEMP_ROOT_DIR) as unknown as { mode: number }).mode & 0o777;
+		if (mode !== 0o700) {
+			(fs as unknown as { chmodSync(path: string, mode: number): void }).chmodSync(TEMP_ROOT_DIR, 0o700);
+		}
+	} catch {
+		// Best-effort; the 0o600 write below still protects the config contents.
+	}
 	const cfgPath = getAsyncConfigPath(suffix);
-	fs.writeFileSync(cfgPath, JSON.stringify(cfg));
+	fs.writeFileSync(cfgPath, JSON.stringify(cfg), { mode: 0o600 });
 	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
 
 	// Capture the detached runner's own stdout/stderr to a log file instead of discarding

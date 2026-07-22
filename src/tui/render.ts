@@ -372,8 +372,9 @@ function widgetParallelAgentDetails(job: AsyncJobState, theme: Theme, expanded: 
 	if (job.mode !== "parallel" && job.mode !== "chain") return [];
 	if (job.mode === "chain" && !job.activeParallelGroup && job.parallelGroups?.length) return widgetChainDetails(job, theme, expanded, width);
 	const total = job.stepsTotal ?? job.steps.length;
-	return job.steps.map((step, index) => {
-		const marker = index === job.steps!.length - 1 ? "└" : "├";
+	const steps = job.steps;
+	return steps.map((step, index) => {
+		const marker = index === steps.length - 1 ? "└" : "├";
 		const activity = widgetStepActivity(step);
 		const itemTitle = job.mode === "parallel" || job.activeParallelGroup ? "Agent" : "Step";
 		return `  ${theme.fg("dim", `${marker} ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index + 1}/${total}: ${step.agent}${renderModelTag(step.model, theme)} · ${widgetStepStatus(step.status, theme)}${activity ? ` · ${activity}` : ""}`)}`;
@@ -965,8 +966,11 @@ function renderMultiCompact(d: Details, theme: Theme): Component {
 	c.addChild(new Text(truncLine(`${glyph} ${theme.fg("toolTitle", theme.bold(d.mode))}${contextBadge}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`, width), 0, 0));
 
 	const useResultsDirectly = multiLabel.hasParallelInChain || !d.chainAgents?.length;
+	// useResultsDirectly is false only when d.chainAgents is non-empty; capture it
+	// so the length access below is type-safe without a non-null assertion.
+	const chainAgents = d.chainAgents ?? [];
 	const displayStart = multiLabel.showActiveGroupOnly ? multiLabel.groupStartIndex : 0;
-	const displayEnd = multiLabel.showActiveGroupOnly ? multiLabel.groupEndIndex : (useResultsDirectly ? d.results.length : d.chainAgents!.length);
+	const displayEnd = multiLabel.showActiveGroupOnly ? multiLabel.groupEndIndex : (useResultsDirectly ? d.results.length : chainAgents.length);
 	for (let i = displayStart; i < displayEnd; i++) {
 		const r = d.results[i];
 		const fallbackLabel = itemTitle.toLowerCase();
@@ -1205,8 +1209,9 @@ export function renderSubagentResult(
 	}
 
 	const useResultsDirectly = multiLabel.hasParallelInChain || !d.chainAgents?.length;
+	const chainAgents = d.chainAgents ?? [];
 	const displayStart = multiLabel.showActiveGroupOnly ? multiLabel.groupStartIndex : 0;
-	const displayEnd = multiLabel.showActiveGroupOnly ? multiLabel.groupEndIndex : (useResultsDirectly ? d.results.length : d.chainAgents!.length);
+	const displayEnd = multiLabel.showActiveGroupOnly ? multiLabel.groupEndIndex : (useResultsDirectly ? d.results.length : chainAgents.length);
 
 	c.addChild(new Spacer(1));
 
