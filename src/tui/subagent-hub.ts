@@ -3,15 +3,15 @@ import { DynamicBorder, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
 import { Container, SelectList, Spacer, Text, matchesKey } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../agents/agents.ts";
-import { findModelInfo, getSupportedThinkingLevels, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
+import { findModelInfo, getSupportedThinkingLevels, splitKnownThinkingSuffix, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
 import {
 	resolveModelCandidate,
-	splitThinkingSuffix,
 } from "../runs/shared/model-fallback.ts";
 
 export interface SubagentHubResult {
 	overrides: Map<string, string>; // agent name → model override string
 	thinkingOverrides?: Map<string, string>; // agent name → thinking level override
+	resetAgents?: Set<string>; // agent names whose overrides should be removed
 }
 
 export class SubagentHubComponent implements Component {
@@ -24,7 +24,7 @@ export class SubagentHubComponent implements Component {
 		private readonly availableModels: ModelInfo[],
 		private readonly preferredProvider: string | undefined,
 		private readonly done: (result: SubagentHubResult) => void,
-		private readonly cwd: string,
+		private readonly _cwd: string,
 	) {
 		// Pre-populate overrides from existing agent model configs
 		for (const agent of this.agents) {
@@ -40,15 +40,13 @@ export class SubagentHubComponent implements Component {
 			}
 		}
 
-		// Seed thinking overrides from existing agent config so that exiting the hub
-		// without re-cycling an agent round-trips its level instead of erasing it.
-		// The save loop rebuilds overrides from these maps; without seeding, a no-op
-		// open+exit would drop every agent's persisted thinking.
+		// Seed thinking overrides from existing agent config for display.
+		// Dirty tracking ensures only user-changed agents are persisted on exit.
 		for (const agent of this.agents) {
-			const { thinkingSuffix } = agent.model ? splitThinkingSuffix(agent.model) : { thinkingSuffix: "" };
+			const { thinkingSuffix } = agent.model ? splitKnownThinkingSuffix(agent.model) : { thinkingSuffix: "" };
 			const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
 			const seeded = agent.thinking ?? suffixThinking;
-			if (seeded && seeded !== "off") {
+			if (seeded) {
 				this.agentThinkingOverrides.set(agent.name, seeded);
 			}
 		}
@@ -63,7 +61,12 @@ export class SubagentHubComponent implements Component {
 	agentModelOverrides: Map<string, string> = new Map(); // agent name → preferred fullId
 	agentThinkingOverrides: Map<string, string> = new Map(); // agent name → thinking level
 
-	// Persisted SelectList instances (delegated input handling)
+	// Tracks which agents the user explicitly changed (model pick or thinking cycle).
+	// Only dirty agents are included in the result on exit, preventing no-op open+esc
+	// from rewriting every agent's override in settings.json.
+	private dirtyAgents = new Set<string>();
+	private resetAgents = new Set<string>();
+	// SelectList instances (recreated each render; selection state is synced via setSelectedIndex)
 	private agentSelectList: SelectList | null = null;
 	private modelSelectList: SelectList | null = null;
 
@@ -78,6 +81,20 @@ export class SubagentHubComponent implements Component {
 		this.modelSelectList?.invalidate();
 	}
 
+	/** Build the result containing only agents the user actually changed. */
+	private buildDirtyResult(): SubagentHubResult {
+		const overrides = new Map<string, string>();
+		const thinkingOverrides = new Map<string, string>();
+		for (const name of this.dirtyAgents) {
+			const model = this.agentModelOverrides.get(name);
+			if (model !== undefined) overrides.set(name, model);
+			const thinking = this.agentThinkingOverrides.get(name);
+			if (thinking !== undefined) thinkingOverrides.set(name, thinking);
+			// Re-dirtied after reset — the latest edit wins, so remove from resets
+			this.resetAgents.delete(name);
+		}
+		return { overrides, thinkingOverrides, resetAgents: this.resetAgents.size > 0 ? new Set(this.resetAgents) : undefined };
+	}
 	dispose(): void {}
 
 	render(width: number): string[] {
@@ -110,13 +127,19 @@ export class SubagentHubComponent implements Component {
 				this.done({ overrides: new Map() });
 				return;
 			}
-			// esc = done (apply all overrides)
+			// esc = done (apply only dirty overrides)
 			if (matchesKey(data, "escape")) {
-				this.done({ overrides: this.agentModelOverrides, thinkingOverrides: this.agentThinkingOverrides });
+				this.done(this.buildDirtyResult());
 				return;
 			}
 			if (matchesKey(data, "tab")) {
 				this.cycleThinkingLevel();
+				this.tui.requestRender();
+				return;
+			}
+			if (data === "x" || data === "X") {
+				this.resetSelectedAgent();
+				this.tui.requestRender();
 				return;
 			}
 			// Everything else (up/down/enter/search) goes to SelectList
@@ -127,7 +150,7 @@ export class SubagentHubComponent implements Component {
 
 		// No SelectList (shouldn't happen, but fallback)
 		if (matchesKey(data, "escape")) {
-		this.done({ overrides: this.agentModelOverrides, thinkingOverrides: this.agentThinkingOverrides });
+			this.done(this.buildDirtyResult());
 		} else if (matchesKey(data, "ctrl+c")) {
 			this.done({ overrides: new Map() });
 		}
@@ -158,8 +181,8 @@ export class SubagentHubComponent implements Component {
 			return;
 		}
 
-		// Printable character: append to search query
-		if (data.length === 1 && data >= " " && data <= "~") {
+		// Printable characters (single keystroke or paste): append to search query
+		if (data.length >= 1 && /^[\x20-\x7e]+$/.test(data)) {
 			this.modelSearchQuery += data;
 			this.filterModels();
 			this.modelSelectedIndex = 0;
@@ -199,15 +222,18 @@ export class SubagentHubComponent implements Component {
 		const items: SelectItem[] = this.agents.map((agent) => {
 			const override = this.agentModelOverrides.get(agent.name);
 			const effectiveModel = override ?? this.resolveAgentEffectiveModel(agent);
-			const isOverridden = override !== undefined || agent.model !== undefined;
-			const { thinkingSuffix } = splitThinkingSuffix(effectiveModel);
-			const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
+			const { baseModel } = splitKnownThinkingSuffix(effectiveModel);
 			const overriddenThinking = this.agentThinkingOverrides.get(agent.name);
-			const effectiveThinking = overriddenThinking ?? agent.thinking ?? suffixThinking ?? "";
+			const effectiveThinking = overriddenThinking ?? agent.thinking ?? "";
 			const thinkingDisplay = effectiveThinking && effectiveThinking !== "off" ? effectiveThinking : "off";
-			const desc = isOverridden
-				? `${effectiveModel} ✎  ·  thinking: ${thinkingDisplay}`
-				: `${effectiveModel || "(none)"}  ·  thinking: ${thinkingDisplay}`;
+			const modelDisplay = baseModel || "(host default)";
+			// Show ✎ only for agents with a persisted settings override or edited this session
+			const hasOverride = agent.override !== undefined || this.dirtyAgents.has(agent.name);
+			const fallbackCount = agent.fallbackModels?.length ?? 0;
+			const fallbackTag = fallbackCount > 0 ? `  +${fallbackCount} fallback${fallbackCount > 1 ? "s" : ""}` : "";
+			const desc = hasOverride
+				? `${modelDisplay} ✎  ·  thinking: ${thinkingDisplay}${fallbackTag}`
+				: `${modelDisplay}  ·  thinking: ${thinkingDisplay}${fallbackTag}`;
 			return {
 				value: agent.name,
 				label: agent.name,
@@ -235,16 +261,16 @@ export class SubagentHubComponent implements Component {
 			}
 		};
 
-		// Wire onCancel: SelectList cancel (esc) = done, apply overrides
+		// Wire onCancel: SelectList cancel (esc) = done, apply dirty overrides
 		this.agentSelectList.onCancel = () => {
-				this.done({ overrides: this.agentModelOverrides, thinkingOverrides: this.agentThinkingOverrides });
+			this.done(this.buildDirtyResult());
 		};
 
 		container.addChild(this.agentSelectList);
 
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(
-			this.formatFooter("enter", "model", "tab", "thinking", "esc", "done", "ctrl+c", "cancel"),
+			this.formatFooter("↑↓", "navigate", "enter", "model", "tab", "thinking", "x", "reset", "esc", "done", "ctrl+c", "cancel"),
 			1, 0,
 		));
 		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
@@ -284,7 +310,7 @@ export class SubagentHubComponent implements Component {
 			this.modelSelectList = null;
 			container.addChild(new Text(th.fg("muted", " No matching models"), 1, 0));
 		} else {
-			const { baseModel } = splitThinkingSuffix(currentModel);
+			const { baseModel } = splitKnownThinkingSuffix(currentModel);
 			const items: SelectItem[] = this.filteredModels.map((model) => {
 				const isCurrent =
 					model.fullId === baseModel ||
@@ -312,11 +338,19 @@ export class SubagentHubComponent implements Component {
 				if (this.editingAgentIndex !== null) {
 					const agent = this.agents[this.editingAgentIndex]!;
 					const currentModel = this.agentModelOverrides.get(agent.name) ?? this.resolveAgentEffectiveModel(agent);
-					const { thinkingSuffix } = splitThinkingSuffix(currentModel);
+					const { thinkingSuffix } = splitKnownThinkingSuffix(currentModel);
 					const requestedLevel = thinkingSuffix.slice(1);
 					const selectedModelInfo = findModelInfo(item.value, this.availableModels, this.preferredProvider);
-					const suffix = getSupportedThinkingLevels(selectedModelInfo).some((level) => level === requestedLevel) ? thinkingSuffix : "";
+					const supportedLevels = getSupportedThinkingLevels(selectedModelInfo);
+					const suffix = supportedLevels.some((level) => level === requestedLevel) ? thinkingSuffix : "";
 					this.agentModelOverrides.set(agent.name, `${item.value}${suffix}`);
+					this.dirtyAgents.add(agent.name);
+
+					// Clamp the separate thinking override if the new model doesn't support it
+					const currentThinking = this.agentThinkingOverrides.get(agent.name);
+					if (currentThinking && !supportedLevels.includes(currentThinking as ThinkingLevel)) {
+						this.agentThinkingOverrides.set(agent.name, "off");
+					}
 				}
 				this.exitModelSelector();
 			};
@@ -331,7 +365,7 @@ export class SubagentHubComponent implements Component {
 
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(
-			this.formatFooter("enter", "select", "esc", "back", "type", "search"),
+			this.formatFooter(...(this.filteredModels.length > 0 ? ["enter", "select"] : []), "esc", "back", "ctrl+c", "cancel", "type", "search"),
 			1, 0,
 		));
 		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
@@ -378,11 +412,7 @@ export class SubagentHubComponent implements Component {
 			if (resolved) return resolved;
 			return agent.model;
 		}
-		// If no model configured, return first available or fallback
-		if (this.availableModels.length > 0) {
-			const first = this.availableModels[0]!;
-			return first.fullId;
-		}
+		// No model configured — return empty; display will show "(host default)"
 		return "";
 	}
 
@@ -396,7 +426,7 @@ export class SubagentHubComponent implements Component {
 		const availableLevels: ThinkingLevel[] = getSupportedThinkingLevels(modelInfo);
 
 		// Get current effective thinking
-		const { thinkingSuffix } = splitThinkingSuffix(effectiveModel);
+		const { thinkingSuffix } = splitKnownThinkingSuffix(effectiveModel);
 		const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
 		const overridden = this.agentThinkingOverrides.get(agent.name);
 		const currentThinking = (overridden ?? agent.thinking ?? suffixThinking ?? "off") as ThinkingLevel;
@@ -409,8 +439,30 @@ export class SubagentHubComponent implements Component {
 		const nextLevel = availableLevels[nextIndex]!;
 
 		this.agentThinkingOverrides.set(agent.name, nextLevel);
+		this.dirtyAgents.add(agent.name);
+
+		// Ensure the resolved model is also persisted so that a thinking-only
+		// change doesn't get saved without its companion model override.
+		// Only pin when the agent actually has a configured model — model-less
+		// agents inherit the host default and should not get a fabricated override.
+		if (!this.agentModelOverrides.has(agent.name) && agent.model) {
+			const { baseModel } = splitKnownThinkingSuffix(effectiveModel);
+			this.agentModelOverrides.set(agent.name, baseModel);
+		}
 	}
 
+	/** Reset the selected agent's override back to its base config */
+	private resetSelectedAgent(): void {
+		const agent = this.agents[this.selectedAgentIndex];
+		if (!agent) return;
+		// Only meaningful for agents that actually have a persisted override
+		if (!agent.override) return;
+		this.agentModelOverrides.delete(agent.name);
+		this.agentThinkingOverrides.delete(agent.name);
+		this.dirtyAgents.delete(agent.name);
+		this.resetAgents.add(agent.name);
+		this.invalidate();
+	}
 	/** Enter model selector mode */
 	enterModelSelector(agentIndex: number): void {
 		this.editingAgentIndex = agentIndex;
@@ -423,7 +475,7 @@ export class SubagentHubComponent implements Component {
 		const agent = this.agents[agentIndex]!;
 		const currentModel = this.agentModelOverrides.get(agent.name) ??
 			this.resolveAgentEffectiveModel(agent);
-		const { baseModel } = splitThinkingSuffix(currentModel);
+		const { baseModel } = splitKnownThinkingSuffix(currentModel);
 		const currentIndex = this.filteredModels.findIndex(
 			(m) => m.fullId === baseModel || m.id === baseModel,
 		);

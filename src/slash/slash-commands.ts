@@ -10,6 +10,7 @@ import { Key, matchesKey } from "@earendil-works/pi-tui";
 import {
 	discoverAgents,
 	discoverAgentsAll,
+	removeBuiltinAgentOverride,
 	saveBuiltinAgentOverride,
 	type ChainConfig,
 } from "../agents/agents.ts";
@@ -803,16 +804,35 @@ export function registerSlashCommands(
 				...result.overrides.keys(),
 				...(result.thinkingOverrides?.keys() ?? []),
 			]);
-			for (const agentName of overrideAgentNames) {
-				const override = buildModelThinkingOverride(
-					result.overrides.get(agentName),
-					result.thinkingOverrides?.get(agentName),
-				);
-				saveBuiltinAgentOverride(cwd, agentName, "user", override);
-			}
+			try {
+				for (const agentName of overrideAgentNames) {
+					const override = buildModelThinkingOverride(
+						result.overrides.get(agentName),
+						result.thinkingOverrides?.get(agentName),
+					);
+					// Save to the scope that currently owns the override so project
+					// overrides are updated in-place rather than silently shadowed.
+					const agentConfig = agents.find((a) => a.name === agentName);
+					const scope = agentConfig?.override?.scope ?? "user";
+					saveBuiltinAgentOverride(cwd, agentName, scope, override);
+				}
 
-			if (result.overrides.size > 0 || (result.thinkingOverrides && result.thinkingOverrides.size > 0)) {
-				ctx.ui.notify("Subagent overrides saved", "success");
+				// Remove overrides for agents the user explicitly reset
+				if (result.resetAgents) {
+					for (const agentName of result.resetAgents) {
+						const agentConfig = agents.find((a) => a.name === agentName);
+						const scope = agentConfig?.override?.scope ?? "user";
+						removeBuiltinAgentOverride(cwd, agentName, scope);
+					}
+				}
+
+				const changed = overrideAgentNames.size > 0 || (result.resetAgents && result.resetAgents.size > 0);
+				if (changed) {
+					ctx.ui.notify("Subagent overrides updated", "success");
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Failed to save overrides: ${message}`, "error");
 			}
 		},
 	});

@@ -41,7 +41,7 @@ export function currentModelFullId(model: unknown): string | undefined {
 	return provider && id ? `${provider}/${id}` : undefined;
 }
 
-function splitKnownThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
+export function splitKnownThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
 	const colonIdx = model.lastIndexOf(":");
 	if (colonIdx === -1) return { baseModel: model, thinkingSuffix: "" };
 	const suffix = THINKING_LEVELS.find((level) => level === model.substring(colonIdx + 1));

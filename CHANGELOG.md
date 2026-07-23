@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.43.2] - 2026-07-23
+
+> Folds in the unreleased 0.43.1 bump (M12.4 review hardening) plus the subagent-hub override fixes.
+
+### Fixed
+
+- **Atomic settings writes.** `writeSettingsFile` now writes to a temp file and renames into place (with a Windows `EEXIST` remove-then-rename fallback), so a crash mid-write can no longer leave `settings.json` truncated or half-written.
+- **Override merge instead of clobber.** `saveBuiltinAgentOverride` merges into the existing entry rather than replacing it, so saving a model/thinking override no longer wipes unrelated fields (`tools`, `skills`, `fallbackModels`, `memory`).
+- **Surgical reset.** `removeBuiltinAgentOverride` strips only `model`/`thinking` keys and preserves the rest of the entry, deleting it only when empty.
+- **Overrides apply to custom agents.** Settings overrides now reach user/project agents via `applySettingsOverridesToAgents`, not just builtins. Agents shadowing a builtin name are skipped to preserve the shadowing contract.
+- **Scope-aware hub save.** The `/subagent models` hub saves to the scope that currently owns an override (project vs user) instead of always writing user scope, and wraps the save loop in try/catch with an error notification.
+- **Hub dirty tracking.** The hub only persists agents the user actually changed (model pick or thinking cycle), so a no-op open+esc no longer rewrites every agent's override. Adds `x` to reset a single agent and reports `resetAgents` in the result.
+- **Thinking seed + display.** The hub seeds `off` thinking correctly, shows `(host default)` for model-less agents, displays fallback counts, and uses the shared `splitKnownThinkingSuffix` (now exported from `model-info`).
+- **Model search paste.** The hub search box accepts multi-character paste, not just single keystrokes.
+
+### Hardened (M12.4)
+
+- **Async config file modes.** Async config is written `0o600` and the `TEMP_ROOT` dir is `0o700`, matching the run-handle-store pattern to prevent token exposure on shared `/tmp`.
+- **Recover state truthfulness.** The `recover` action derives run state via `inspectRun` (status.json / nested summary / in-memory) instead of hardcoding `state: live`, so completed runs are no longer reported as live and steerable.
+- **Non-null assertion sweep.** Replaced all 24 `!.` dot-access sites with explicit narrowing.
+
 ## [0.43.0] - 2026-07-22
 
 ### Added — M12: Live run handles
@@ -23,8 +44,6 @@ Stable cross-process control and inspection of subagent runs while they are stil
 - M12.1: 129 focused unit/integration tests covering route versioning, owner/session epoch publication, monotonic sequencing, duplicate/gap rejection, same-live-epoch parent restart, stale-epoch child restart, directory/file permissions, malformed/oversized/wrong-capability input, idle-child delivery, internal protocol reprojection, foreground/async integration, FIFO/duplicate/out-of-sequence rejection, child epoch rotation, interrupt/abort, shutdown terminalization, and post-send/pre-ack ambiguity.
 - M12.2: 25 unit + 5 integration tests covering steer/follow-up/wrap-up across foreground/async/nested, honest disposition reporting, duplicate requestId reuse, child exit mid-request, and post-send/pre-ack ambiguity.
 - M12.3: 34 unit (store) + 24 unit (inspection) + 7 integration tests covering recover/inspect/attach/detach across foreground/async/nested, recovery across parent restart, live vs completed inspection, handle recorded at launch and deleted at completion, and legacy action smoke.
-
-## [Unreleased]
 
 ## [0.42.2] - 2026-07-20
 

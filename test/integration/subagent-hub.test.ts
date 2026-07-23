@@ -79,7 +79,7 @@ describe("subagent hub", {
 		assert.match(stripped, /worker/);
 		assert.match(stripped, /planner/);
 		assert.match(stripped, /oracle/);
-		assert.match(stripped, /openai\/model-0/);
+		assert.match(stripped, /\(host default\)/);
 		assert.match(stripped, /Subagent Models/);
 		assert.match(stripped, /enter model/);
 	});
@@ -105,7 +105,7 @@ describe("subagent hub", {
 		const modelSelectorRender = component.render(84).join("\n");
 		assert.match(stripAnsi(modelSelectorRender), /Select Model/);
 		assert.match(stripAnsi(modelSelectorRender), /Search:/);
-		assert.match(stripAnsi(modelSelectorRender), /openai\/model-0/);
+		assert.match(stripAnsi(modelSelectorRender), /model-0/);
 
 		component.exitModelSelector();
 		assert.equal(component.editingAgentIndex, null);
@@ -163,7 +163,8 @@ describe("subagent hub", {
 			"/tmp/test-cwd",
 		);
 
-		component.agentModelOverrides.set("worker", "openai/model-0");
+		// Drive a real edit path so the agent becomes dirty and shows ✎
+		component.cycleThinkingLevel();
 
 		const rendered = component.render(84).join("\n");
 		assert.match(rendered, /✎/);

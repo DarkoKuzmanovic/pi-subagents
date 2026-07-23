@@ -273,7 +273,27 @@ export function readSettingsFileStrict(filePath: string): Record<string, unknown
 
 function writeSettingsFile(filePath: string, settings: Record<string, unknown>): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
-	fs.writeFileSync(filePath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+	const content = JSON.stringify(settings, null, 2) + "\n";
+	const tmpPath = `${filePath}.tmp.${process.pid}`;
+	try {
+		fs.writeFileSync(tmpPath, content, "utf-8");
+		try {
+			fs.renameSync(tmpPath, filePath);
+		} catch (renameErr: unknown) {
+			// On Windows, rename may throw EEXIST when the target exists.
+			// Fall back to remove-then-rename only in that case.
+			if (renameErr && typeof renameErr === "object" && "code" in renameErr && (renameErr as { code: string }).code === "EEXIST") {
+				fs.unlinkSync(filePath);
+				fs.renameSync(tmpPath, filePath);
+			} else {
+				throw renameErr;
+			}
+		}
+	} catch (error) {
+		// Clean up temp file on failure
+		try { fs.unlinkSync(tmpPath); } catch {}
+		throw error;
+	}
 }
 
 function parseOverrideStringArrayOrFalse(
@@ -543,6 +563,39 @@ function applyBuiltinOverrides(
 	});
 }
 
+/**
+ * Apply per-agent overrides from settings.json to non-builtin (user/project) agents.
+ * Same merge semantics as applyBuiltinOverrides but without the disableBuiltins logic,
+ * which only applies to builtin agents.
+ *
+ * Overrides keyed by a builtin agent name are intended for the builtin, not for a
+ * user/project agent that shadows it by name. We skip agents whose name collides
+ * with a builtin to preserve the shadowing contract.
+ */
+function applySettingsOverridesToAgents(
+	agents: AgentConfig[],
+	userSettings: SubagentSettings,
+	projectSettings: SubagentSettings,
+	userSettingsPath: string,
+	projectSettingsPath: string | null,
+	builtinNames: Set<string>,
+): AgentConfig[] {
+	return agents.map((agent) => {
+		// Skip agents that shadow a builtin — the override is meant for the builtin,
+		// not the user/project agent with the same name.
+		if (builtinNames.has(agent.name)) return agent;
+
+		const projectOverride = projectSettings.overrides[agent.name];
+		if (projectOverride && projectSettingsPath) {
+			return applyBuiltinOverride(agent, projectOverride, { scope: "project", path: projectSettingsPath });
+		}
+		const userOverride = userSettings.overrides[agent.name];
+		if (userOverride) {
+			return applyBuiltinOverride(agent, userOverride, { scope: "user", path: userSettingsPath });
+		}
+		return agent;
+	});
+}
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
 	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "modelPromptRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools" | "disallowedTools" | "memory">,
@@ -588,7 +641,13 @@ export function saveBuiltinAgentOverride(
 		? { ...(subagents.agentOverrides as Record<string, unknown>) }
 		: {};
 
-	agentOverrides[name] = cloneOverrideValue(override);
+	// Merge into the existing entry so that fields not present in the incoming
+	// override (e.g. tools, skills, fallbackModels, memory) are preserved.
+	const existingRaw = agentOverrides[name];
+	const existing = (existingRaw && typeof existingRaw === "object" && !Array.isArray(existingRaw))
+		? existingRaw as Record<string, unknown>
+		: {};
+	agentOverrides[name] = { ...existing, ...cloneOverrideValue(override) };
 	subagents.agentOverrides = agentOverrides;
 	settings.subagents = subagents;
 	writeSettingsFile(filePath, settings);
@@ -608,7 +667,20 @@ export function removeBuiltinAgentOverride(cwd: string, name: string, scope: "us
 	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) return filePath;
 
 	const nextOverrides = { ...(agentOverrides as Record<string, unknown>) };
-	delete nextOverrides[name];
+	const entry = nextOverrides[name];
+	if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+		// Only strip model/thinking keys — preserve tools, skills, fallbackModels, etc.
+		const nextEntry = { ...(entry as Record<string, unknown>) };
+		delete nextEntry.model;
+		delete nextEntry.thinking;
+		if (Object.keys(nextEntry).length > 0) {
+			nextOverrides[name] = nextEntry;
+		} else {
+			delete nextOverrides[name];
+		}
+	} else {
+		delete nextOverrides[name];
+	}
 	if (Object.keys(nextOverrides).length > 0) nextSubagents.agentOverrides = nextOverrides;
 	else delete nextSubagents.agentOverrides;
 
@@ -871,8 +943,10 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const userSettings = scope === "project" ? EMPTY_SUBAGENT_SETTINGS : readSubagentSettings(userSettingsPath);
 	const projectSettings = scope === "user" ? EMPTY_SUBAGENT_SETTINGS : readSubagentSettings(projectSettingsPath);
 
+	const rawBuiltins = loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin");
+	const builtinNames = new Set(rawBuiltins.map((a) => a.name));
 	const builtinAgents = applyBuiltinOverrides(
-		loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"),
+		rawBuiltins,
 		userSettings,
 		projectSettings,
 		userSettingsPath,
@@ -881,9 +955,17 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 
 	const userAgentsOld = scope === "project" ? [] : loadAgentsFromDir(userDirOld, "user");
 	const userAgentsNew = scope === "project" ? [] : loadAgentsFromDir(userDirNew, "user");
-	const userAgents = [...userAgentsOld, ...userAgentsNew];
+	const userAgents = applySettingsOverridesToAgents(
+		[...userAgentsOld, ...userAgentsNew],
+		userSettings, projectSettings, userSettingsPath, projectSettingsPath,
+		builtinNames,
+	);
 
-	const projectAgents = scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project"));
+	const projectAgents = applySettingsOverridesToAgents(
+		scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project")),
+		userSettings, projectSettings, userSettingsPath, projectSettingsPath,
+		builtinNames,
+	);
 	const agents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents)
 		.filter((agent) => agent.disabled !== true);
 
@@ -912,24 +994,34 @@ export function discoverAgentsAll(cwd: string): {
 	const userSettings = readSubagentSettings(userSettingsPath);
 	const projectSettings = readSubagentSettings(projectSettingsPath);
 
+	const rawBuiltins = loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin");
+	const builtinNames = new Set(rawBuiltins.map((a) => a.name));
 	const builtin = applyBuiltinOverrides(
-		loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"),
+		rawBuiltins,
 		userSettings,
 		projectSettings,
 		userSettingsPath,
 		projectSettingsPath,
 	);
-	const user = [
-		...loadAgentsFromDir(userDirOld, "user"),
-		...loadAgentsFromDir(userDirNew, "user"),
-	];
+	const user = applySettingsOverridesToAgents(
+		[
+			...loadAgentsFromDir(userDirOld, "user"),
+			...loadAgentsFromDir(userDirNew, "user"),
+		],
+		userSettings, projectSettings, userSettingsPath, projectSettingsPath,
+		builtinNames,
+	);
 	const projectMap = new Map<string, AgentConfig>();
 	for (const dir of projectDirs) {
 		for (const agent of loadAgentsFromDir(dir, "project")) {
 			projectMap.set(agent.name, agent);
 		}
 	}
-	const project = Array.from(projectMap.values());
+	const project = applySettingsOverridesToAgents(
+		Array.from(projectMap.values()),
+		userSettings, projectSettings, userSettingsPath, projectSettingsPath,
+		builtinNames,
+	);
 
 	const chainMap = new Map<string, ChainConfig>();
 	for (const dir of projectChainDirs) {
