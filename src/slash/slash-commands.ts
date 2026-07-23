@@ -790,7 +790,6 @@ export function registerSlashCommands(
 						availableModels,
 						currentProvider,
 						done,
-						cwd,
 					),
 				{
 					overlay: true,

@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
-import { Container, SelectList, Spacer, Text, matchesKey } from "@earendil-works/pi-tui";
+import { Container, SelectList, Spacer, Text, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../agents/agents.ts";
 import { findModelInfo, getSupportedThinkingLevels, splitKnownThinkingSuffix, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
 import {
@@ -14,18 +14,35 @@ export interface SubagentHubResult {
 	resetAgents?: Set<string>; // agent names whose overrides should be removed
 }
 
+/** Discriminated view state — each phase adds cases as needed. */
+type HubView = "main" | "model";
+
 export class SubagentHubComponent implements Component {
 	private readonly MODEL_SELECTOR_HEIGHT = 10;
 
+	// Injected dependencies (explicit fields, not parameter properties, for strip-types compat)
+	private readonly tui: TUI;
+	private readonly theme: Theme;
+	private readonly agents: AgentConfig[];
+	private readonly availableModels: ModelInfo[];
+	private readonly preferredProvider: string | undefined;
+	private readonly done: (result: SubagentHubResult) => void;
+
 	constructor(
-		private readonly tui: TUI,
-		private readonly theme: Theme,
-		private readonly agents: AgentConfig[],
-		private readonly availableModels: ModelInfo[],
-		private readonly preferredProvider: string | undefined,
-		private readonly done: (result: SubagentHubResult) => void,
-		private readonly _cwd: string,
+		tui: TUI,
+		theme: Theme,
+		agents: AgentConfig[],
+		availableModels: ModelInfo[],
+		preferredProvider: string | undefined,
+		done: (result: SubagentHubResult) => void,
 	) {
+		this.tui = tui;
+		this.theme = theme;
+		this.agents = agents;
+		this.availableModels = availableModels;
+		this.preferredProvider = preferredProvider;
+		this.done = done;
+
 		// Pre-populate overrides from existing agent model configs
 		for (const agent of this.agents) {
 			if (agent.model) {
@@ -52,34 +69,39 @@ export class SubagentHubComponent implements Component {
 		}
 	}
 
-	// State
+	// ── State ──────────────────────────────────────────────────
+
+	private view: HubView = "main";
+	private modelAgentIndex = 0;
+
 	selectedAgentIndex = 0;
-	editingAgentIndex: number | null = null; // null = main nav, number = in model picker for that agent
 	modelSearchQuery = "";
 	modelSelectedIndex = 0;
 	filteredModels: ModelInfo[] = [];
 	agentModelOverrides: Map<string, string> = new Map(); // agent name → preferred fullId
 	agentThinkingOverrides: Map<string, string> = new Map(); // agent name → thinking level
 
+	/** Test seam: exposes the model-editing agent index (null when in main view). */
+	get editingAgentIndex(): number | null {
+		return this.view === "model" ? this.modelAgentIndex : null;
+	}
+
 	// Tracks which agents the user explicitly changed (model pick or thinking cycle).
 	// Only dirty agents are included in the result on exit, preventing no-op open+esc
 	// from rewriting every agent's override in settings.json.
 	private dirtyAgents = new Set<string>();
 	private resetAgents = new Set<string>();
-	// SelectList instances (recreated each render; selection state is synced via setSelectedIndex)
+
+	// SelectList instances are created per main-view rebuild because pi-tui's SelectList has no setItems();
+	// selection is restored by index after each rebuild. They are reused only for navigation within a stable view.
 	private agentSelectList: SelectList | null = null;
 	private modelSelectList: SelectList | null = null;
 
-	// Render cache
-	private cachedWidth?: number;
-	private cachedLines?: string[];
+	// Active container tree — rebuilt only on view/data/theme transitions.
+	private activeContainer: Container | null = null;
+	private needsRebuild = true;
 
-	invalidate(): void {
-		this.cachedWidth = undefined;
-		this.cachedLines = undefined;
-		this.agentSelectList?.invalidate();
-		this.modelSelectList?.invalidate();
-	}
+	// ── Result ─────────────────────────────────────────────────
 
 	/** Build the result containing only agents the user actually changed. */
 	private buildDirtyResult(): SubagentHubResult {
@@ -95,27 +117,40 @@ export class SubagentHubComponent implements Component {
 		}
 		return { overrides, thinkingOverrides, resetAgents: this.resetAgents.size > 0 ? new Set(this.resetAgents) : undefined };
 	}
+
 	dispose(): void {}
 
-	render(width: number): string[] {
-		if (this.cachedLines && this.cachedWidth === width) {
-			return this.cachedLines;
-		}
+	// ── Rendering ─────────────────────────────────────────────
 
-		const container = this.editingAgentIndex !== null
-			? this.buildModelSelectorView()
-			: this.buildMainView();
-
-		this.cachedLines = container.render(width);
-		this.cachedWidth = width;
-		return this.cachedLines;
+	invalidate(): void {
+		this.needsRebuild = true;
+		// Invalidate existing child caches so theme changes take effect.
+		this.activeContainer?.invalidate();
+		this.agentSelectList?.invalidate();
+		this.modelSelectList?.invalidate();
 	}
 
-	handleInput(data: string): void {
-		this.cachedWidth = undefined;
-		this.cachedLines = undefined;
+	render(width: number): string[] {
+		if (this.needsRebuild || !this.activeContainer) {
+			this.activeContainer = this.view === "model"
+				? this.buildModelSelectorView()
+				: this.buildMainView();
+			this.needsRebuild = false;
+		}
 
-		if (this.editingAgentIndex !== null) {
+		const lines = this.activeContainer.render(width);
+		// Final invariant guard: no line may exceed the available width.
+		// truncateToWidth strips ANSI before measuring and re-applies no ellipsis.
+		return lines.map((line) => {
+			if (visibleWidth(line) <= width) return line;
+			return truncateToWidth(line, width, "");
+		});
+	}
+
+	// ── Input ─────────────────────────────────────────────────
+
+	handleInput(data: string): void {
+		if (this.view === "model") {
 			this.handleModelSelectorInput(data);
 			return;
 		}
@@ -142,8 +177,10 @@ export class SubagentHubComponent implements Component {
 				this.tui.requestRender();
 				return;
 			}
-			// Everything else (up/down/enter/search) goes to SelectList
-			this.agentSelectList?.handleInput(data);
+			// Everything else (up/down/enter/search) goes to SelectList.
+			// Navigation does NOT trigger a rebuild — the SelectList handles
+			// its own rendering and selection state internally.
+			this.agentSelectList.handleInput(data);
 			this.tui.requestRender();
 			return;
 		}
@@ -242,6 +279,8 @@ export class SubagentHubComponent implements Component {
 		});
 
 		const selectTheme = this.getSelectListTheme();
+		// Recreate the SelectList on every main-view rebuild because pi-tui's SelectList has no setItems();
+		// once constructed, its item content is fixed. Selection is preserved by restoring selectedAgentIndex.
 		this.agentSelectList = new SelectList(items, Math.min(items.length, 15), selectTheme);
 		this.agentSelectList.setSelectedIndex(this.selectedAgentIndex);
 
@@ -282,10 +321,7 @@ export class SubagentHubComponent implements Component {
 		const th = this.theme;
 		const container = new Container();
 
-		const agentName =
-			this.editingAgentIndex !== null
-				? (this.agents[this.editingAgentIndex]?.name ?? "unknown")
-				: "unknown";
+		const agentName = this.agents[this.modelAgentIndex]?.name ?? "unknown";
 
 		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
 		container.addChild(new Text(th.fg("accent", th.bold(` Select Model (${agentName})`)), 1, 0));
@@ -295,10 +331,7 @@ export class SubagentHubComponent implements Component {
 		container.addChild(new Text(th.fg("dim", " Search: ") + this.modelSearchQuery + cursor, 1, 0));
 
 		// Current model
-		const agent =
-			this.editingAgentIndex !== null
-				? this.agents[this.editingAgentIndex]!
-				: null;
+		const agent = this.agents[this.modelAgentIndex];
 		const currentModel = agent
 			? (this.agentModelOverrides.get(agent.name) ??
 					this.resolveAgentEffectiveModel(agent))
@@ -325,7 +358,7 @@ export class SubagentHubComponent implements Component {
 
 			const selectTheme = this.getSelectListTheme();
 			this.modelSelectList = new SelectList(items, Math.min(items.length, this.MODEL_SELECTOR_HEIGHT), selectTheme);
-		this.modelSelectList.setSelectedIndex(this.modelSelectedIndex);
+			this.modelSelectList.setSelectedIndex(this.modelSelectedIndex);
 
 			// Sync modelSelectedIndex when user navigates up/down
 			this.modelSelectList.onSelectionChange = (item: SelectItem) => {
@@ -335,21 +368,21 @@ export class SubagentHubComponent implements Component {
 
 			// Wire onSelect: enter selects model and returns to agent list
 			this.modelSelectList.onSelect = (item: SelectItem) => {
-				if (this.editingAgentIndex !== null) {
-					const agent = this.agents[this.editingAgentIndex]!;
-					const currentModel = this.agentModelOverrides.get(agent.name) ?? this.resolveAgentEffectiveModel(agent);
-					const { thinkingSuffix } = splitKnownThinkingSuffix(currentModel);
+				const selectedAgent = this.agents[this.modelAgentIndex];
+				if (selectedAgent) {
+					const prevModel = this.agentModelOverrides.get(selectedAgent.name) ?? this.resolveAgentEffectiveModel(selectedAgent);
+					const { thinkingSuffix } = splitKnownThinkingSuffix(prevModel);
 					const requestedLevel = thinkingSuffix.slice(1);
 					const selectedModelInfo = findModelInfo(item.value, this.availableModels, this.preferredProvider);
 					const supportedLevels = getSupportedThinkingLevels(selectedModelInfo);
 					const suffix = supportedLevels.some((level) => level === requestedLevel) ? thinkingSuffix : "";
-					this.agentModelOverrides.set(agent.name, `${item.value}${suffix}`);
-					this.dirtyAgents.add(agent.name);
+					this.agentModelOverrides.set(selectedAgent.name, `${item.value}${suffix}`);
+					this.dirtyAgents.add(selectedAgent.name);
 
 					// Clamp the separate thinking override if the new model doesn't support it
-					const currentThinking = this.agentThinkingOverrides.get(agent.name);
+					const currentThinking = this.agentThinkingOverrides.get(selectedAgent.name);
 					if (currentThinking && !supportedLevels.includes(currentThinking as ThinkingLevel)) {
-						this.agentThinkingOverrides.set(agent.name, "off");
+						this.agentThinkingOverrides.set(selectedAgent.name, "off");
 					}
 				}
 				this.exitModelSelector();
@@ -381,8 +414,9 @@ export class SubagentHubComponent implements Component {
 		const separator = th.fg("dim", " • ");
 		const hints: string[] = [];
 		for (let i = 0; i < pairs.length; i += 2) {
-			const key = pairs[i]!;
-			const desc = pairs[i + 1]!;
+			const key = pairs[i];
+			const desc = pairs[i + 1];
+			if (key === undefined || desc === undefined) break;
 			hints.push(rawKeyHint(key, desc));
 		}
 		return hints.join(separator);
@@ -436,7 +470,7 @@ export class SubagentHubComponent implements Component {
 		if (availableLevels.length === 0) return;
 		if (currentIndex >= 0 && availableLevels.length === 1) return;
 		const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % availableLevels.length;
-		const nextLevel = availableLevels[nextIndex]!;
+		const nextLevel = availableLevels[nextIndex];
 
 		this.agentThinkingOverrides.set(agent.name, nextLevel);
 		this.dirtyAgents.add(agent.name);
@@ -449,6 +483,8 @@ export class SubagentHubComponent implements Component {
 			const { baseModel } = splitKnownThinkingSuffix(effectiveModel);
 			this.agentModelOverrides.set(agent.name, baseModel);
 		}
+
+		this.needsRebuild = true;
 	}
 
 	/** Reset the selected agent's override back to its base config */
@@ -463,24 +499,28 @@ export class SubagentHubComponent implements Component {
 		this.resetAgents.add(agent.name);
 		this.invalidate();
 	}
+
 	/** Enter model selector mode */
 	enterModelSelector(agentIndex: number): void {
-		this.editingAgentIndex = agentIndex;
+		this.view = "model";
+		this.modelAgentIndex = agentIndex;
 		this.modelSearchQuery = "";
 		this.modelSelectedIndex = 0;
 		this.filteredModels = [...this.availableModels];
 		this.modelSelectList = null;
 
 		// Find current model of that agent in list
-		const agent = this.agents[agentIndex]!;
-		const currentModel = this.agentModelOverrides.get(agent.name) ??
-			this.resolveAgentEffectiveModel(agent);
-		const { baseModel } = splitKnownThinkingSuffix(currentModel);
-		const currentIndex = this.filteredModels.findIndex(
-			(m) => m.fullId === baseModel || m.id === baseModel,
-		);
-		if (currentIndex >= 0) {
-			this.modelSelectedIndex = currentIndex;
+		const agent = this.agents[agentIndex];
+		if (agent) {
+			const currentModel = this.agentModelOverrides.get(agent.name) ??
+				this.resolveAgentEffectiveModel(agent);
+			const { baseModel } = splitKnownThinkingSuffix(currentModel);
+			const currentIndex = this.filteredModels.findIndex(
+				(m) => m.fullId === baseModel || m.id === baseModel,
+			);
+			if (currentIndex >= 0) {
+				this.modelSelectedIndex = currentIndex;
+			}
 		}
 
 		this.invalidate();
@@ -489,7 +529,7 @@ export class SubagentHubComponent implements Component {
 
 	/** Exit model selector and return to main view */
 	exitModelSelector(): void {
-		this.editingAgentIndex = null;
+		this.view = "main";
 		this.modelSelectList = null;
 		this.invalidate();
 		this.tui.requestRender();

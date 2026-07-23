@@ -70,7 +70,6 @@ describe("subagent hub", {
 			models,
 			"openai",
 			() => {},
-			"/tmp/test-cwd",
 		);
 
 		const rendered = component.render(84).join("\n");
@@ -94,7 +93,6 @@ describe("subagent hub", {
 			models,
 			undefined,
 			() => {},
-			"/tmp/test-cwd",
 		);
 
 		assert.equal(component.editingAgentIndex, null);
@@ -124,7 +122,6 @@ describe("subagent hub", {
 			models,
 			undefined,
 			() => {},
-			"/tmp/test-cwd",
 		);
 
 		component.enterModelSelector(0);
@@ -160,7 +157,6 @@ describe("subagent hub", {
 			models,
 			undefined,
 			() => {},
-			"/tmp/test-cwd",
 		);
 
 		// Drive a real edit path so the agent becomes dirty and shows ✎
@@ -180,7 +176,6 @@ describe("subagent hub", {
 			models,
 			undefined,
 			() => {},
-			"/tmp/test-cwd",
 		);
 
 		component.enterModelSelector(0);

@@ -33,15 +33,20 @@ function wrapText(text, width) {
   return lines;
 }
 
+// NOTE: this shim counts every code unit as one cell, so CJK/wide glyphs are
+// over-counted as width 1. The wide-Unicode test intentionally uses a single
+// character and validates the shim's behavior rather than a real grapheme width.
 export function visibleWidth(text) {
-  return String(text).replace(/\\x1b\\[[0-9;]*m/g, "").length;
+  return String(text).replace(/\x1b\[[0-9;]*m/g, "").length;
 }
 
-export function truncateToWidth(text, width) {
+export function truncateToWidth(text, width, ellipsis = "...") {
   if (typeof text !== "string") return "";
-  const stripped = text.replace(/\\x1b\\[[0-9;]*m/g, "");
+  const stripped = text.replace(/\x1b\[[0-9;]*m/g, "");
   if (stripped.length <= width) return text;
-  return stripped.slice(0, width);
+  const suffix = ellipsis ? String(ellipsis) : "";
+  const maxLen = Math.max(0, width - suffix.length);
+  return stripped.slice(0, maxLen) + suffix;
 }
 
 export function wrapTextWithAnsi(text, width) {
@@ -64,6 +69,8 @@ export class Text {
   constructor(text) {
     this.text = text;
   }
+  setText(text) { this.text = text; }
+  invalidate() {}
   render(width) {
     return wrapText(this.text, width);
   }
@@ -93,6 +100,14 @@ export class Container {
   }
   addChild(child) {
     this.children.push(child);
+  }
+  clear() {
+    this.children = [];
+  }
+  invalidate() {
+    for (const child of this.children) {
+      if (typeof child.invalidate === "function") child.invalidate();
+    }
   }
   render(width) {
     return this.children.flatMap((child) => child.render(width));

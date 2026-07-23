@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 let SubagentHubComponent: new (...args: unknown[]) => any | undefined;
 let available = false;
@@ -84,7 +85,6 @@ test("subagent-hub: agent navigation wraps from first to last on up", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	assert.equal(component.selectedAgentIndex, 0, "starts at first agent");
@@ -110,7 +110,6 @@ test("subagent-hub: agent navigation wraps from last to first on down", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.selectedAgentIndex = 2; // last
@@ -132,7 +131,6 @@ test("subagent-hub: no crash on empty agents list", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	const rendered = component.render(84).join("\n");
@@ -154,7 +152,6 @@ test("subagent-hub: enterModelSelector sets editingAgentIndex", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	assert.equal(component.editingAgentIndex, null);
@@ -174,7 +171,6 @@ test("subagent-hub: exitModelSelector clears editingAgentIndex", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -195,7 +191,6 @@ test("subagent-hub: enterModelSelector resets search query", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -221,7 +216,6 @@ test("subagent-hub: enterModelSelector resets modelSelectedIndex", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -244,7 +238,6 @@ test("subagent-hub: filterModels filters by provider", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -271,7 +264,6 @@ test("subagent-hub: filterModels filters by model id", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -294,7 +286,6 @@ test("subagent-hub: filterModels with no results", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -318,7 +309,6 @@ test("subagent-hub: filterModels resets selectedIndex if out of bounds", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -341,7 +331,6 @@ test("subagent-hub: model selector typing updates search query", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -364,7 +353,6 @@ test("subagent-hub: model selector typing accumulates multiple characters", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -387,7 +375,6 @@ test("subagent-hub: model selector typing ignores non-printable characters", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -415,7 +402,6 @@ test("subagent-hub: constructor handles unresolvable agent.model", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	// Constructor should not throw when agent.model doesn't match any available model
@@ -433,7 +419,6 @@ test("subagent-hub: resolveAgentEffectiveModel returns empty string when no mode
 		[],
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	const effectiveModel = (component as any).resolveAgentEffectiveModel(agents[0]);
@@ -452,7 +437,6 @@ test("subagent-hub: model selector with >10 models shows scroll indicators", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -479,7 +463,6 @@ test("subagent-hub: model selector current badge renders for matching model", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -503,7 +486,6 @@ test("subagent-hub: filterModels resets to full list when query is empty", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -531,7 +513,6 @@ test("subagent-hub: model selector typing with space character is accepted", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -554,7 +535,6 @@ test("subagent-hub: constructor pre-populates overrides from agent.model", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	// Constructor should not throw with a resolvable model config
@@ -573,10 +553,11 @@ test("subagent-hub: manually set override appears in main view", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.agentModelOverrides.set("worker", "anthropic/model-1");
+	// Mark as dirty so the ✎ indicator shows (matches the real UI edit path)
+	(component as any).dirtyAgents.add("worker");
 
 	const rendered = component.render(84).join("\n");
 	assert.match(rendered, /✎/);
@@ -595,7 +576,6 @@ test("subagent-hub: override persists after exitModelSelector", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -622,7 +602,6 @@ test("subagent-hub: model selector shows current model", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -645,7 +624,6 @@ test("subagent-hub: model selector lists all models", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -668,7 +646,6 @@ test("subagent-hub: empty models list shows no matching models", {
 		[],
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -699,7 +676,6 @@ test("subagent-hub: done callback receives overrides on esc (done)", {
 				done();
 			}
 		},
-		"/tmp",
 	);
 
 	component.agentModelOverrides.set("a", "openai/model-0");
@@ -732,7 +708,6 @@ test("subagent-hub: ctrl+c cancels with empty overrides map", {
 				done();
 			}
 		},
-		"/tmp",
 	);
 
 	// Cancel: ctrl+c discards all overrides (handleInput blocked by matchesKey shim)
@@ -756,7 +731,6 @@ test("subagent-hub: main view renders agent names", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	const rendered = component.render(84).join("\n");
@@ -780,7 +754,6 @@ test("subagent-hub: main view shows footer with key hints", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	const rendered = component.render(84).join("\n");
@@ -803,7 +776,6 @@ test("subagent-hub: selected agent shows indicator", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.selectedAgentIndex = 1;
@@ -813,7 +785,7 @@ test("subagent-hub: selected agent shows indicator", {
 	assert.match(rendered, /b/);
 });
 
-test("subagent-hub: agent name truncation in main view", {
+test("subagent-hub: main view respects width and includes long agent names", {
 	skip: !available,
 }, () => {
 	const agents = makeAgents(["this-is-a-very-long-agent-name-that-exceeds-limits"]);
@@ -825,15 +797,17 @@ test("subagent-hub: agent name truncation in main view", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	const rendered = component.render(84).join("\n");
 	const stripped = stripAnsi(rendered);
 
-	// Should contain truncated name (25 plain chars + ellipsis, no trailing codes)
-	// Verify name was truncated (name longer than 26 char display area ends with ellipsis)
-	assert.ok(stripped.includes("this-is-a-very-long-agent") && stripped.includes("…"));
+	assert.ok(stripped.includes("this-is-a-very-long-agent"), "long agent name should appear in render");
+	// Width invariant: no rendered line exceeds the available width
+	const lines = rendered.split("\n");
+	for (const line of lines) {
+		assert.ok(visibleWidth(line) <= 84, `line exceeds width 84: ${visibleWidth(line)}`);
+	}
 });
 
 // ── Model selector navigation ────────────────────────────────────────
@@ -850,7 +824,6 @@ test("subagent-hub: model selector up navigation wraps", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -876,7 +849,6 @@ test("subagent-hub: model selector down navigation wraps", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -892,7 +864,7 @@ test("subagent-hub: model selector down navigation wraps", {
 
 // ── Edge cases ────────────────────────────────────────────────────────
 
-test("subagent-hub: resolveAgentEffectiveModel returns first available when no model configured", {
+test("subagent-hub: resolveAgentEffectiveModel returns empty string when no model configured", {
 	skip: !available,
 }, () => {
 	const agents = makeAgents(["worker"]); // no model set
@@ -904,13 +876,12 @@ test("subagent-hub: resolveAgentEffectiveModel returns first available when no m
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	// Access private method via any
 	const effectiveModel = (component as any).resolveAgentEffectiveModel(agents[0]);
 	assert.ok(effectiveModel !== undefined);
-	assert.ok(effectiveModel.length > 0);
+	assert.equal(effectiveModel, "", "no model configured returns empty string");
 });
 
 test("subagent-hub: resolveAgentEffectiveModel returns agent.model when set", {
@@ -925,7 +896,6 @@ test("subagent-hub: resolveAgentEffectiveModel returns agent.model when set", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	const effectiveModel = (component as any).resolveAgentEffectiveModel(agents[0]);
@@ -944,7 +914,6 @@ test("subagent-hub: dispose and invalidate are no-ops", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	// Should not throw
@@ -966,11 +935,11 @@ test("subagent-hub: multiple agents with different override states", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
-	// Only set override for middle agent
 	component.agentModelOverrides.set("b", "anthropic/model-1");
+	// Mark as dirty so the ✎ indicator shows (matches the real UI edit path)
+	(component as any).dirtyAgents.add("b");
 
 	const rendered = component.render(84).join("\n");
 
@@ -991,7 +960,6 @@ test("subagent-hub: enterModelSelector for agent with existing override pre-sele
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	component.enterModelSelector(0);
@@ -1016,7 +984,6 @@ test("subagent-hub: seeds existing thinking config so a no-touch exit preserves 
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	// Configured agent is seeded; unconfigured agent stays absent (no thinking:"off" noise).
@@ -1041,7 +1008,6 @@ test("subagent-hub: separate thinking takes precedence over model suffix on no-t
 		(result: any) => {
 			receivedResult = result;
 		},
-		"/tmp",
 	);
 
 	assert.equal(component.agentThinkingOverrides.get("a"), "high");
@@ -1069,7 +1035,6 @@ test("subagent-hub: cycles only model-supported thinking levels", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	assert.equal(component.agentThinkingOverrides.has("a"), false, "starts unset/off");
@@ -1093,10 +1058,172 @@ test("subagent-hub: leaves off-only models on off when cycling thinking", {
 		models,
 		undefined,
 		() => {},
-		"/tmp",
 	);
 
 	assert.equal(component.agentThinkingOverrides.has("a"), false, "starts unset/off");
 	component.cycleThinkingLevel();
 	assert.equal(component.agentThinkingOverrides.has("a"), false, "off-only cycle stays unset/off");
+});
+
+// ── Phase 1: stable component tree, theme rebuild, width ───────────
+
+test("subagent-hub: repeated renders do not replace the active agent list", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b", "c"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84); // first render builds the list
+	const listBefore = (component as any).agentSelectList;
+	assert.ok(listBefore, "agent SelectList exists after first render");
+
+	component.render(84); // second render should NOT rebuild
+	const listAfter = (component as any).agentSelectList;
+	assert.strictEqual(listAfter, listBefore, "same SelectList instance across repeated renders");
+});
+
+test("subagent-hub: selection survives theme rebuild by identity", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b", "c"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.selectedAgentIndex = 1;
+	const renderBefore = component.render(84).join("\n");
+	assert.match(renderBefore, /b/, "agent b is visible before rebuild");
+
+	// Theme invalidation triggers a rebuild. A new SelectList instance is
+	// acceptable because pi-tui's SelectList has no setItems; the real contract
+	// is that the selected agent (by index and rendered content) is preserved.
+	component.invalidate();
+	const renderAfter = component.render(84).join("\n");
+	assert.equal(component.selectedAgentIndex, 1, "selection index preserved");
+	assert.match(renderAfter, /b/, "agent b still visible after rebuild");
+	const selectedBefore = renderBefore.split("\n").find((line) => line.includes("b")) ?? "";
+	const selectedAfter = renderAfter.split("\n").find((line) => line.includes("b")) ?? "";
+	assert.equal(stripAnsi(selectedBefore).trim(), stripAnsi(selectedAfter).trim(), "selected row content preserved");
+});
+
+test("subagent-hub: editing an agent updates the main list on re-render", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"], ["openai/model-1"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	const before = component.render(84).join("\n");
+	assert.ok(!before.includes("✎"), "no edit marker before change");
+	assert.ok(before.includes("thinking: off"), "initial thinking is off");
+
+	// Simulate the user cycling the thinking level for the selected agent.
+	component.cycleThinkingLevel();
+	const newThinking = component.agentThinkingOverrides.get("worker");
+	assert.ok(newThinking && newThinking !== "off", "thinking override changed to a non-off level");
+
+	const after = component.render(84).join("\n");
+	assert.ok(after.includes("✎"), "edit marker appears after change");
+	assert.ok(after.includes(`thinking: ${newThinking}`), "rendered thinking matches override");
+	assert.ok(!after.includes("thinking: off"), "old thinking display is gone");
+});
+
+test("subagent-hub: mutable theme produces new themed output after invalidate", {
+	skip: !available,
+}, () => {
+	let accentColor = "red";
+	const theme = {
+		fg(key: string, text: string) { return key === "accent" ? `[${accentColor}]${text}` : text; },
+		bold(text: string) { return text; },
+	};
+	const agents = makeAgents(["worker"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		theme as any,
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	const rendered1 = component.render(84).join("\n");
+	assert.match(rendered1, /\[red\]/, "first render uses red accent");
+
+	// Change the theme and invalidate
+	accentColor = "blue";
+	component.invalidate();
+	const rendered2 = component.render(84).join("\n");
+	assert.match(rendered2, /\[blue\]/, "after invalidate, render uses blue accent");
+	assert.doesNotMatch(rendered2, /\[red\]/, "stale red theme is gone after invalidate");
+});
+
+test("subagent-hub: width invariant holds at narrow and normal widths", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker", "planner", "oracle"]);
+	const models = makeModels(5);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	for (const width of [30, 60, 84, 100]) {
+		const lines = component.render(width);
+		for (const line of lines) {
+			assert.ok(visibleWidth(line) <= width, `width ${width}: line exceeds bounds (${visibleWidth(line)})`);
+		}
+	}
+});
+
+test("subagent-hub: width invariant holds for long names and wide unicode", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["this-is-a-very-long-agent-name-that-exceeds-normal-display-widths"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Render at a narrow width with content that includes a wide unicode char
+	component.enterModelSelector(0);
+	component.modelSearchQuery = "\u4e2d"; // CJK character 中
+	component.filterModels();
+
+	for (const width of [40, 60, 84]) {
+		const lines = component.render(width);
+		for (const line of lines) {
+			assert.ok(visibleWidth(line) <= width, `width ${width}: line exceeds bounds (${visibleWidth(line)})`);
+		}
+	}
 });

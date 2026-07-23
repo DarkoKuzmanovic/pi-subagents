@@ -20,6 +20,7 @@ export class Container {
 	children: any[];
 	addChild(child: any): void;
 	clear(): void;
+	invalidate(): void;
 	render(width: number): string[];
 }
 
