@@ -1948,3 +1948,598 @@ test("subagent-hub: non-empty query preserves fuzzy relevance order over provide
 		"fuzzy relevance order wins over alphabetical provider order",
 	);
 });
+
+// ── Phase 5: single/bulk reset + undo ──────────────────────────────
+
+test("subagent-hub: single reset stages a reset for persisted agent", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.selectedAgentIndex = 0;
+	component.render(84); // build main view
+	component.handleInput("x");
+
+	const st = componentState(component);
+	assert.ok(st.resetAgents.has("a"), "agent staged for reset");
+	assert.ok(!st.dirtyAgents.has("a"), "reset agent removed from dirty");
+});
+
+test("subagent-hub: single reset is a no-op on non-persisted agent", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a"]); // no override metadata
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("x");
+
+	const st = componentState(component);
+	assert.equal(st.resetAgents.size, 0, "non-persisted agent not staged for reset");
+});
+
+test("subagent-hub: undo restores exact prior state after single reset", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Setup: agent has a model override and a thinking override, and is dirty.
+	component.agentModelOverrides.set("a", "anthropic/model-1");
+	component.agentThinkingOverrides.set("a", "high");
+	componentState(component).dirtyAgents.add("a");
+
+	const modelBefore = component.agentModelOverrides.get("a");
+	const thinkingBefore = component.agentThinkingOverrides.get("a");
+	const wasDirtyBefore = componentState(component).dirtyAgents.has("a");
+
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("x");
+
+	// Reset should have cleared the maps.
+	assert.equal(component.agentModelOverrides.has("a"), false, "model cleared by reset");
+	assert.equal(component.agentThinkingOverrides.has("a"), false, "thinking cleared by reset");
+	assert.ok(componentState(component).resetAgents.has("a"), "agent in resetAgents");
+
+	// Undo.
+	component.handleInput("u");
+
+	assert.equal(component.agentModelOverrides.get("a"), modelBefore, "model restored by undo");
+	assert.equal(component.agentThinkingOverrides.get("a"), thinkingBefore, "thinking restored by undo");
+	assert.equal(componentState(component).dirtyAgents.has("a"), wasDirtyBefore, "dirty membership restored");
+	assert.ok(!componentState(component).resetAgents.has("a"), "reset removed by undo");
+});
+
+test("subagent-hub: undo can unwind multiple single resets in LIFO order", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a", "b"], ["openai/model-0", "openai/model-0"], [true, true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("x"); // reset agent a
+
+	component.selectedAgentIndex = 1;
+	component.handleInput("x"); // reset agent b
+
+	assert.equal(componentState(component).resetAgents.size, 2, "both agents reset");
+
+	// Undo last (agent b).
+	component.handleInput("u");
+	assert.ok(!componentState(component).resetAgents.has("b"), "agent b reset undone");
+	assert.ok(componentState(component).resetAgents.has("a"), "agent a still reset");
+
+	// Undo previous (agent a).
+	component.handleInput("u");
+	assert.ok(!componentState(component).resetAgents.has("a"), "agent a reset undone");
+});
+
+test("subagent-hub: undo when stack is empty is a no-op", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("u"); // no transactions
+
+	assert.ok(true, "undo on empty stack does not throw");
+});
+
+test("subagent-hub: bulk reset targets only persisted agents", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(
+		["persisted1", "persisted2", "plain"],
+		["openai/model-0", "openai/model-0", "openai/model-0"],
+		[true, true, false],
+	);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84); // build main view
+	component.handleInput("X"); // enter confirmation
+
+	const confirmRender = component.render(84).join("\n");
+	assert.match(stripAnsi(confirmRender), /Reset Overrides/, "confirmation view title shows");
+	assert.match(stripAnsi(confirmRender), /2 persisted/, "count reflects only persisted agents");
+});
+
+test("subagent-hub: bulk reset confirm stages resets for all persisted agents", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(
+		["p1", "p2", "plain"],
+		["openai/model-0", "openai/model-0", "openai/model-0"],
+		[true, true, false],
+	);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84);
+	component.handleInput("X"); // enter confirmation
+	component.render(84); // build confirmation view (creates SelectList)
+
+	// Simulate confirming "Reset".
+	const confirmList = (component as any).resetConfirmSelectList;
+	assert.ok(confirmList, "confirmation SelectList exists");
+	confirmList.onSelect({ value: "reset" });
+
+	const st = componentState(component);
+	assert.ok(st.resetAgents.has("p1"), "p1 staged for reset");
+	assert.ok(st.resetAgents.has("p2"), "p2 staged for reset");
+	assert.ok(!st.resetAgents.has("plain"), "plain agent NOT staged");
+	assert.equal((component as any).view, "main", "returns to main after confirm");
+
+
+test("subagent-hub: bulk reset with no persisted agents does not push undo transaction", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84);
+	component.handleInput("X");
+	component.render(84); // build confirmation view
+
+	const confirmList = (component as any).resetConfirmSelectList;
+	assert.ok(confirmList, "confirmation SelectList exists");
+	confirmList.onSelect({ value: "reset" });
+
+	assert.equal(componentState(component).resetAgents.size, 0, "no agents staged");
+	assert.equal((component as any).undoStack.length, 0, "no undo transaction pushed");
+	assert.equal((component as any).view, "main", "returns to main");
+
+	const rendered = component.render(84).join("\n");
+	assert.doesNotMatch(stripAnsi(rendered), /\bundo\b/, "undo hint not shown in footer");
+});
+});
+
+test("subagent-hub: bulk reset cancel returns without resetting", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["p1"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84);
+	component.handleInput("X"); // enter confirmation
+	component.render(84); // build confirmation view
+
+	// Simulate selecting "Cancel".
+	const confirmList = (component as any).resetConfirmSelectList;
+	confirmList.onSelect({ value: "cancel" });
+
+	const st = componentState(component);
+	assert.equal(st.resetAgents.size, 0, "no agents staged after cancel");
+	assert.equal((component as any).view, "main", "returns to main after cancel");
+});
+
+test("subagent-hub: bulk reset cancel via escape returns without resetting", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["p1"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84);
+	component.handleInput("X"); // enter confirmation
+	component.handleInput("\x1b"); // escape
+
+	const st = componentState(component);
+	assert.equal(st.resetAgents.size, 0, "no agents staged after escape");
+	assert.equal((component as any).view, "main", "returns to main after escape");
+});
+
+test("subagent-hub: bulk reset clears conflicting session edits", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["p1"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Setup: dirty model + thinking override.
+	component.agentModelOverrides.set("p1", "anthropic/model-1");
+	component.agentThinkingOverrides.set("p1", "high");
+	componentState(component).dirtyAgents.add("p1");
+
+	component.render(84);
+	component.handleInput("X"); // enter confirmation
+	component.render(84); // build confirmation view
+	(component as any).resetConfirmSelectList.onSelect({ value: "reset" });
+
+	assert.equal(component.agentModelOverrides.has("p1"), false, "model override cleared");
+	assert.equal(component.agentThinkingOverrides.has("p1"), false, "thinking override cleared");
+	assert.ok(!componentState(component).dirtyAgents.has("p1"), "agent removed from dirty");
+	assert.ok(componentState(component).resetAgents.has("p1"), "agent in resetAgents");
+});
+
+test("subagent-hub: undo of bulk transaction restores all targeted agents", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(
+		["p1", "p2"],
+		["openai/model-0", "openai/model-0"],
+		[true, true],
+	);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Setup: dirty edits on both.
+	component.agentModelOverrides.set("p1", "anthropic/model-1");
+	component.agentThinkingOverrides.set("p1", "high");
+	componentState(component).dirtyAgents.add("p1");
+	component.agentModelOverrides.set("p2", "google/model-2");
+	componentState(component).dirtyAgents.add("p2");
+
+	component.render(84);
+	component.handleInput("X");
+	component.render(84); // build confirmation view
+	(component as any).resetConfirmSelectList.onSelect({ value: "reset" });
+
+	// Both should be cleared and in resetAgents.
+	assert.equal(component.agentModelOverrides.has("p1"), false, "p1 model cleared");
+	assert.equal(component.agentModelOverrides.has("p2"), false, "p2 model cleared");
+
+	// Undo the bulk transaction.
+	component.handleInput("u");
+
+	assert.equal(component.agentModelOverrides.get("p1"), "anthropic/model-1", "p1 model restored");
+	assert.equal(component.agentThinkingOverrides.get("p1"), "high", "p1 thinking restored");
+	assert.ok(componentState(component).dirtyAgents.has("p1"), "p1 dirty restored");
+	assert.equal(component.agentModelOverrides.get("p2"), "google/model-2", "p2 model restored");
+	assert.ok(componentState(component).dirtyAgents.has("p2"), "p2 dirty restored");
+	assert.ok(!componentState(component).resetAgents.has("p1"), "p1 reset removed");
+	assert.ok(!componentState(component).resetAgents.has("p2"), "p2 reset removed");
+});
+
+test("subagent-hub: edit after reset removes agent from resetAgents (edit wins)", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Stage a reset.
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("x");
+	assert.ok(componentState(component).resetAgents.has("a"), "agent staged for reset");
+
+	// Now cycle thinking (edit path) — should remove from resetAgents.
+	component.cycleThinkingLevel();
+	assert.ok(!componentState(component).resetAgents.has("a"), "edit removes from resetAgents");
+	assert.ok(componentState(component).dirtyAgents.has("a"), "agent is now dirty");
+});
+
+
+test("subagent-hub: model edit after reset removes agent from resetAgents (edit wins)", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Stage a reset on the persisted agent.
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("x");
+	assert.ok(componentState(component).resetAgents.has("a"), "agent staged for reset");
+
+	// Enter model selector and pick a different model (model-path edit wins).
+	component.enterModelSelector(0);
+	component.render(84); // build modelSelectList
+	const modelList = (component as any).modelSelectList;
+	assert.ok(modelList, "model SelectList exists");
+	modelList.onSelect({ value: "anthropic/model-1" });
+
+	assert.ok(!componentState(component).resetAgents.has("a"), "model edit removes agent from resetAgents");
+	assert.ok(componentState(component).dirtyAgents.has("a"), "agent is now dirty");
+	assert.equal(component.agentModelOverrides.get("a"), "anthropic/model-1", "model override recorded");
+});
+
+test("subagent-hub: reset after edit removes agent from dirty maps (reset wins)", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Setup: dirty model + thinking override.
+	component.agentModelOverrides.set("a", "anthropic/model-1");
+	component.agentThinkingOverrides.set("a", "high");
+	componentState(component).dirtyAgents.add("a");
+
+	// Reset (reset wins over edit).
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("x");
+
+	assert.equal(component.agentModelOverrides.has("a"), false, "model override cleared by reset");
+	assert.equal(component.agentThinkingOverrides.has("a"), false, "thinking override cleared by reset");
+	assert.ok(!componentState(component).dirtyAgents.has("a"), "agent removed from dirty");
+	assert.ok(componentState(component).resetAgents.has("a"), "agent in resetAgents");
+});
+
+test("subagent-hub: reset then ctrl+c discards everything", {
+	skip: !available,
+}, (t, done) => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	let testDone = false;
+
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		(result: any) => {
+			if (!testDone) {
+				testDone = true;
+				assert.ok(result.overrides instanceof Map);
+				assert.equal(result.overrides.size, 0, "ctrl+c discards all overrides");
+				assert.equal(result.resetAgents, undefined, "ctrl+c discards staged resets");
+				done();
+			}
+		},
+	);
+
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("x"); // stage reset
+	component.handleInput("\x03"); // ctrl+c
+}, { timeout: 2000 });
+
+test("subagent-hub: done via esc includes staged resets in result", {
+	skip: !available,
+}, (t, done) => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	let testDone = false;
+
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		(result: any) => {
+			if (!testDone) {
+				testDone = true;
+				assert.ok(result.overrides instanceof Map, "overrides is a Map");
+				assert.equal(result.overrides.size, 0, "no dirty overrides (only reset staged)");
+				assert.ok(result.resetAgents, "resetAgents present in result");
+				assert.ok(result.resetAgents.has("a"), "agent a in resetAgents");
+				done();
+			}
+		},
+	);
+
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("x"); // stage reset
+	component.handleInput("\x1b"); // esc = done
+}, { timeout: 2000 });
+
+test("subagent-hub: done via esc includes both dirty and reset agents", {
+	skip: !available,
+}, (t, done) => {
+	const agents = makeAgentsWithOverride(["a", "b"], ["openai/model-0", "openai/model-0"], [true, false]);
+	const models = makeModels(3);
+	let testDone = false;
+
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		(result: any) => {
+			if (!testDone) {
+				testDone = true;
+				assert.equal(result.overrides.size, 1, "one dirty override (agent b)");
+				assert.equal(result.overrides.get("b"), "anthropic/model-1", "agent b override");
+				assert.ok(result.resetAgents, "resetAgents present");
+				assert.ok(result.resetAgents.has("a"), "agent a staged for reset");
+				assert.ok(!result.resetAgents.has("b"), "agent b is dirty, not reset");
+				done();
+			}
+		},
+	);
+
+	// Agent b: dirty edit.
+	component.agentModelOverrides.set("b", "anthropic/model-1");
+	componentState(component).dirtyAgents.add("b");
+	// Agent a: stage reset.
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("x");
+	// Exit with esc.
+	component.handleInput("\x1b");
+}, { timeout: 2000 });
+
+test("subagent-hub: footer shows undo hint when undo stack is non-empty", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84);
+	const beforeReset = stripAnsi(component.render(84).join("\n"));
+	assert.ok(!beforeReset.includes("undo"), "no undo hint before any reset");
+
+	component.selectedAgentIndex = 0;
+	component.handleInput("x");
+	const afterReset = stripAnsi(component.render(84).join("\n"));
+	assert.match(afterReset, /undo/, "undo hint appears after reset");
+});
+
+test("subagent-hub: reset-confirm view width invariant holds", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a", "b"], ["openai/model-0", "openai/model-0"], [true, true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84);
+	component.handleInput("X"); // enter confirmation
+
+	for (const width of [30, 60, 84]) {
+		const lines = component.render(width);
+		for (const line of lines) {
+			assert.ok(visibleWidth(line) <= width, `width ${width}: line exceeds bounds (${visibleWidth(line)})`);
+		}
+	}
+});

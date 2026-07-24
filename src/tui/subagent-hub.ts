@@ -14,8 +14,22 @@ export interface SubagentHubResult {
 	resetAgents?: Set<string>; // agent names whose overrides should be removed
 }
 
+/** Snapshot of one agent's prior state, captured before a reset for undo. */
+interface ResetSnapshot {
+	agentName: string;
+	modelOverride: string | undefined;     // prior map value; undefined = entry was absent
+	thinkingOverride: string | undefined;  // prior map value; undefined = entry was absent
+	wasDirty: boolean;
+	wasReset: boolean;
+}
+
+/** A single undo transaction: one single-reset or one confirmed bulk-reset. */
+interface ResetTransaction {
+	snapshots: ResetSnapshot[];
+}
+
 /** Discriminated view state — each phase adds cases as needed. */
-type HubView = "main" | "model" | "thinking";
+type HubView = "main" | "model" | "thinking" | "reset-confirm";
 
 export class SubagentHubComponent implements Component {
 	private readonly MODEL_SELECTOR_HEIGHT = 10;
@@ -92,11 +106,15 @@ export class SubagentHubComponent implements Component {
 	private dirtyAgents = new Set<string>();
 	private resetAgents = new Set<string>();
 
+	/** Undo stack: each x (single) or confirmed X (bulk) pushes one transaction. u pops LIFO. */
+	private undoStack: ResetTransaction[] = [];
+
 	// SelectList instances are created per main-view rebuild because pi-tui's SelectList has no setItems();
 	// selection is restored by index after each rebuild. They are reused only for navigation within a stable view.
 	private agentSelectList: SelectList | null = null;
 	private modelSelectList: SelectList | null = null;
 	private thinkingSelectList: SettingsList | null = null;
+	private resetConfirmSelectList: SelectList | null = null;
 
 	// Active container tree — rebuilt only on view/data/theme transitions.
 	private activeContainer: Container | null = null;
@@ -130,6 +148,7 @@ export class SubagentHubComponent implements Component {
 		this.agentSelectList?.invalidate();
 		this.modelSelectList?.invalidate();
 		this.thinkingSelectList?.invalidate();
+		this.resetConfirmSelectList?.invalidate();
 	}
 
 	render(width: number): string[] {
@@ -138,6 +157,8 @@ export class SubagentHubComponent implements Component {
 				this.activeContainer = this.buildModelSelectorView();
 			} else if (this.view === "thinking") {
 				this.activeContainer = this.buildThinkingView();
+			} else if (this.view === "reset-confirm") {
+				this.activeContainer = this.buildResetConfirmView();
 			} else {
 				this.activeContainer = this.buildMainView();
 			}
@@ -166,14 +187,19 @@ export class SubagentHubComponent implements Component {
 			return;
 		}
 
-		// Agent list: delegate navigation/selection to SelectList
+		if (this.view === "reset-confirm") {
+			this.handleResetConfirmInput(data);
+			return;
+		}
+
+		// Main view: delegate navigation/selection to SelectList
 		if (this.agentSelectList) {
 			// ctrl+c = hard cancel (discard all overrides)
 			if (matchesKey(data, "ctrl+c")) {
 				this.done({ overrides: new Map() });
 				return;
 			}
-			// esc = done (apply only dirty overrides)
+			// esc = done (apply only dirty overrides + staged resets)
 			if (matchesKey(data, "escape")) {
 				this.done(this.buildDirtyResult());
 				return;
@@ -182,8 +208,17 @@ export class SubagentHubComponent implements Component {
 				this.enterThinkingView();
 				return;
 			}
-			if (data === "x" || data === "X") {
+			if (data === "x") {
 				this.resetSelectedAgent();
+				this.tui.requestRender();
+				return;
+			}
+			if (data === "X") {
+				this.enterResetConfirmView();
+				return;
+			}
+			if (data === "u") {
+				this.undoLastReset();
 				this.tui.requestRender();
 				return;
 			}
@@ -265,6 +300,28 @@ export class SubagentHubComponent implements Component {
 		}
 	}
 
+	/** Handle input when in reset-confirm view (public for testability) */
+	handleResetConfirmInput(data: string): void {
+		// ctrl+c = hard cancel everything (discard all overrides, close hub)
+		if (matchesKey(data, "ctrl+c")) {
+			this.done({ overrides: new Map() });
+			return;
+		}
+
+		// esc = cancel confirmation, return to main WITHOUT resetting
+		if (matchesKey(data, "escape")) {
+			this.exitResetConfirmView();
+			return;
+		}
+
+		// Everything else goes to the confirmation SelectList
+		if (this.resetConfirmSelectList) {
+			this.resetConfirmSelectList.handleInput(data);
+			this.tui.requestRender();
+			return;
+		}
+	}
+
 	// ── View builders ──────────────────────────────────────────
 
 	private buildMainView(): Container {
@@ -335,7 +392,8 @@ export class SubagentHubComponent implements Component {
 
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(
-			this.formatFooter("↑↓", "navigate", "enter", "model", "tab", "thinking", "x", "reset"),
+			this.formatFooter("↑↓", "navigate", "enter", "model", "tab", "thinking", "x", "reset", "X", "bulk")
+				+ (this.undoStack.length > 0 ? th.fg("dim", " • ") + rawKeyHint("u", "undo") : ""),
 			1, 0,
 		));
 		container.addChild(new Text(
@@ -417,6 +475,9 @@ export class SubagentHubComponent implements Component {
 					const suffix = supportedLevels.some((level) => level === requestedLevel) ? thinkingSuffix : "";
 					this.agentModelOverrides.set(selectedAgent.name, `${item.value}${suffix}`);
 					this.dirtyAgents.add(selectedAgent.name);
+
+					// Edit wins over reset: remove from pending resets.
+					this.resetAgents.delete(selectedAgent.name);
 
 					// Clamp the separate thinking override if the new model doesn't support it
 					const currentThinking = this.agentThinkingOverrides.get(selectedAgent.name);
@@ -662,12 +723,22 @@ export class SubagentHubComponent implements Component {
 		this.tui.requestRender();
 	}
 
-	/** Reset the selected agent's override back to its base config */
+	/** Reset the selected agent's persisted override, staging a reversible transaction. */
 	private resetSelectedAgent(): void {
 		const agent = this.agents[this.selectedAgentIndex];
 		if (!agent) return;
 		// Only meaningful for agents that actually have a persisted override
 		if (!agent.override) return;
+		// Capture prior state for undo before mutating.
+		const snapshot: ResetSnapshot = {
+			agentName: agent.name,
+			modelOverride: this.agentModelOverrides.get(agent.name),
+			thinkingOverride: this.agentThinkingOverrides.get(agent.name),
+			wasDirty: this.dirtyAgents.has(agent.name),
+			wasReset: this.resetAgents.has(agent.name),
+		};
+		this.undoStack.push({ snapshots: [snapshot] });
+		// Clear conflicting session edits (reset wins over edit).
 		this.agentModelOverrides.delete(agent.name);
 		this.agentThinkingOverrides.delete(agent.name);
 		this.dirtyAgents.delete(agent.name);
@@ -727,6 +798,127 @@ export class SubagentHubComponent implements Component {
 		this.thinkingSelectList = null;
 		this.invalidate();
 		this.tui.requestRender();
+	}
+
+	// ── Bulk reset + undo (Phase 5) ───────────────────────────
+
+	/** Enter the reset-confirm view with a Pi-framed SelectList (test seam; X from main opens this). */
+	enterResetConfirmView(): void {
+		this.view = "reset-confirm";
+		this.resetConfirmSelectList = null;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** Exit the reset-confirm view and return to main WITHOUT resetting (test seam). */
+	exitResetConfirmView(): void {
+		this.view = "main";
+		this.resetConfirmSelectList = null;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** Build the reset-confirmation view: a SelectList with two options. */
+	private buildResetConfirmView(): Container {
+		const th = this.theme;
+		const container = new Container();
+
+		const targetAgents = this.agents.filter((a) => a.override !== undefined);
+		const count = targetAgents.length;
+
+		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
+		container.addChild(new Text(
+			th.fg("accent", th.bold(` Reset Overrides`)) + th.fg("dim", ` — ${count} persisted agent${count === 1 ? "" : "s"}`),
+			1, 0,
+		));
+		container.addChild(new Spacer(1));
+
+		const items: SelectItem[] = [
+			{ value: "reset", label: `Reset ${count} persisted override${count === 1 ? "" : "s"}`, description: "stage for removal on exit" },
+			{ value: "cancel", label: "Cancel", description: "return without resetting" },
+		];
+		const selectTheme = this.getSelectListTheme();
+		this.resetConfirmSelectList = new SelectList(items, 2, selectTheme);
+		this.resetConfirmSelectList.setSelectedIndex(1); // default to Cancel for safety
+
+		this.resetConfirmSelectList.onSelect = (item: SelectItem) => {
+			if (item.value === "reset") {
+				this.performBulkReset();
+			} else {
+				this.exitResetConfirmView();
+			}
+		};
+
+		this.resetConfirmSelectList.onCancel = () => {
+			this.exitResetConfirmView();
+		};
+
+		container.addChild(this.resetConfirmSelectList);
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(
+			this.formatFooter("↑↓", "navigate", "enter", "confirm") + th.fg("dim", " • ") + this.formatFooter("esc", "back", "ctrl+c", "cancel"),
+			1, 0,
+		));
+		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
+
+		return container;
+	}
+
+	/** Stage a bulk reset for all agents with persisted override metadata. Pushes one undo transaction if there are targets. */
+	private performBulkReset(): void {
+		const targetAgents = this.agents.filter((a) => a.override !== undefined);
+		if (targetAgents.length === 0) {
+			this.exitResetConfirmView();
+			return;
+		}
+		const snapshots: ResetSnapshot[] = targetAgents.map((agent) => ({
+			agentName: agent.name,
+			modelOverride: this.agentModelOverrides.get(agent.name),
+			thinkingOverride: this.agentThinkingOverrides.get(agent.name),
+			wasDirty: this.dirtyAgents.has(agent.name),
+			wasReset: this.resetAgents.has(agent.name),
+		}));
+		this.undoStack.push({ snapshots });
+		for (const agent of targetAgents) {
+			// Clear conflicting session edits (reset wins over edit).
+			this.agentModelOverrides.delete(agent.name);
+			this.agentThinkingOverrides.delete(agent.name);
+			this.dirtyAgents.delete(agent.name);
+			this.resetAgents.add(agent.name);
+		}
+		this.exitResetConfirmView();
+	}
+
+	/** Undo the most recent reset transaction (LIFO). Restores exact prior state. */
+	private undoLastReset(): void {
+		const transaction = this.undoStack.pop();
+		if (!transaction) return;
+		for (const snap of transaction.snapshots) {
+			// Restore model override map entry.
+			if (snap.modelOverride !== undefined) {
+				this.agentModelOverrides.set(snap.agentName, snap.modelOverride);
+			} else {
+				this.agentModelOverrides.delete(snap.agentName);
+			}
+			// Restore thinking override map entry.
+			if (snap.thinkingOverride !== undefined) {
+				this.agentThinkingOverrides.set(snap.agentName, snap.thinkingOverride);
+			} else {
+				this.agentThinkingOverrides.delete(snap.agentName);
+			}
+			// Restore dirty/reset membership.
+			if (snap.wasDirty) {
+				this.dirtyAgents.add(snap.agentName);
+			} else {
+				this.dirtyAgents.delete(snap.agentName);
+			}
+			if (snap.wasReset) {
+				this.resetAgents.add(snap.agentName);
+			} else {
+				this.resetAgents.delete(snap.agentName);
+			}
+		}
+		this.invalidate();
 	}
 
 	/** Filter models based on search query using fuzzy matching. */

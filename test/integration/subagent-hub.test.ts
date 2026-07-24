@@ -333,4 +333,104 @@ describe("subagent hub", {
 		assert.match(findPlainRow(rendered, "edited"), /thinking: inherit/, "unset thinking shown as inherit");
 		assert.match(stripped, /● persisted · ✎ edited · ↺ reset/, "marker legend visible");
 	});
+
+	it("opens reset confirmation via X and cancels back to main", () => {
+		const agents = makeAgents(["p1", "p2"], [true, true]);
+		const models = makeModels(3);
+		const component = new SubagentHubComponent!(
+			{ requestRender() {} },
+			makeTheme(),
+			agents,
+			models,
+			undefined,
+			() => {},
+		);
+
+		component.render(84); // build main view
+		component.handleInput("X"); // enter confirmation
+
+		const confirmRender = component.render(84).join("\n");
+		const stripped = stripAnsi(confirmRender);
+		assert.match(stripped, /Reset Overrides/, "confirmation title shows");
+		assert.match(stripped, /2 persisted/, "count reflects persisted agents only");
+		assert.match(stripped, /Cancel/, "Cancel option visible");
+
+		// Escape cancels back to main.
+		component.handleInput("\x1b");
+		const mainRender = component.render(84).join("\n");
+		assert.match(stripAnsi(mainRender), /Subagent Models/, "back to main view");
+		assert.doesNotMatch(stripAnsi(mainRender), /Reset Overrides/, "confirmation view gone");
+	});
+
+	it("bulk reset confirm stages resets and shows reset markers", () => {
+		const agents = makeAgents(["p1", "p2", "plain"], [true, true, false]);
+		const models = makeModels(3);
+		const component = new SubagentHubComponent!(
+			{ requestRender() {} },
+			makeTheme(),
+			agents,
+			models,
+			undefined,
+			() => {},
+		);
+
+		component.render(84); // build main view
+		component.handleInput("X"); // enter confirmation
+		component.render(84); // build confirmation view
+
+		// Confirm reset.
+		(component as any).resetConfirmSelectList.onSelect({ value: "reset" });
+
+		const mainRender = component.render(84).join("\n");
+		const stripped = stripAnsi(mainRender);
+		assert.match(stripped, /Subagent Models/, "back to main view");
+		assert.match(stripped, /2 modified/, "header shows 2 modified agents");
+		assert.match(findPlainRow(mainRender, "p1"), /↺/, "p1 shows reset marker");
+		assert.match(findPlainRow(mainRender, "p2"), /↺/, "p2 shows reset marker");
+		assert.doesNotMatch(findPlainRow(mainRender, "plain"), /↺/, "plain agent has no reset marker");
+	});
+
+	it("single reset then undo restores prior state in render", () => {
+		const agents = makeAgents(["p1"], [true]);
+		const models = makeModels(3);
+		const component = new SubagentHubComponent!(
+			{ requestRender() {} },
+			makeTheme(),
+			agents,
+			models,
+			undefined,
+			() => {},
+		);
+
+		component.render(84);
+		component.handleInput("x"); // stage single reset
+		const resetRender = component.render(84).join("\n");
+		assert.match(findPlainRow(resetRender, "p1"), /↺/, "reset marker after single reset");
+
+		component.handleInput("u"); // undo
+		const undoneRender = component.render(84).join("\n");
+		assert.doesNotMatch(findPlainRow(undoneRender, "p1"), /↺/, "reset marker gone after undo");
+	});
+
+	it("reset then esc exits with staged resets in result", () => {
+		const agents = makeAgents(["p1"], [true]);
+		const models = makeModels(3);
+		let receivedResult: any = null;
+		const component = new SubagentHubComponent!(
+			{ requestRender() {} },
+			makeTheme(),
+			agents,
+			models,
+			undefined,
+			(result: any) => { receivedResult = result; },
+		);
+
+		component.render(84);
+		component.handleInput("x"); // stage reset
+		component.handleInput("\x1b"); // esc = done
+
+		assert.ok(receivedResult, "result received on esc");
+		assert.ok(receivedResult.resetAgents, "resetAgents present");
+		assert.ok(receivedResult.resetAgents.has("p1"), "p1 in resetAgents");
+	});
 });
