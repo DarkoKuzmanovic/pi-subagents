@@ -35,7 +35,7 @@ function makeModels(count: number): { provider: string; id: string; fullId: stri
 	return models;
 }
 
-function makeAgents(names: string[]): {
+function makeAgents(names: string[], overrides?: boolean[]): {
 	name: string;
 	description: string;
 	systemPrompt: string;
@@ -44,8 +44,9 @@ function makeAgents(names: string[]): {
 	inheritSkills: boolean;
 	source: string;
 	filePath: string;
+	override?: unknown;
 }[] {
-	return names.map((name) => ({
+	return names.map((name, i) => ({
 		name,
 		description: `Test agent: ${name}`,
 		systemPrompt: "",
@@ -54,7 +55,16 @@ function makeAgents(names: string[]): {
 		inheritSkills: false,
 		source: "user",
 		filePath: `${name}.md`,
+		override: overrides?.[i] ? { model: "openai/model-0" } : undefined,
 	}));
+}
+
+function findPlainRow(rendered: string, name: string): string {
+	return stripAnsi(rendered.split("\n").find((line) => {
+		const stripped = stripAnsi(line);
+		const re = new RegExp(`(^|[^\\w-])${name}([^\\w-]|$)`);
+		return re.test(stripped);
+	}) ?? "");
 }
 
 describe("subagent hub", {
@@ -271,5 +281,56 @@ describe("subagent hub", {
 		component.handleInput("\x1b");
 		const mainRender = component.render(84).join("\n");
 		assert.match(stripAnsi(mainRender), /Subagent Models/, "back to main view");
+	});
+
+	it("renders main and model views within width at 60, 84, and 100 columns", () => {
+		const agents = makeAgents(["worker", "planner", "oracle"]);
+		const models = makeModels(12);
+		const component = new SubagentHubComponent!(
+			{ requestRender() {} },
+			makeTheme(),
+			agents,
+			models,
+			"openai",
+			() => {},
+		);
+
+		for (const width of [60, 84, 100]) {
+			const mainLines = component.render(width);
+			for (const line of mainLines) {
+				assert.ok(stripAnsi(line).length <= width, `main width ${width}: line exceeds bounds`);
+			}
+		}
+
+		component.enterModelSelector(0);
+		for (const width of [60, 84, 100]) {
+			const modelLines = component.render(width);
+			for (const line of modelLines) {
+				assert.ok(stripAnsi(line).length <= width, `model width ${width}: line exceeds bounds`);
+			}
+		}
+	});
+
+	it("main view displays markers, counts, and inherit thinking in plain text", () => {
+		const agents = makeAgents(["persisted", "edited"], [true, false]);
+		const models = makeModels(3);
+		const component = new SubagentHubComponent!(
+			{ requestRender() {} },
+			makeTheme(),
+			agents,
+			models,
+			undefined,
+			() => {},
+		);
+
+		(component as any).dirtyAgents.add("edited");
+		const rendered = component.render(84).join("\n");
+		const stripped = stripAnsi(rendered);
+
+		assert.match(stripped, /Subagent Models \(2 agents · 1 modified\)/, "header count visible");
+		assert.match(findPlainRow(rendered, "persisted"), /●/, "persisted marker visible");
+		assert.match(findPlainRow(rendered, "edited"), /✎/, "edit marker visible");
+		assert.match(findPlainRow(rendered, "edited"), /thinking: inherit/, "unset thinking shown as inherit");
+		assert.match(stripped, /● persisted · ✎ edited · ↺ reset/, "marker legend visible");
 	});
 });

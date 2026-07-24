@@ -3,7 +3,7 @@ import { DynamicBorder, getSettingsListTheme, rawKeyHint } from "@earendil-works
 import type { Component, SelectItem, SettingItem, TUI } from "@earendil-works/pi-tui";
 import { Container, SelectList, SettingsList, Spacer, Text, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../agents/agents.ts";
-import { findModelInfo, getSupportedThinkingLevels, splitKnownThinkingSuffix, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
+import { findModelInfo, getSupportedThinkingLevels, splitKnownThinkingSuffix, THINKING_LEVELS, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
 import {
 	resolveModelCandidate,
 } from "../runs/shared/model-fallback.ts";
@@ -272,7 +272,8 @@ export class SubagentHubComponent implements Component {
 		const container = new Container();
 
 		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
-		container.addChild(new Text(th.fg("accent", th.bold(" Subagent Models")), 1, 0));
+		const modifiedCount = new Set([...this.dirtyAgents, ...this.resetAgents]).size;
+		container.addChild(new Text(th.fg("accent", th.bold(` Subagent Models (${this.agents.length} agents · ${modifiedCount} modified)`)), 1, 0));
 		container.addChild(new Spacer(1));
 
 		if (this.agents.length === 0) {
@@ -290,17 +291,12 @@ export class SubagentHubComponent implements Component {
 			const override = this.agentModelOverrides.get(agent.name);
 			const effectiveModel = override ?? this.resolveAgentEffectiveModel(agent);
 			const { baseModel } = splitKnownThinkingSuffix(effectiveModel);
-			const overriddenThinking = this.agentThinkingOverrides.get(agent.name);
-			const effectiveThinking = overriddenThinking ?? agent.thinking ?? "";
-			const thinkingDisplay = effectiveThinking && effectiveThinking !== "off" ? effectiveThinking : "off";
+			const thinking = this.formatThinkingDisplay(agent, effectiveModel);
 			const modelDisplay = baseModel || "(host default)";
-			// Show ✎ only for agents with a persisted settings override or edited this session
-			const hasOverride = agent.override !== undefined || this.dirtyAgents.has(agent.name);
+			const markers = this.formatAgentMarkers(agent);
 			const fallbackCount = agent.fallbackModels?.length ?? 0;
 			const fallbackTag = fallbackCount > 0 ? `  +${fallbackCount} fallback${fallbackCount > 1 ? "s" : ""}` : "";
-			const desc = hasOverride
-				? `${modelDisplay} ✎  ·  thinking: ${thinkingDisplay}${fallbackTag}`
-				: `${modelDisplay}  ·  thinking: ${thinkingDisplay}${fallbackTag}`;
+			const desc = `${modelDisplay}${markers ? `  ${markers}` : ""}  ·  ${th.fg("dim", "thinking:")} ${th.fg(thinking.colorKey, thinking.text)}${fallbackTag}`;
 			return {
 				value: agent.name,
 				label: agent.name,
@@ -339,7 +335,11 @@ export class SubagentHubComponent implements Component {
 
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(
-			this.formatFooter("↑↓", "navigate", "enter", "model", "tab", "thinking", "x", "reset", "esc", "done", "ctrl+c", "cancel"),
+			this.formatFooter("↑↓", "navigate", "enter", "model", "tab", "thinking", "x", "reset"),
+			1, 0,
+		));
+		container.addChild(new Text(
+			this.formatFooter("esc", "done", "ctrl+c", "cancel") + th.fg("dim", " · ") + this.formatMarkerLegend(),
 			1, 0,
 		));
 		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
@@ -366,7 +366,12 @@ export class SubagentHubComponent implements Component {
 			? (this.agentModelOverrides.get(agent.name) ??
 					this.resolveAgentEffectiveModel(agent))
 			: "";
-		container.addChild(new Text(th.fg("dim", " Current: ") + th.fg("warning", currentModel), 1, 0));
+		const { baseModel: currentBase } = splitKnownThinkingSuffix(currentModel);
+		const currentThinking = agent ? this.formatThinkingDisplay(agent, currentModel) : { text: "inherit", colorKey: "dim" };
+		container.addChild(new Text(
+			th.fg("dim", " Current: ") + th.fg("warning", currentBase || "(host default)") + th.fg("dim", " · thinking: ") + th.fg(currentThinking.colorKey, currentThinking.text),
+			1, 0,
+		));
 		container.addChild(new Spacer(1));
 
 		if (this.filteredModels.length === 0) {
@@ -378,7 +383,9 @@ export class SubagentHubComponent implements Component {
 				const isCurrent =
 					model.fullId === baseModel ||
 					model.id === baseModel;
-				const desc = `[${model.provider}]${isCurrent ? " current" : ""}`;
+				const supported = getSupportedThinkingLevels(model);
+				const levelsText = supported.length > 0 ? ` · ${supported.join("/")}` : "";
+				const desc = `[${model.provider}]${isCurrent ? " current" : ""}${levelsText}`;
 				return {
 					value: model.fullId,
 					label: model.id,
@@ -433,7 +440,11 @@ export class SubagentHubComponent implements Component {
 
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(
-			this.formatFooter(...(this.filteredModels.length > 0 ? ["enter", "select"] : []), "esc", "back", "ctrl+c", "cancel", "type", "search"),
+			this.formatFooter(...(this.filteredModels.length > 0 ? ["enter", "select"] : []), "type", "search"),
+			1, 0,
+		));
+		container.addChild(new Text(
+			this.formatFooter("esc", "back", "ctrl+c", "cancel"),
 			1, 0,
 		));
 		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
@@ -484,7 +495,11 @@ export class SubagentHubComponent implements Component {
 		container.addChild(this.thinkingSelectList);
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(
-			this.formatFooter("\u2191\u2193", "navigate", "enter", "cycle", "type", "search", "esc", "back", "ctrl+c", "cancel"),
+			this.formatFooter("\u2191\u2193", "navigate", "enter", "cycle", "type", "search"),
+			1, 0,
+		));
+		container.addChild(new Text(
+			this.formatFooter("esc", "back", "ctrl+c", "cancel"),
 			1, 0,
 		));
 		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
@@ -506,6 +521,68 @@ export class SubagentHubComponent implements Component {
 			hints.push(rawKeyHint(key, desc));
 		}
 		return hints.join(separator);
+	}
+
+	// ── Display helpers ────────────────────────────────────────
+
+	/** Map a ThinkingLevel to its Pi theme color key. Exhaustive switch. */
+	private thinkingColorKey(level: ThinkingLevel): "thinkingOff" | "thinkingMinimal" | "thinkingLow" | "thinkingMedium" | "thinkingHigh" | "thinkingXhigh" | "thinkingMax" {
+		switch (level) {
+			case "off": return "thinkingOff";
+			case "minimal": return "thinkingMinimal";
+			case "low": return "thinkingLow";
+			case "medium": return "thinkingMedium";
+			case "high": return "thinkingHigh";
+			case "xhigh": return "thinkingXhigh";
+			case "max": return "thinkingMax";
+		}
+	}
+
+	/** Format the marker glyphs for an agent row using the documented semantics. */
+	private formatAgentMarkers(agent: AgentConfig): string {
+		const th = this.theme;
+		const markers: string[] = [];
+		if (agent.override !== undefined) markers.push(th.fg("accent", "●"));
+		if (this.resetAgents.has(agent.name)) {
+			markers.push(th.fg("warning", "↺"));
+		} else if (this.dirtyAgents.has(agent.name)) {
+			markers.push(th.fg("warning", "✎"));
+		}
+		return markers.join("");
+	}
+
+	/** Compute the active thinking display for an agent: explicit level (colored) or dim "inherit". */
+	private formatThinkingDisplay(agent: AgentConfig, effectiveModel: string): { text: string; colorKey: string } {
+		const { thinkingSuffix } = splitKnownThinkingSuffix(effectiveModel);
+		const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
+		const overridden = this.agentThinkingOverrides.get(agent.name);
+		const effectiveThinking = overridden ?? agent.thinking ?? suffixThinking;
+		if (effectiveThinking === undefined) {
+			return { text: "inherit", colorKey: "dim" };
+		}
+		const level = effectiveThinking as ThinkingLevel;
+		const colorKey = THINKING_LEVELS.includes(level) ? this.thinkingColorKey(level) : "muted";
+		return { text: level, colorKey };
+	}
+
+	/** Compact marker legend for the main footer. */
+	private formatMarkerLegend(): string {
+		const th = this.theme;
+		return th.fg("accent", "● persisted") + th.fg("dim", " · ") + th.fg("warning", "✎ edited") + th.fg("dim", " · ") + th.fg("warning", "↺ reset");
+	}
+
+	/** Sort models by provider then id, with preferredProvider first. */
+	private sortModelsByProvider(models: ModelInfo[]): ModelInfo[] {
+		return [...models].sort((a, b) => {
+			if (this.preferredProvider) {
+				const aPref = a.provider === this.preferredProvider;
+				const bPref = b.provider === this.preferredProvider;
+				if (aPref !== bPref) return aPref ? -1 : 1;
+			}
+			const providerCmp = a.provider.localeCompare(b.provider);
+			if (providerCmp !== 0) return providerCmp;
+			return a.id.localeCompare(b.id);
+		});
 	}
 
 	/** Get a SelectList theme matching Pi's getSelectListTheme(), using the local theme. */
@@ -604,7 +681,7 @@ export class SubagentHubComponent implements Component {
 		this.modelAgentIndex = agentIndex;
 		this.modelSearchQuery = "";
 		this.modelSelectedIndex = 0;
-		this.filteredModels = [...this.availableModels];
+		this.filteredModels = this.sortModelsByProvider([...this.availableModels]);
 		this.modelSelectList = null;
 
 		// Find current model of that agent in list
@@ -630,7 +707,7 @@ export class SubagentHubComponent implements Component {
 		this.view = "main";
 		this.modelSearchQuery = "";
 		this.modelSelectedIndex = 0;
-		this.filteredModels = [...this.availableModels];
+		this.filteredModels = this.sortModelsByProvider([...this.availableModels]);
 		this.modelSelectList = null;
 		this.invalidate();
 		this.tui.requestRender();
@@ -655,9 +732,10 @@ export class SubagentHubComponent implements Component {
 	/** Filter models based on search query using fuzzy matching. */
 	filterModels(): void {
 		const query = this.modelSearchQuery.toLowerCase();
+		const source = this.sortModelsByProvider([...this.availableModels]);
 		const nextFiltered = query
-			? fuzzyFilter(this.availableModels, query, (m) => `${m.provider} ${m.id} ${m.fullId}`)
-			: [...this.availableModels];
+			? fuzzyFilter(source, query, (m) => `${m.provider} ${m.id} ${m.fullId}`)
+			: source;
 
 		const previousFullId = this.filteredModels[this.modelSelectedIndex]?.fullId;
 		const itemsChanged =

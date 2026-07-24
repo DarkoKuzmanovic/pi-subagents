@@ -38,7 +38,7 @@ function makeModels(count: number, baseProvider = "openai"): { provider: string;
 	return models;
 }
 
-function makeAgents(names: string[], models?: string[]): {
+function makeAgents(names: string[], models?: string[], thinkings?: string[]): {
 	name: string;
 	description: string;
 	systemPrompt: string;
@@ -49,6 +49,7 @@ function makeAgents(names: string[], models?: string[]): {
 	filePath: string;
 	model?: string;
 	thinking?: string;
+	override?: unknown;
 }[] {
 	return names.map((name, i) => ({
 		name,
@@ -60,6 +61,36 @@ function makeAgents(names: string[], models?: string[]): {
 		source: "user",
 		filePath: `${name}.md`,
 		model: models?.[i],
+		thinking: thinkings?.[i],
+		override: undefined,
+	}));
+}
+
+function makeAgentsWithOverride(names: string[], models?: string[], overrides?: boolean[]): {
+	name: string;
+	description: string;
+	systemPrompt: string;
+	systemPromptMode: string;
+	inheritProjectContext: boolean;
+	inheritSkills: boolean;
+	source: string;
+	filePath: string;
+	model?: string;
+	thinking?: string;
+	override?: unknown;
+}[] {
+	return names.map((name, i) => ({
+		name,
+		description: `Test agent: ${name}`,
+		systemPrompt: "",
+		systemPromptMode: "replace",
+		inheritProjectContext: false,
+		inheritSkills: false,
+		source: "user",
+		filePath: `${name}.md`,
+		model: models?.[i],
+		thinking: undefined,
+		override: overrides?.[i] ? { model: models?.[i] ?? "custom/model" } : undefined,
 	}));
 }
 
@@ -69,6 +100,30 @@ function makeMockTui() {
 
 function makeMockTheme() {
 	return { fg(_key: string, text: string) { return text; }, bold(text: string) { return text; } };
+}
+
+function makeRecordingTheme() {
+	const keys: string[] = [];
+	return {
+		fg(key: string, text: string) { keys.push(key); return text; },
+		bold(text: string) { return text; },
+		keys,
+	};
+}
+
+function findRow(rendered: string, name: string): string {
+	// Match the agent name as a standalone token in a rendered line.
+	return stripAnsi(rendered.split("\n").find((line) => {
+		const stripped = stripAnsi(line);
+		const re = new RegExp(`(^|[^\\w-])${name}([^\\w-]|$)`);
+		return re.test(stripped);
+	}) ?? "");
+}
+
+
+/** Type-safe accessor for component private sets used in tests. */
+function componentState(component: unknown) {
+	return component as { dirtyAgents: Set<string>; resetAgents: Set<string> };
 }
 
 // ── Agent navigation ────────────────────────────────────────────────
@@ -1243,8 +1298,9 @@ test("subagent-hub: editing an agent updates the main list on re-render", {
 	);
 
 	const before = component.render(84).join("\n");
-	assert.ok(!before.includes("✎"), "no edit marker before change");
-	assert.ok(before.includes("thinking: off"), "initial thinking is off");
+	const beforeRow = stripAnsi(before.split("\n").find((line) => stripAnsi(line).includes("worker")) ?? "");
+	assert.ok(!beforeRow.includes("✎"), "no edit marker on the worker row before change");
+	assert.ok(beforeRow.includes("thinking: inherit"), "initial unset thinking shows inherit");
 
 	// Simulate the user cycling the thinking level for the selected agent.
 	component.cycleThinkingLevel();
@@ -1252,9 +1308,10 @@ test("subagent-hub: editing an agent updates the main list on re-render", {
 	assert.ok(newThinking && newThinking !== "off", "thinking override changed to a non-off level");
 
 	const after = component.render(84).join("\n");
-	assert.ok(after.includes("✎"), "edit marker appears after change");
-	assert.ok(after.includes(`thinking: ${newThinking}`), "rendered thinking matches override");
-	assert.ok(!after.includes("thinking: off"), "old thinking display is gone");
+	const afterRow = stripAnsi(after.split("\n").find((line) => stripAnsi(line).includes("worker")) ?? "");
+	assert.ok(afterRow.includes("✎"), "edit marker appears on the worker row after change");
+	assert.ok(afterRow.includes(`thinking: ${newThinking}`), "rendered thinking matches override");
+	assert.ok(!afterRow.includes("thinking: inherit"), "old inherit display is gone");
 });
 
 test("subagent-hub: mutable theme produces new themed output after invalidate", {
@@ -1595,4 +1652,299 @@ test("subagent-hub: thinking view width invariant holds", {
 			assert.ok(visibleWidth(line) <= width, `width ${width}: line exceeds bounds (${visibleWidth(line)})`);
 		}
 	}
+});
+
+// ── Phase 4: display polish ─────────────────────────────────────────────
+
+test("subagent-hub: header shows agent count and modified count", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(
+		["a", "b", "c"],
+		["openai/model-0", "openai/model-1", "openai/model-2"],
+		[false, true, true],
+	);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	const rendered = component.render(84).join("\n");
+	assert.match(stripAnsi(rendered), /Subagent Models \(3 agents · 0 modified\)/, "header shows count with zero modified");
+
+	// Dirty-only agent.
+	component.agentModelOverrides.set("a", "anthropic/model-1");
+	componentState(component).dirtyAgents.add("a");
+	component.invalidate();
+	let after = component.render(84).join("\n");
+	assert.match(stripAnsi(after), /Subagent Models \(3 agents · 1 modified\)/, "dirty-only counts as modified");
+
+	// Reset-only agent (requires persisted override metadata).
+	component.selectedAgentIndex = 1;
+	component.resetSelectedAgent();
+	component.invalidate();
+	after = component.render(84).join("\n");
+	assert.match(stripAnsi(after), /Subagent Models \(3 agents · 2 modified\)/, "reset-only counts as modified");
+
+	// Both dirty and reset: counted once in the union.
+	component.agentModelOverrides.set("c", "anthropic/model-2");
+	componentState(component).dirtyAgents.add("c");
+	componentState(component).resetAgents.add("c");
+	component.invalidate();
+	after = component.render(84).join("\n");
+	assert.match(stripAnsi(after), /Subagent Models \(3 agents · 3 modified\)/, "dirty-and-reset counted once in union");
+});
+
+test("subagent-hub: persisted marker shows for agents with override", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a", "b"], ["openai/model-0", "openai/model-0"], [true, false]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	const rendered = component.render(84).join("\n");
+	assert.match(findRow(rendered, "a"), /●/, "persisted agent shows ● marker");
+	assert.doesNotMatch(findRow(rendered, "b"), /●/, "non-persisted agent has no ● marker");
+});
+
+test("subagent-hub: session edit marker shows for dirty agents", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	(component as any).dirtyAgents.add("a");
+	const rendered = component.render(84).join("\n");
+	assert.match(findRow(rendered, "a"), /✎/, "dirty agent shows ✎ marker");
+	assert.doesNotMatch(findRow(rendered, "b"), /✎/, "clean agent has no ✎ marker");
+});
+
+test("subagent-hub: staged reset marker replaces edit marker", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Stage a reset for the persisted agent.
+	(component as any).resetAgents.add("a");
+	const rendered = component.render(84).join("\n");
+	const row = findRow(rendered, "a");
+	assert.match(row, /↺/, "staged reset shows ↺ marker");
+	assert.doesNotMatch(row, /✎/, "staged reset does not show edit marker");
+	assert.match(row, /●/, "persisted marker remains alongside reset marker");
+});
+
+test("subagent-hub: persisted and session markers both show when overlap", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["a"], ["openai/model-0"], [true]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	(component as any).dirtyAgents.add("a");
+	const rendered = component.render(84).join("\n");
+	const row = findRow(rendered, "a");
+	assert.match(row, /●/, "persisted marker shown");
+	assert.match(row, /✎/, "session edit marker shown");
+});
+
+test("subagent-hub: unset thinking shows inherit and explicit off shows off", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b"], ["openai/model-0", "openai/model-0"], [undefined, "off"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	const rendered = component.render(84).join("\n");
+	assert.match(findRow(rendered, "a"), /thinking: inherit/, "unset thinking shows inherit");
+	assert.match(findRow(rendered, "b"), /thinking: off/, "explicit off shows off");
+});
+
+test("subagent-hub: all thinking color keys are exercised", {
+	skip: !available,
+}, () => {
+	const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+	const keyFor = (level: string) => {
+		if (level === "off") return "thinkingOff";
+		if (level === "xhigh") return "thinkingXhigh";
+		return `thinking${level.charAt(0).toUpperCase()}${level.slice(1)}`;
+	};
+	const models = [{ provider: "test", id: "all-levels", fullId: "test/all-levels", reasoning: true, thinkingLevelMap: { off: "off", minimal: "min", low: "low", medium: "med", high: "high", xhigh: "x", max: "max" } }];
+	for (const level of levels) {
+		const agents = makeAgents(["a"], ["test/all-levels"], [level]);
+		const recording = makeRecordingTheme();
+		const component = new SubagentHubComponent!(
+			makeMockTui(),
+			recording as any,
+			agents,
+			models,
+			undefined,
+			() => {},
+		);
+		component.render(84);
+		assert.ok(recording.keys.includes(keyFor(level)), `color key for ${level} used`);
+	}
+});
+
+test("subagent-hub: model picker row includes supported thinking levels", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"], ["openai/model-0"]);
+	const models = [
+		{ provider: "openai", id: "model-0", fullId: "openai/model-0", reasoning: true, thinkingLevelMap: { off: "off", minimal: "min", low: "low", medium: "med", high: "high", xhigh: "x", max: "max" } },
+		{ provider: "anthropic", id: "model-1", fullId: "anthropic/model-1", reasoning: true, thinkingLevelMap: { off: "off", minimal: "min", low: "low", medium: "med", high: "high", xhigh: "x", max: "max" } },
+	];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterModelSelector(0);
+	const rendered = component.render(84).join("\n");
+	assert.match(stripAnsi(rendered), /\[openai\].*off\/minimal\/low\/medium\/high\/xhigh\/max/, "openai row lists supported levels");
+	assert.match(stripAnsi(rendered), /\[anthropic\].*off\/minimal\/low\/medium\/high\/xhigh\/max/, "anthropic row lists supported levels");
+});
+
+test("subagent-hub: model picker Current shows base model and active thinking", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"], ["openai/model-0:high"]);
+	const models = [{
+		provider: "openai", id: "model-0", fullId: "openai/model-0", reasoning: true,
+		thinkingLevelMap: { off: "off", minimal: "min", low: "low", medium: "med", high: "high", xhigh: "x", max: "max" },
+	}];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterModelSelector(0);
+	const rendered = component.render(84).join("\n");
+	const stripped = stripAnsi(rendered);
+	assert.match(stripped, /Current: openai\/model-0/, "Current shows base model without suffix");
+	assert.match(stripped, /thinking: high/, "Current shows active thinking");
+});
+
+test("subagent-hub: model picker Current shows inherit when thinking unset", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"], ["openai/model-0"]);
+	const models = [{ provider: "openai", id: "model-0", fullId: "openai/model-0" }];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterModelSelector(0);
+	const rendered = component.render(84).join("\n");
+	const stripped = stripAnsi(rendered);
+	assert.match(stripped, /Current: openai\/model-0/, "Current shows base model without suffix");
+	assert.match(stripped, /thinking: inherit/, "Current shows inherit when thinking is unset");
+});
+
+test("subagent-hub: empty-query model list is sorted by provider then id with preferred first", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"]);
+	const models = [
+		{ provider: "zebra", id: "zulu", fullId: "zebra/zulu" },
+		{ provider: "openai", id: "model-0", fullId: "openai/model-0" },
+		{ provider: "anthropic", id: "model-1", fullId: "anthropic/model-1" },
+		{ provider: "openai", id: "model-a", fullId: "openai/model-a" },
+	];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		"openai",
+		() => {},
+	);
+
+	component.enterModelSelector(0);
+	const ids = component.filteredModels.map((m) => m.id);
+	assert.deepEqual(ids, ["model-0", "model-a", "model-1", "zulu"], "preferred provider first, then alphabetical provider/id");
+});
+
+test("subagent-hub: non-empty query preserves fuzzy relevance order over provider sort", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"]);
+	const models = [
+		{ provider: "openai", id: "zzz-gpt-zzz", fullId: "openai/zzz-gpt-zzz" },
+		{ provider: "zebra", id: "gpt", fullId: "zebra/gpt" },
+	];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		"openai",
+		() => {},
+	);
+
+	component.enterModelSelector(0);
+	component.modelSearchQuery = "gpt";
+	component.filterModels();
+	// The empty-query provider sort would put "openai" first; the query should
+	// rank the model whose id starts with the query above the substring match.
+	assert.deepEqual(
+		component.filteredModels.map((m) => m.fullId),
+		["zebra/gpt", "openai/zzz-gpt-zzz"],
+		"fuzzy relevance order wins over alphabetical provider order",
+	);
 });
