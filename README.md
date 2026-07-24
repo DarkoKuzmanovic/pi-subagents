@@ -72,7 +72,7 @@ That is the only required step. You can add optional pieces later.
 To pin a specific release once a tag is available:
 
 ```bash
-pi install git:github.com/DarkoKuzmanovic/pi-subagents@v0.43.2
+pi install git:github.com/DarkoKuzmanovic/pi-subagents@v0.44.0
 ```
 
 ### Try this first

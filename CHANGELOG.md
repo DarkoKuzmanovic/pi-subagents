@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-07-24
+
+> Pi-style revamp of the `/subagents` model-configuration overlay, built against the documented `pi-tui` API: a stabilized component tree, fuzzy model search, a dedicated thinking-level view, display polish, and safe reversible resets.
+
+### Added
+
+- **Fuzzy model search.** The model picker filters with pi-tui's `fuzzyFilter` (subsequence matching across `provider id fullId`) instead of substring `includes`, keeps deterministic source order on an empty query, and preserves selection by `fullId` as results change.
+- **Thinking settings view.** `tab` opens a `SettingsList`-backed view to set a thinking level per agent. Unset/invalid levels resolve to a legal supported value, edits are dirty-tracked, and the model is pinned only when the agent already has one configured.
+- **Safe reversible resets.** `X` opens a confirmation dialog (defaulting to Cancel) that stages removal of every persisted override; `x` resets a single agent; `u` undoes the most recent reset transaction (LIFO), restoring the exact pre-reset snapshot.
+
+### Changed
+
+- **Stable component tree.** The hub runs on a discriminated `HubView` state and rebuilds its `SelectList`s only on real data/theme/filter/view transitions (pi-tui's `SelectList` has no `setItems`), preserving selection by agent/model identity; plain up/down navigation no longer rebuilds.
+- **Display polish.** Header reports `<n> agents · <m> modified`; rows carry `●` persisted / `✎` edited / `↺` reset markers with a footer legend; unset thinking renders dim `inherit` (distinct from `off`); the model picker annotates supported thinking levels and the active one; the empty-query model list sorts by provider with the preferred provider first.
+
+### Fixed
+
+- **Pure result builder.** `buildDirtyResult` returns a pruned copy of the reset set instead of mutating live state.
+- **Type-safe thinking handling.** Replaced six `as ThinkingLevel` casts with an `isThinkingLevel` type guard.
+- **Reset no-ops.** `x` is a no-op when the agent is already staged for reset; `X` is a no-op when no agent has a persisted override (no pointless "Reset 0" dialog).
+
 ## [0.43.2] - 2026-07-23
 
 > Folds in the unreleased 0.43.1 bump (M12.4 review hardening) plus the subagent-hub override fixes.
