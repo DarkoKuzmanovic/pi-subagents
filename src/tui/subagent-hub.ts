@@ -8,6 +8,10 @@ import {
 	resolveModelCandidate,
 } from "../runs/shared/model-fallback.ts";
 
+/** Type guard for a supported thinking-level string. */
+function isThinkingLevel(value: string): value is ThinkingLevel {
+	return THINKING_LEVELS.some((level) => level === value);
+}
 export interface SubagentHubResult {
 	overrides: Map<string, string>; // agent name → model override string
 	thinkingOverrides?: Map<string, string>; // agent name → thinking level override
@@ -131,10 +135,17 @@ export class SubagentHubComponent implements Component {
 			if (model !== undefined) overrides.set(name, model);
 			const thinking = this.agentThinkingOverrides.get(name);
 			if (thinking !== undefined) thinkingOverrides.set(name, thinking);
-			// Re-dirtied after reset — the latest edit wins, so remove from resets
-			this.resetAgents.delete(name);
 		}
-		return { overrides, thinkingOverrides, resetAgents: this.resetAgents.size > 0 ? new Set(this.resetAgents) : undefined };
+		// Latest edit wins over a pending reset: the returned reset set must
+		// not include names that are also dirty.
+		const prunedResets = new Set(
+			[...this.resetAgents].filter((name) => !this.dirtyAgents.has(name)),
+		);
+		return {
+			overrides,
+			thinkingOverrides,
+			resetAgents: prunedResets.size > 0 ? prunedResets : undefined,
+		};
 	}
 
 	dispose(): void {}
@@ -481,8 +492,8 @@ export class SubagentHubComponent implements Component {
 
 					// Clamp the separate thinking override if the new model doesn't support it
 					const currentThinking = this.agentThinkingOverrides.get(selectedAgent.name);
-					if (currentThinking && !supportedLevels.includes(currentThinking as ThinkingLevel)) {
-						const fallbackLevel = supportedLevels.includes("off" as ThinkingLevel)
+					if (currentThinking && !(isThinkingLevel(currentThinking) && supportedLevels.includes(currentThinking))) {
+						const fallbackLevel = supportedLevels.includes("off")
 							? "off"
 							: (supportedLevels[0] ?? "off");
 						this.agentThinkingOverrides.set(selectedAgent.name, fallbackLevel);
@@ -531,9 +542,9 @@ export class SubagentHubComponent implements Component {
 			const effectiveThinking = overridden ?? agent.thinking ?? suffixThinking ?? "off";
 			// Map to a legal value without dirtying: use the effective level if supported,
 			// otherwise "off" (or first supported if "off" is absent).
-			const currentValue = supportedLevels.includes(effectiveThinking as ThinkingLevel)
+			const currentValue = (isThinkingLevel(effectiveThinking) && supportedLevels.includes(effectiveThinking))
 				? effectiveThinking
-				: (supportedLevels.includes("off" as ThinkingLevel) ? "off" : (supportedLevels[0] ?? "off"));
+				: (supportedLevels.includes("off") ? "off" : (supportedLevels[0] ?? "off"));
 			const { baseModel } = splitKnownThinkingSuffix(effectiveModel);
 			const modelDisplay = baseModel || "(host default)";
 			return {
@@ -621,9 +632,8 @@ export class SubagentHubComponent implements Component {
 		if (effectiveThinking === undefined) {
 			return { text: "inherit", colorKey: "dim" };
 		}
-		const level = effectiveThinking as ThinkingLevel;
-		const colorKey = THINKING_LEVELS.includes(level) ? this.thinkingColorKey(level) : "muted";
-		return { text: level, colorKey };
+		const colorKey = isThinkingLevel(effectiveThinking) ? this.thinkingColorKey(effectiveThinking) : "muted";
+		return { text: effectiveThinking, colorKey };
 	}
 
 	/** Compact marker legend for the main footer. */
@@ -688,9 +698,9 @@ export class SubagentHubComponent implements Component {
 		const { thinkingSuffix } = splitKnownThinkingSuffix(effectiveModel);
 		const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
 		const overridden = this.agentThinkingOverrides.get(agent.name);
-		const currentThinking = (overridden ?? agent.thinking ?? suffixThinking ?? "off") as ThinkingLevel;
+		const currentThinking = overridden ?? agent.thinking ?? suffixThinking ?? "off";
 
-		const currentIndex = availableLevels.indexOf(currentThinking);
+		const currentIndex = isThinkingLevel(currentThinking) ? availableLevels.indexOf(currentThinking) : -1;
 		if (currentIndex >= 0 && availableLevels.length === 1) return;
 		const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % availableLevels.length;
 		const nextLevel = availableLevels[nextIndex];
@@ -715,7 +725,7 @@ export class SubagentHubComponent implements Component {
 		}
 	}
 
-	/** SettingsList onChange: apply the thinking change and request a re-render. */
+	/** SettingsList onChange: apply the thinking change and request a re-render. Does NOT set needsRebuild — the live SettingsList repaints its own row via requestRender; a full main-view rebuild is deferred until exitThinkingView (unlike the cycleThinkingLevel test seam, which has no live list). */
 	private handleThinkingChange(agentName: string, newValue: string): void {
 		const agent = this.agents.find((a) => a.name === agentName);
 		if (!agent) return;
@@ -729,6 +739,8 @@ export class SubagentHubComponent implements Component {
 		if (!agent) return;
 		// Only meaningful for agents that actually have a persisted override
 		if (!agent.override) return;
+		// Already staged for reset — a second x is a no-op (one u fully unwinds it).
+		if (this.resetAgents.has(agent.name)) return;
 		// Capture prior state for undo before mutating.
 		const snapshot: ResetSnapshot = {
 			agentName: agent.name,
@@ -804,6 +816,8 @@ export class SubagentHubComponent implements Component {
 
 	/** Enter the reset-confirm view with a Pi-framed SelectList (test seam; X from main opens this). */
 	enterResetConfirmView(): void {
+		// No-op when nothing is persisted — avoid opening a pointless "Reset 0" dialog.
+		if (this.agents.every((a) => a.override === undefined)) return;
 		this.view = "reset-confirm";
 		this.resetConfirmSelectList = null;
 		this.invalidate();
@@ -889,7 +903,13 @@ export class SubagentHubComponent implements Component {
 		this.exitResetConfirmView();
 	}
 
-	/** Undo the most recent reset transaction (LIFO). Restores exact prior state. */
+	/**
+	 * Undo the most recent reset transaction (LIFO), restoring the exact snapshot
+	 * taken at reset time. Note: an edit made AFTER a reset is clobbered by undo —
+	 * e.g. reset A → edit A → undo returns A to its pre-reset state, discarding the
+	 * post-reset edit. Intentional: undo restores the captured snapshot, it is not a
+	 * general edit history. The stack is discarded when the hub closes.
+	 */
 	private undoLastReset(): void {
 		const transaction = this.undoStack.pop();
 		if (!transaction) return;

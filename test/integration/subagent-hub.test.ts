@@ -169,7 +169,7 @@ describe("subagent hub", {
 			() => {},
 		);
 
-		// Drive a real edit path so the agent becomes dirty and shows ✎
+		// Drive the shared test-only cycle seam so the agent becomes dirty and shows ✎
 		component.cycleThinkingLevel();
 
 		const rendered = component.render(84).join("\n");

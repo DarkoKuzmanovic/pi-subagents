@@ -2149,9 +2149,9 @@ test("subagent-hub: bulk reset confirm stages resets for all persisted agents", 
 	assert.ok(st.resetAgents.has("p2"), "p2 staged for reset");
 	assert.ok(!st.resetAgents.has("plain"), "plain agent NOT staged");
 	assert.equal((component as any).view, "main", "returns to main after confirm");
+});
 
-
-test("subagent-hub: bulk reset with no persisted agents does not push undo transaction", {
+test("subagent-hub: bulk reset is a no-op when no agents have persisted overrides", {
 	skip: !available,
 }, () => {
 	const agents = makeAgents(["a", "b"]);
@@ -2166,20 +2166,15 @@ test("subagent-hub: bulk reset with no persisted agents does not push undo trans
 	);
 
 	component.render(84);
-	component.handleInput("X");
-	component.render(84); // build confirmation view
+	component.handleInput("X"); // zero persisted overrides → no-op, dialog never opens
 
-	const confirmList = (component as any).resetConfirmSelectList;
-	assert.ok(confirmList, "confirmation SelectList exists");
-	confirmList.onSelect({ value: "reset" });
-
+	assert.equal((component as any).view, "main", "stays on main view (no-op)");
+	assert.equal((component as any).resetConfirmSelectList, null, "no confirmation dialog created");
 	assert.equal(componentState(component).resetAgents.size, 0, "no agents staged");
 	assert.equal((component as any).undoStack.length, 0, "no undo transaction pushed");
-	assert.equal((component as any).view, "main", "returns to main");
 
 	const rendered = component.render(84).join("\n");
 	assert.doesNotMatch(stripAnsi(rendered), /\bundo\b/, "undo hint not shown in footer");
-});
 });
 
 test("subagent-hub: bulk reset cancel returns without resetting", {
