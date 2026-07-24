@@ -15,6 +15,7 @@ export class DynamicBorder {
   invalidate() {}
   render(width) { return ["-".repeat(width)]; }
 }
+export function getSettingsListTheme() { return {}; }
 `;
 
 const piTuiShim = `
@@ -179,6 +180,75 @@ export class SelectList {
   handleInput() { return false; }
   handleKey() { return false; }
   invalidate() { return false; }
+}
+
+export class SettingsList {
+  constructor(items, height, theme, onChange, onClose, options) {
+    this.items = items || [];
+    this.height = height || 10;
+    this.theme = theme || {};
+    this.onChange = onChange;
+    this.onClose = onClose;
+    this.options = options || {};
+    this.selectedIndex = 0;
+    this.searchQuery = "";
+  }
+  getFilteredItems() {
+    if (!this.searchQuery) return this.items;
+    const q = this.searchQuery.toLowerCase();
+    return this.items.filter((item) =>
+      String(item.label || "").toLowerCase().includes(q));
+  }
+  render(width) {
+    this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.getFilteredItems().length - 1));
+    const filtered = this.getFilteredItems();
+    return filtered.slice(0, this.height).map((item, index) => {
+      const label = String(item.label || "");
+      const val = String(item.currentValue || "");
+      const prefix = index === this.selectedIndex ? "> " : "  ";
+      return prefix + label + " [" + val + "]";
+    });
+  }
+  handleInput(data) {
+    if (!data) return;
+    const filtered = this.getFilteredItems();
+    this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, filtered.length - 1));
+    if (data === "\\x1b[A") {
+      if (this.selectedIndex > 0) this.selectedIndex--;
+      return;
+    }
+    if (data === "\\x1b[B") {
+      const max = Math.max(0, this.getFilteredItems().length - 1);
+      if (this.selectedIndex < max) this.selectedIndex++;
+      return;
+    }
+    if (data === "\\r" || data === "\\n") {
+      const item = this.getFilteredItems()[this.selectedIndex];
+      if (item && item.values && item.values.length > 0) {
+        const currentIdx = item.values.indexOf(item.currentValue);
+        const nextIdx = item.values.length === 1 ? 0 : (currentIdx + 1) % item.values.length;
+        const newValue = item.values[nextIdx];
+        item.currentValue = newValue;
+        if (this.onChange) this.onChange(item.id, newValue);
+      }
+      return;
+    }
+    if (data === "\\x1b") {
+      if (this.onClose) this.onClose();
+      return;
+    }
+    if (data === "\\b" || data === "\\x7f") {
+      if (this.searchQuery.length > 0) {
+        this.searchQuery = this.searchQuery.slice(0, -1);
+      }
+      return;
+    }
+    if (data.length >= 1 && /^[\\x20-\\x7e]+$/.test(data)) {
+      this.searchQuery += data;
+      return;
+    }
+  }
+  invalidate() {}
 }
 `;
 

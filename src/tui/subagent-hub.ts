@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder, rawKeyHint } from "@earendil-works/pi-coding-agent";
-import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
-import { Container, SelectList, Spacer, Text, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { DynamicBorder, getSettingsListTheme, rawKeyHint } from "@earendil-works/pi-coding-agent";
+import type { Component, SelectItem, SettingItem, TUI } from "@earendil-works/pi-tui";
+import { Container, SelectList, SettingsList, Spacer, Text, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../agents/agents.ts";
 import { findModelInfo, getSupportedThinkingLevels, splitKnownThinkingSuffix, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
 import {
@@ -15,7 +15,7 @@ export interface SubagentHubResult {
 }
 
 /** Discriminated view state — each phase adds cases as needed. */
-type HubView = "main" | "model";
+type HubView = "main" | "model" | "thinking";
 
 export class SubagentHubComponent implements Component {
 	private readonly MODEL_SELECTOR_HEIGHT = 10;
@@ -96,6 +96,7 @@ export class SubagentHubComponent implements Component {
 	// selection is restored by index after each rebuild. They are reused only for navigation within a stable view.
 	private agentSelectList: SelectList | null = null;
 	private modelSelectList: SelectList | null = null;
+	private thinkingSelectList: SettingsList | null = null;
 
 	// Active container tree — rebuilt only on view/data/theme transitions.
 	private activeContainer: Container | null = null;
@@ -128,13 +129,18 @@ export class SubagentHubComponent implements Component {
 		this.activeContainer?.invalidate();
 		this.agentSelectList?.invalidate();
 		this.modelSelectList?.invalidate();
+		this.thinkingSelectList?.invalidate();
 	}
 
 	render(width: number): string[] {
 		if (this.needsRebuild || !this.activeContainer) {
-			this.activeContainer = this.view === "model"
-				? this.buildModelSelectorView()
-				: this.buildMainView();
+			if (this.view === "model") {
+				this.activeContainer = this.buildModelSelectorView();
+			} else if (this.view === "thinking") {
+				this.activeContainer = this.buildThinkingView();
+			} else {
+				this.activeContainer = this.buildMainView();
+			}
 			this.needsRebuild = false;
 		}
 
@@ -155,6 +161,11 @@ export class SubagentHubComponent implements Component {
 			return;
 		}
 
+		if (this.view === "thinking") {
+			this.handleThinkingViewInput(data);
+			return;
+		}
+
 		// Agent list: delegate navigation/selection to SelectList
 		if (this.agentSelectList) {
 			// ctrl+c = hard cancel (discard all overrides)
@@ -168,8 +179,7 @@ export class SubagentHubComponent implements Component {
 				return;
 			}
 			if (matchesKey(data, "tab")) {
-				this.cycleThinkingLevel();
-				this.tui.requestRender();
+				this.enterThinkingView();
 				return;
 			}
 			if (data === "x" || data === "X") {
@@ -228,6 +238,28 @@ export class SubagentHubComponent implements Component {
 		// Navigation/selection keys: delegate to SelectList if available
 		if (this.modelSelectList) {
 			this.modelSelectList.handleInput(data);
+			this.tui.requestRender();
+			return;
+		}
+	}
+
+	/** Handle input when in thinking view (public for testability) */
+	handleThinkingViewInput(data: string): void {
+		// ctrl+c = hard cancel everything (discard all overrides, close hub)
+		if (matchesKey(data, "ctrl+c")) {
+			this.done({ overrides: new Map() });
+			return;
+		}
+
+		// esc = return to main view (do NOT save or close the hub)
+		if (matchesKey(data, "escape")) {
+			this.exitThinkingView();
+			return;
+		}
+
+		// Everything else goes to SettingsList
+		if (this.thinkingSelectList) {
+			this.thinkingSelectList.handleInput?.(data);
 			this.tui.requestRender();
 			return;
 		}
@@ -382,7 +414,10 @@ export class SubagentHubComponent implements Component {
 					// Clamp the separate thinking override if the new model doesn't support it
 					const currentThinking = this.agentThinkingOverrides.get(selectedAgent.name);
 					if (currentThinking && !supportedLevels.includes(currentThinking as ThinkingLevel)) {
-						this.agentThinkingOverrides.set(selectedAgent.name, "off");
+						const fallbackLevel = supportedLevels.includes("off" as ThinkingLevel)
+							? "off"
+							: (supportedLevels[0] ?? "off");
+						this.agentThinkingOverrides.set(selectedAgent.name, fallbackLevel);
 					}
 				}
 				this.exitModelSelector();
@@ -399,6 +434,57 @@ export class SubagentHubComponent implements Component {
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(
 			this.formatFooter(...(this.filteredModels.length > 0 ? ["enter", "select"] : []), "esc", "back", "ctrl+c", "cancel", "type", "search"),
+			1, 0,
+		));
+		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
+
+		return container;
+	}
+
+	private buildThinkingView(): Container {
+		const th = this.theme;
+		const container = new Container();
+
+		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
+		container.addChild(new Text(th.fg("accent", th.bold(" Thinking Levels")), 1, 0));
+		container.addChild(new Spacer(1));
+
+		const items: SettingItem[] = this.agents.map((agent) => {
+			const effectiveModel = this.agentModelOverrides.get(agent.name) ?? this.resolveAgentEffectiveModel(agent);
+			const modelInfo = findModelInfo(effectiveModel, this.availableModels, this.preferredProvider);
+			const supportedLevels: string[] = getSupportedThinkingLevels(modelInfo);
+			const { thinkingSuffix } = agent.model ? splitKnownThinkingSuffix(effectiveModel) : { thinkingSuffix: "" };
+			const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
+			const overridden = this.agentThinkingOverrides.get(agent.name);
+			const effectiveThinking = overridden ?? agent.thinking ?? suffixThinking ?? "off";
+			// Map to a legal value without dirtying: use the effective level if supported,
+			// otherwise "off" (or first supported if "off" is absent).
+			const currentValue = supportedLevels.includes(effectiveThinking as ThinkingLevel)
+				? effectiveThinking
+				: (supportedLevels.includes("off" as ThinkingLevel) ? "off" : (supportedLevels[0] ?? "off"));
+			const { baseModel } = splitKnownThinkingSuffix(effectiveModel);
+			const modelDisplay = baseModel || "(host default)";
+			return {
+				id: agent.name,
+				label: `${agent.name}  \u00b7  ${modelDisplay}`,
+				currentValue,
+				values: supportedLevels,
+			};
+		});
+
+		this.thinkingSelectList = new SettingsList(
+			items,
+			Math.min(items.length + 2, 15),
+			getSettingsListTheme(),
+			(id: string, newValue: string) => this.handleThinkingChange(id, newValue),
+			() => this.exitThinkingView(),
+			{ enableSearch: true },
+		);
+
+		container.addChild(this.thinkingSelectList);
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(
+			this.formatFooter("\u2191\u2193", "navigate", "enter", "cycle", "type", "search", "esc", "back", "ctrl+c", "cancel"),
 			1, 0,
 		));
 		container.addChild(new DynamicBorder((s: string) => th.fg("accent", s)));
@@ -450,7 +536,7 @@ export class SubagentHubComponent implements Component {
 		return "";
 	}
 
-	/** Cycle thinking level for the selected agent */
+	/** Cycle thinking level for the selected agent. TEST-ONLY SEAM: the UI cycle now lives inside the SettingsList's values iteration (tab opens the thinking view); this method validates the shared cycle-computation + applyThinkingChange mutation tail. */
 	cycleThinkingLevel(): void {
 		const agent = this.agents[this.selectedAgentIndex];
 		if (!agent) return;
@@ -459,32 +545,44 @@ export class SubagentHubComponent implements Component {
 		const modelInfo = findModelInfo(effectiveModel, this.availableModels, this.preferredProvider);
 		const availableLevels: ThinkingLevel[] = getSupportedThinkingLevels(modelInfo);
 
-		// Get current effective thinking
+		if (availableLevels.length === 0) return;
+
 		const { thinkingSuffix } = splitKnownThinkingSuffix(effectiveModel);
 		const suffixThinking = thinkingSuffix ? thinkingSuffix.slice(1) : undefined;
 		const overridden = this.agentThinkingOverrides.get(agent.name);
 		const currentThinking = (overridden ?? agent.thinking ?? suffixThinking ?? "off") as ThinkingLevel;
 
-		// Cycle to next level
 		const currentIndex = availableLevels.indexOf(currentThinking);
-		if (availableLevels.length === 0) return;
 		if (currentIndex >= 0 && availableLevels.length === 1) return;
 		const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % availableLevels.length;
 		const nextLevel = availableLevels[nextIndex];
 
-		this.agentThinkingOverrides.set(agent.name, nextLevel);
-		this.dirtyAgents.add(agent.name);
+		this.applyThinkingChange(agent, nextLevel);
+		this.needsRebuild = true;
+	}
 
-		// Ensure the resolved model is also persisted so that a thinking-only
-		// change doesn't get saved without its companion model override.
-		// Only pin when the agent actually has a configured model — model-less
-		// agents inherit the host default and should not get a fabricated override.
+	/** Shared mutation: set a thinking override, mark dirty, remove from resets, pin model if configured. */
+	private applyThinkingChange(agent: AgentConfig, level: string): void {
+		this.agentThinkingOverrides.set(agent.name, level);
+		this.dirtyAgents.add(agent.name);
+		this.resetAgents.delete(agent.name);
+
+		// Pin the resolved model so that a thinking-only change persists with its
+		// companion model override. Only pin when the agent already has a configured
+		// model — model-less agents inherit the host default.
 		if (!this.agentModelOverrides.has(agent.name) && agent.model) {
+			const effectiveModel = this.resolveAgentEffectiveModel(agent);
 			const { baseModel } = splitKnownThinkingSuffix(effectiveModel);
 			this.agentModelOverrides.set(agent.name, baseModel);
 		}
+	}
 
-		this.needsRebuild = true;
+	/** SettingsList onChange: apply the thinking change and request a re-render. */
+	private handleThinkingChange(agentName: string, newValue: string): void {
+		const agent = this.agents.find((a) => a.name === agentName);
+		if (!agent) return;
+		this.applyThinkingChange(agent, newValue);
+		this.tui.requestRender();
 	}
 
 	/** Reset the selected agent's override back to its base config */
@@ -534,6 +632,22 @@ export class SubagentHubComponent implements Component {
 		this.modelSelectedIndex = 0;
 		this.filteredModels = [...this.availableModels];
 		this.modelSelectList = null;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** Enter the thinking view (test seam; tab from main opens this) */
+	enterThinkingView(): void {
+		this.view = "thinking";
+		this.thinkingSelectList = null;
+		this.invalidate();
+		this.tui.requestRender();
+	}
+
+	/** Exit the thinking view and return to main (test seam; escape/onClose returns here) */
+	exitThinkingView(): void {
+		this.view = "main";
+		this.thinkingSelectList = null;
 		this.invalidate();
 		this.tui.requestRender();
 	}

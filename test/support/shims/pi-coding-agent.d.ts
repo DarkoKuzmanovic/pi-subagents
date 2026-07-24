@@ -52,3 +52,4 @@ export declare function rawKeyHint(key: string, description: string): string;
 
 export declare function getSelectListTheme(): any;
 export declare function keyText(keybindingId: string): string;
+export declare function getSettingsListTheme(...args: any[]): any;

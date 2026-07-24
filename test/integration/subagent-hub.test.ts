@@ -237,4 +237,39 @@ describe("subagent hub", {
 		assert.equal(component.modelSelectedIndex, 0, "selected index reset on exit");
 		assert.equal(component.filteredModels.length, 10, "filtered models restored on exit");
 	});
+
+	it("opens thinking view via tab, cycles a level, returns to main", () => {
+		const agents = makeAgents(["worker", "planner"]);
+		const models = makeModels(3);
+		const component = new SubagentHubComponent!(
+			{ requestRender() {} },
+			makeTheme(),
+			agents,
+			models,
+			undefined,
+			() => {},
+		);
+
+		// Build the main view, then press tab to open thinking.
+		component.render(84);
+		component.handleInput("\t");
+
+		const thinkingRender = component.render(84).join("\n");
+		assert.match(stripAnsi(thinkingRender), /Thinking Levels/, "thinking view rendered");
+		assert.match(stripAnsi(thinkingRender), /worker/, "agent worker visible");
+		assert.match(stripAnsi(thinkingRender), /planner/, "agent planner visible");
+
+		// Press enter to cycle the first agent's thinking level.
+		component.handleInput("\r");
+
+		// Verify dirty-only thinking override was applied.
+		const thinkingOverride = component.agentThinkingOverrides.get("worker");
+		assert.ok(thinkingOverride && thinkingOverride !== "off", "thinking override set for worker");
+		assert.equal(component.agentThinkingOverrides.has("planner"), false, "planner untouched");
+
+		// Escape returns to main view.
+		component.handleInput("\x1b");
+		const mainRender = component.render(84).join("\n");
+		assert.match(stripAnsi(mainRender), /Subagent Models/, "back to main view");
+	});
 });

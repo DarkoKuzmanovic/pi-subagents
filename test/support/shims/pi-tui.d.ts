@@ -51,6 +51,13 @@ export interface SelectItem {
 	description?: string;
 }
 
+export interface SettingItem {
+	id: string;
+	label: string;
+	currentValue: string;
+	values: string[];
+}
+
 export interface SelectListTheme {
 	selectedPrefix: (text: string) => string;
 	selectedText: (text: string) => string;
@@ -70,6 +77,20 @@ export class SelectList {
 	invalidate(): void;
 	render(width: number): string[];
 	handleInput(keyData: string): void;
+}
+
+export class SettingsList {
+	constructor(
+		items: SettingItem[],
+		height: number,
+		theme: any,
+		onChange: (id: string, newValue: string) => void,
+		onClose: () => void,
+		options?: { enableSearch?: boolean },
+	);
+	handleInput?(data: string): void;
+	invalidate(): void;
+	render(width: number): string[];
 }
 
 export function matchesKey(event: any, ...keys: any[]): boolean;

@@ -1335,3 +1335,264 @@ test("subagent-hub: width invariant holds for long names and wide unicode", {
 		}
 	}
 });
+
+// ── Phase 3: thinking settings view (SettingsList) ─────────────────────
+
+test("subagent-hub: tab opens the thinking view", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84); // build the main view + SelectList
+	component.handleInput("\t"); // tab opens thinking view
+
+	const rendered = component.render(84).join("\n");
+	assert.match(stripAnsi(rendered), /Thinking Levels/, "thinking view title appears");
+	assert.match(stripAnsi(rendered), /navigate/, "footer hints appear");
+});
+
+test("subagent-hub: escape from thinking view returns to main", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.render(84);
+	component.enterThinkingView();
+	component.render(84); // build the thinking view
+	component.handleInput("\x1b"); // escape
+
+	const rendered = component.render(84).join("\n");
+	assert.match(stripAnsi(rendered), /Subagent Models/, "back to main view");
+	assert.doesNotMatch(stripAnsi(rendered), /Thinking Levels/, "thinking view is gone");
+});
+
+test("subagent-hub: thinking view no-touch close preserves unset thinking", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Enter thinking view, do nothing, exit — no dirty writes.
+	component.enterThinkingView();
+	component.render(84);
+	component.exitThinkingView();
+
+	assert.equal(component.agentThinkingOverrides.has("a"), false, "agent a thinking stays unset");
+	assert.equal(component.agentThinkingOverrides.has("b"), false, "agent b thinking stays unset");
+	assert.equal((component as any).dirtyAgents.size, 0, "no agents dirtied by no-touch open+close");
+});
+
+test("subagent-hub: thinking view onChange marks dirty and updates only that agent", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a", "b"], ["openai/model-0", "openai/model-0"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterThinkingView();
+	component.render(84); // build the SettingsList
+
+	// Press enter to cycle the first agent's thinking level.
+	component.handleInput("\r");
+
+	const thinkingA = component.agentThinkingOverrides.get("a");
+	assert.ok(thinkingA && thinkingA !== "off", "agent a thinking was changed");
+	assert.equal(component.agentThinkingOverrides.has("b"), false, "agent b is untouched");
+	assert.ok((component as any).dirtyAgents.has("a"), "agent a is dirty");
+	assert.equal((component as any).dirtyAgents.has("b"), false, "agent b is not dirty");
+});
+
+test("subagent-hub: thinking view onChange pins model only when agent has configured model", {
+	skip: !available,
+}, () => {
+	// Agent with a configured model gets a companion model pin.
+	const agentsWithModel = makeAgents(["configured"], ["openai/model-0"]);
+	const models = makeModels(3);
+	const componentWith = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agentsWithModel,
+		models,
+		undefined,
+		() => {},
+	);
+
+	componentWith.enterThinkingView();
+	componentWith.render(84);
+	componentWith.handleInput("\r"); // cycle thinking
+
+	assert.ok(componentWith.agentModelOverrides.has("configured"), "model pinned for configured agent");
+
+	// Agent without a configured model does NOT get a fabricated model pin.
+	const agentsNoModel = makeAgents(["unconfigured"]);
+	const componentWithout = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agentsNoModel,
+		models,
+		undefined,
+		() => {},
+	);
+
+	componentWithout.enterThinkingView();
+	componentWithout.render(84);
+	componentWithout.handleInput("\r"); // cycle thinking
+
+	assert.equal(componentWithout.agentModelOverrides.has("unconfigured"), false, "no model pin for model-less agent");
+});
+
+test("subagent-hub: thinking view exposes only model-supported levels", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a"], ["deepseek/deepseek-v4-flash"]);
+	const models = [
+		{
+			provider: "deepseek",
+			id: "deepseek-v4-flash",
+			fullId: "deepseek/deepseek-v4-flash",
+			reasoning: true,
+			thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		},
+	];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterThinkingView();
+	component.render(84); // build the SettingsList
+
+	// Check the SettingItem's values array directly (the shim renders only currentValue).
+	const items = (component as any).thinkingSelectList.items as any[];
+	const item = items.find((i) => i.id === "a");
+	assert.ok(item, "agent a has a setting item");
+	assert.deepEqual(item.values, ["off", "high", "xhigh"], "only supported levels exposed");
+	assert.ok(!item.values.includes("minimal"), "minimal excluded (null in map)");
+	assert.ok(!item.values.includes("low"), "low excluded (null in map)");
+	assert.ok(!item.values.includes("medium"), "medium excluded (null in map)");
+});
+
+test("subagent-hub: thinking view off-only model stays on off", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a"], ["vendor/no-reasoning"]);
+	const models = [{ provider: "vendor", id: "no-reasoning", fullId: "vendor/no-reasoning", reasoning: false }];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterThinkingView();
+	component.render(84);
+
+	// Press enter — for an off-only model, cycling should not change anything.
+	component.handleInput("\r");
+
+	// The value stays "off" (the only supported level).
+	const thinking = component.agentThinkingOverrides.get("a");
+	assert.ok(!thinking || thinking === "off", "off-only model stays on off");
+});
+
+test("subagent-hub: model change clamps unsupported thinking level", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["a"], ["openai/model-0"]);
+	const models = [
+		{ provider: "openai", id: "model-0", fullId: "openai/model-0", reasoning: true },
+		{ provider: "vendor", id: "no-reasoning", fullId: "vendor/no-reasoning", reasoning: false },
+	];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	// Set a thinking override that the new model won't support.
+	component.agentThinkingOverrides.set("a", "high");
+	(component as any).dirtyAgents.add("a");
+
+	// Select a model that only supports "off".
+	component.enterModelSelector(0);
+	component.modelSearchQuery = "vendor";
+	component.filterModels();
+	assert.equal(component.filteredModels.length, 1, "vendor model found");
+	component.modelSelectedIndex = 0;
+
+	// Render to build the model SelectList, then simulate the onSelect callback.
+	component.render(84);
+	const selectedModel = component.filteredModels[component.modelSelectedIndex];
+	if (selectedModel && (component as any).modelSelectList) {
+		(component as any).modelSelectList.onSelect({ value: selectedModel.fullId });
+	}
+
+	// The thinking override should be clamped to "off".
+	assert.equal(component.agentThinkingOverrides.get("a"), "off", "unsupported thinking clamped to off");
+});
+
+test("subagent-hub: thinking view width invariant holds", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker", "planner"]);
+	const models = makeModels(3);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterThinkingView();
+
+	for (const width of [30, 60, 84]) {
+		const lines = component.render(width);
+		for (const line of lines) {
+			assert.ok(visibleWidth(line) <= width, `width ${width}: line exceeds bounds (${visibleWidth(line)})`);
+		}
+	}
+});
