@@ -41,6 +41,7 @@ export class Spacer {
 
 export function visibleWidth(text: string): number;
 export function truncateToWidth(text: string, width: number, ellipsis?: string): string;
+export function fuzzyFilter<T>(items: T[], query: string, accessor: (item: T) => string): T[];
 export function wrapTextWithAnsi(text: string, width: number, ...args: any[]): string[];
 
 export const Key: Record<string, any>;

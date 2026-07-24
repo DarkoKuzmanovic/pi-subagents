@@ -389,6 +389,114 @@ test("subagent-hub: model selector typing ignores non-printable characters", {
 	assert.equal(component.filteredModels.length, initialCount);
 });
 
+test("subagent-hub: fuzzy search matches provider and full ID, not just model id", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"]);
+	const models = [
+		{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+		{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
+	];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterModelSelector(0);
+	component.handleModelSelectorInput("anth");
+	assert.ok(component.filteredModels.some((m) => m.fullId === "anthropic/claude-sonnet-4"), "matches by provider");
+	assert.ok(!component.filteredModels.some((m) => m.fullId === "openai/gpt-5-mini"), "does not match unrelated model");
+
+	// Backspace the previous query "anth" one char at a time.
+	for (let i = 0; i < 4; i++) {
+		component.handleModelSelectorInput("\x7f");
+	}
+	component.handleModelSelectorInput("openai/gpt-5-mini");
+	assert.ok(component.filteredModels.some((m) => m.fullId === "openai/gpt-5-mini"), "matches by full ID");
+});
+
+test("subagent-hub: fuzzy subsequence matches across separators", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"]);
+	const models = [
+		{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
+		{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+	];
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterModelSelector(0);
+	component.handleModelSelectorInput("g5m");
+	assert.ok(component.filteredModels.some((m) => m.fullId === "openai/gpt-5-mini"), "g5m matches openai/gpt-5-mini as subsequence");
+	assert.ok(!component.filteredModels.some((m) => m.fullId === "anthropic/claude-sonnet-4"), "g5m does not match anthropic model");
+});
+
+test("subagent-hub: typing a non-matching query clears results", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"]);
+	const models = makeModels(5);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterModelSelector(0);
+	component.handleModelSelectorInput("xyz123");
+	assert.equal(component.filteredModels.length, 0, "no models match xyz123");
+	const rendered = component.render(84).join("\n");
+	assert.match(stripAnsi(rendered), /No matching models/);
+});
+
+test("subagent-hub: fuzzy search preserves selection by fullId when results change", {
+	skip: !available,
+}, () => {
+	const agents = makeAgents(["worker"]);
+	const models = makeModels(10);
+	const component = new SubagentHubComponent!(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		models,
+		undefined,
+		() => {},
+	);
+
+	component.enterModelSelector(0);
+	// Select the third model by simulating navigation.
+	component.modelSelectedIndex = 2;
+	const selectedFullId = component.filteredModels[component.modelSelectedIndex]?.fullId;
+	assert.ok(selectedFullId, "precondition: a model is selected");
+
+	// Narrow the query so the selected model moves to a different position.
+	component.modelSearchQuery = "model-";
+	component.filterModels();
+	const newIndex = component.filteredModels.findIndex((m) => m.fullId === selectedFullId);
+	assert.ok(newIndex >= 0, "selected model is still in results");
+	assert.equal(component.modelSelectedIndex, newIndex, "selection index follows the model by fullId");
+
+	// Narrow further so the selected model disappears; selection should reset to 0.
+	component.modelSearchQuery = "nonexistent-xyz";
+	component.filterModels();
+	assert.equal(component.filteredModels.length, 0, "no matching models");
+	assert.equal(component.modelSelectedIndex, 0, "selection resets to 0 when model disappears");
+});
+
 test("subagent-hub: constructor handles unresolvable agent.model", {
 	skip: !available,
 }, () => {
@@ -681,7 +789,7 @@ test("subagent-hub: done callback receives overrides on esc (done)", {
 	component.agentModelOverrides.set("a", "openai/model-0");
 	component.agentModelOverrides.set("b", "anthropic/model-1");
 
-	// Trigger done (esc=done applies overrides; handleInput is blocked by matchesKey shim in tests)
+	// Trigger done (esc=done applies overrides; matchesKey shim now implements keys, so call done() directly)
 	(component as any).done({ overrides: component.agentModelOverrides });
 
 	// done() is called by wrapper in component callback
@@ -710,7 +818,7 @@ test("subagent-hub: ctrl+c cancels with empty overrides map", {
 		},
 	);
 
-	// Cancel: ctrl+c discards all overrides (handleInput blocked by matchesKey shim)
+	// Cancel: ctrl+c discards all overrides (matchesKey shim now implements keys, so call done() directly)
 	component.agentModelOverrides.set("a", "openai/model-0");
 	(component as any).done({ overrides: new Map() });
 

@@ -37,23 +37,64 @@ function wrapText(text, width) {
 // over-counted as width 1. The wide-Unicode test intentionally uses a single
 // character and validates the shim's behavior rather than a real grapheme width.
 export function visibleWidth(text) {
-  return String(text).replace(/\x1b\[[0-9;]*m/g, "").length;
+  return String(text).replace(/\\x1b\\[[0-9;]*m/g, "").length;
 }
 
 export function truncateToWidth(text, width, ellipsis = "...") {
   if (typeof text !== "string") return "";
-  const stripped = text.replace(/\x1b\[[0-9;]*m/g, "");
+  const stripped = text.replace(/\\x1b\\[[0-9;]*m/g, "");
   if (stripped.length <= width) return text;
   const suffix = ellipsis ? String(ellipsis) : "";
   const maxLen = Math.max(0, width - suffix.length);
-  return stripped.slice(0, maxLen) + suffix;
+	return stripped.slice(0, maxLen) + suffix;
+}
+
+export function fuzzyFilter(items, query, accessor) {
+  if (!query) return [...items];
+  const tokens = String(query).toLowerCase().split(/[\\s/]+/).filter(Boolean);
+  if (tokens.length === 0) return [...items];
+
+  const scored = [];
+  for (const item of items) {
+    const text = String(accessor(item)).toLowerCase();
+    let totalScore = 0;
+    let matches = true;
+    for (const token of tokens) {
+      let index = 0;
+      let firstMatch = -1;
+      for (let i = 0; i < text.length && index < token.length; i++) {
+        if (text[i] === token[index]) {
+          if (firstMatch === -1) firstMatch = i;
+          index++;
+        }
+      }
+      if (index !== token.length) {
+        matches = false;
+        break;
+      }
+      totalScore += firstMatch;
+    }
+    if (matches) scored.push({ item, score: totalScore });
+  }
+  return scored.sort((a, b) => a.score - b.score).map((r) => r.item);
 }
 
 export function wrapTextWithAnsi(text, width) {
   return wrapText(text, width);
 }
 
-export function matchesKey() { return false; }
+export function matchesKey(data, ...keys) {
+  for (const key of keys) {
+    if (key === "backspace" && (data === "\\b" || data === "\\x7f")) return true;
+    if (key === "escape" && data === "\\x1b") return true;
+    if (key === "ctrl+c" && data === "\\x03") return true;
+    if (key === "tab" && data === "\\t") return true;
+    if ((key === "enter" || key === "return") && (data === "\\r" || data === "\\n")) return true;
+    if (key === "up" && data === "\\x1b[A") return true;
+    if (key === "down" && data === "\\x1b[B") return true;
+  }
+  return false;
+}
 
 export const Key = {};
 

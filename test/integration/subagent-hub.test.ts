@@ -196,4 +196,45 @@ describe("subagent hub", {
 		assert.doesNotMatch(stripAnsi(afterFilter), /anthropic/);
 		assert.doesNotMatch(stripAnsi(afterFilter), /google/);
 	});
+
+	it("filters and clears via keystrokes in model picker", () => {
+		const agents = makeAgents(["worker"]);
+		const models = makeModels(10);
+		const component = new SubagentHubComponent!(
+			{ requestRender() {} },
+			makeTheme(),
+			agents,
+			models,
+			undefined,
+			() => {},
+		);
+
+		component.enterModelSelector(0);
+		for (const ch of "openai") {
+			component.handleInput(ch);
+		}
+		let rendered = component.render(84).join("\n");
+		assert.ok(stripAnsi(rendered).includes("Search: openai"), "search query appears");
+		assert.ok(stripAnsi(rendered).includes("model-0"), "openai model shown");
+		assert.ok(!stripAnsi(rendered).includes("anthropic"), "anthropic models hidden");
+		assert.ok(!stripAnsi(rendered).includes("google"), "google models hidden");
+
+		// Backspace entire "openai" (6 chars)
+		for (let i = 0; i < 6; i++) {
+			component.handleInput("\x7f");
+		}
+		for (const ch of "anth") {
+			component.handleInput(ch);
+		}
+		rendered = component.render(84).join("\n");
+		assert.ok(stripAnsi(rendered).includes("Search: anth"), "search query now anth");
+		assert.ok(stripAnsi(rendered).includes("anthropic"), "anthropic models shown");
+
+		// Escape returns to main view and clears query
+		component.handleInput("\x1b");
+		assert.equal(component.editingAgentIndex, null);
+		assert.equal(component.modelSearchQuery, "");
+		assert.equal(component.modelSelectedIndex, 0, "selected index reset on exit");
+		assert.equal(component.filteredModels.length, 10, "filtered models restored on exit");
+	});
 });

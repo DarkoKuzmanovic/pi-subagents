@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, rawKeyHint } from "@earendil-works/pi-coding-agent";
 import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
-import { Container, SelectList, Spacer, Text, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Container, SelectList, Spacer, Text, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../agents/agents.ts";
 import { findModelInfo, getSupportedThinkingLevels, splitKnownThinkingSuffix, type ModelInfo, type ThinkingLevel } from "../shared/model-info.ts";
 import {
@@ -212,7 +212,6 @@ export class SubagentHubComponent implements Component {
 			if (this.modelSearchQuery.length > 0) {
 				this.modelSearchQuery = this.modelSearchQuery.slice(0, -1);
 				this.filterModels();
-				this.modelSelectedIndex = 0;
 			}
 			this.tui.requestRender();
 			return;
@@ -222,7 +221,6 @@ export class SubagentHubComponent implements Component {
 		if (data.length >= 1 && /^[\x20-\x7e]+$/.test(data)) {
 			this.modelSearchQuery += data;
 			this.filterModels();
-			this.modelSelectedIndex = 0;
 			this.tui.requestRender();
 			return;
 		}
@@ -357,7 +355,9 @@ export class SubagentHubComponent implements Component {
 			});
 
 			const selectTheme = this.getSelectListTheme();
-			this.modelSelectList = new SelectList(items, Math.min(items.length, this.MODEL_SELECTOR_HEIGHT), selectTheme);
+			if (!this.modelSelectList) {
+				this.modelSelectList = new SelectList(items, Math.min(items.length, this.MODEL_SELECTOR_HEIGHT), selectTheme);
+			}
 			this.modelSelectList.setSelectedIndex(this.modelSelectedIndex);
 
 			// Sync modelSelectedIndex when user navigates up/down
@@ -530,24 +530,38 @@ export class SubagentHubComponent implements Component {
 	/** Exit model selector and return to main view */
 	exitModelSelector(): void {
 		this.view = "main";
+		this.modelSearchQuery = "";
+		this.modelSelectedIndex = 0;
+		this.filteredModels = [...this.availableModels];
 		this.modelSelectList = null;
 		this.invalidate();
 		this.tui.requestRender();
 	}
 
-	/** Filter models based on search query */
+	/** Filter models based on search query using fuzzy matching. */
 	filterModels(): void {
 		const query = this.modelSearchQuery.toLowerCase();
-		if (!query) {
-			this.filteredModels = [...this.availableModels];
-		} else {
-			this.filteredModels = this.availableModels.filter(
-				(m) =>
-					m.fullId.toLowerCase().includes(query) ||
-					m.id.toLowerCase().includes(query) ||
-					m.provider.toLowerCase().includes(query),
-			);
+		const nextFiltered = query
+			? fuzzyFilter(this.availableModels, query, (m) => `${m.provider} ${m.id} ${m.fullId}`)
+			: [...this.availableModels];
+
+		const previousFullId = this.filteredModels[this.modelSelectedIndex]?.fullId;
+		const itemsChanged =
+			nextFiltered.length !== this.filteredModels.length ||
+			nextFiltered.some((m, i) => m.fullId !== this.filteredModels[i]?.fullId);
+
+		this.filteredModels = nextFiltered;
+
+		if (itemsChanged) {
+			this.modelSelectList = null;
+			if (previousFullId) {
+				const newIndex = this.filteredModels.findIndex((m) => m.fullId === previousFullId);
+				this.modelSelectedIndex = newIndex >= 0 ? newIndex : 0;
+			} else {
+				this.modelSelectedIndex = 0;
+			}
 		}
+
 		this.modelSelectedIndex = Math.min(
 			this.modelSelectedIndex,
 			Math.max(0, this.filteredModels.length - 1),
