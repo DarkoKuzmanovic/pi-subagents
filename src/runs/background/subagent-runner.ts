@@ -31,6 +31,8 @@ import {
 	claimControlNotification,
 	formatControlIntercomMessage,
 	formatControlNoticeMessage,
+	runTimeoutBlocksNewWork,
+	runTimeoutNudgeDue,
 } from "../shared/subagent-control.ts";
 import {
 	type RunnerSubagentStep as SubagentStep,
@@ -1011,6 +1013,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	// item inside a concurrency-limited parallel group. Terminal state is "failed", never
 	// "paused" or later recomputed "complete".
 	let runTimedOut = false;
+	// Run-deadline notice state, separate from per-step inactivity escalation.
+	let runTimeoutNudged = false;
+	let runTimeoutNotified = false;
 	let currentActivityState: ActivityState | undefined;
 	let activityTimer: NodeJS.Timeout | undefined;
 	const tokenLedger = createStepTokenLedger();
@@ -1180,12 +1185,71 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		statusPayload.lastUpdate = skippedAt;
 	};
 
+	// Emits a run-deadline control event against every currently running step.
+	const emitRunTimeoutNotice = (now: number, to: "timed_out_escalating" | "needs_attention", message: string): void => {
+		for (let index = 0; index < statusPayload.steps.length; index++) {
+			const step = statusPayload.steps[index];
+			if (!step || step.status !== "running") continue;
+			const previous = step.activityState;
+			step.activityState = to;
+			appendControlEvent(buildControlEvent({
+				type: to,
+				from: previous,
+				to,
+				runId: id,
+				agent: step.agent,
+				index,
+				ts: now,
+				message,
+				reason: "run_wall_clock_timeout",
+				turns: step.turnCount,
+				tokens: step.tokens?.total,
+				toolCount: step.toolCount,
+				currentTool: step.currentTool,
+				currentToolDurationMs: step.currentToolStartedAt ? Math.max(0, now - step.currentToolStartedAt) : undefined,
+				currentPath: step.currentPath,
+				elapsedMs: Math.max(0, now - overallStartTime),
+			}));
+		}
+		statusPayload.lastUpdate = now;
+		writeAtomicJson(statusPath, statusPayload);
+	};
+
+	// Warn before the deadline, not after it, so live children can still wrap up. Returns
+	// nothing and never stops the run — the deadline itself remains a synchronous hard stop.
+	const maybeNudgeBeforeRunTimeout = (now: number): void => {
+		if (!controlConfig.enabled || interrupted || runTimedOut || runTimeoutNudged) return;
+		if (!runTimeoutNudgeDue(controlConfig, { startedAt: overallStartTime, now })) return;
+		runTimeoutNudged = true;
+		emitRunTimeoutNotice(
+			now,
+			"timed_out_escalating",
+			`Run is ${Math.floor(controlConfig.escalationGraceMs / 1000)}s from the ${Math.floor(controlConfig.runWallClockTimeoutMs / 1000)}s wall-clock limit — wrap up now or running steps will be killed`,
+		);
+	};
+
 	const handleRunTimeout = (now: number): boolean => {
+		maybeNudgeBeforeRunTimeout(now);
 		if (!controlConfig.enabled) return false;
 		if (interrupted) return false;
 		if (runTimedOut) return true;
 		const reason = nextRunTimeoutTrigger(controlConfig, { startedAt: overallStartTime, now });
 		if (!reason) return false;
+		if (!runTimeoutBlocksNewWork(controlConfig)) {
+			// timeoutAction "notify": the deadline is advisory. Surface it once against every live
+			// step and let the run continue. This returns true only when the run actually ended,
+			// because every caller treats true as "stop dispatching".
+			if (!runTimeoutNotified) {
+				runTimeoutNotified = true;
+				const limitSeconds = Math.floor(controlConfig.runWallClockTimeoutMs / 1000);
+				emitRunTimeoutNotice(
+					now,
+					"needs_attention",
+					`Run passed the ${limitSeconds}s wall-clock limit — timeoutAction is "notify", so the run continues uninterrupted; use interrupt to stop it`,
+				);
+			}
+			return false;
+		}
 		runTimedOut = true;
 		for (let index = 0; index < statusPayload.steps.length; index++) {
 			if (statusPayload.steps[index]?.status === "running") {

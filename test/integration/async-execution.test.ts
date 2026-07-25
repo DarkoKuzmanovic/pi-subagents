@@ -1761,6 +1761,56 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(!readRunEventTypes(id).includes("subagent.step.completed"), "timed-out child must not emit subagent.step.completed");
 	});
 
+	it("warns one grace window before the run wall-clock deadline so a live child can wrap up", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		// The child outlives the whole window, so the only way out is the deadline kill.
+		mockPi.onCall({ delay: 20_000, output: "Never finishes" });
+
+		const id = `async-wall-clock-nudge-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+
+		executeAsyncChain(id, {
+			chain: [{ agent: "slow", task: "Long task that should be warned before it is killed" }],
+			agents: [makeAgent("slow")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+			controlConfig: {
+				...DEFAULT_CONTROL_CONFIG,
+				// The activity timer polls once a second, so the nudge window (3s..6s) has to be
+				// wide enough for a tick to land inside it before the deadline fires.
+				runWallClockTimeoutMs: 6_000,
+				escalationGraceMs: 3_000,
+				stepInactivityTimeoutMs: 999_999,
+				activeNoticeAfterMs: 999_999,
+			},
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 30_000);
+
+		const controlEvents = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as { type?: string; event?: { type?: string; reason?: string; message?: string; elapsedMs?: number } })
+			.filter((entry) => entry.type === "subagent.control");
+
+		const nudge = controlEvents.find((entry) => entry.event?.type === "timed_out_escalating");
+		assert.ok(nudge, "expected a pre-deadline wrap-up nudge before the run was killed");
+		assert.equal(nudge?.event?.reason, "run_wall_clock_timeout");
+		assert.match(nudge?.event?.message ?? "", /wrap up now/);
+		// The whole point: the warning lands while the run is still under its deadline.
+		assert.ok((nudge?.event?.elapsedMs ?? Number.MAX_SAFE_INTEGER) < 6_000, `nudge must precede the deadline, got elapsedMs=${nudge?.event?.elapsedMs}`);
+
+		// ...and the deadline still kills the run afterwards.
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, false);
+		assert.match(payload.results[0]?.error ?? payload.results[0]?.output ?? "", /wall-clock limit/);
+
+		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.state, "failed");
+	});
+
 	it("stops dispatching queued background parallel tasks synchronously once the shared run wall-clock deadline fires", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ delay: 600, output: "Too late" });
 

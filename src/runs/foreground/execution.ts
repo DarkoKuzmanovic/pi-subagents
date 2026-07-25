@@ -31,6 +31,8 @@ import {
 	buildControlEvent,
 	claimControlNotification,
 	deriveActivityState,
+	runTimeoutBlocksNewWork,
+	runTimeoutNudgeDue,
 	shouldNotifyControlEvent,
 } from "../shared/subagent-control.ts";
 import {
@@ -439,6 +441,10 @@ async function runSingleAttempt(
 			return true;
 		};
 		let escalationStartedAt: number | undefined;
+		// Run-deadline notices are tracked separately from step-inactivity escalation so one
+		// deadline's nudge cannot suppress the other's.
+		let runTimeoutNudged = false;
+		let runTimeoutNotified = false;
 		const killByTimeout = (now: number, reason: "step_inactivity_timeout" | "run_wall_clock_timeout"): void => {
 			if (timedOutByControl) return;
 			timedOutByControl = true;
@@ -474,9 +480,51 @@ async function runSingleAttempt(
 		const updateActivityState = (now: number): boolean => {
 			if (!controlConfig.enabled || timedOutByControl) return false;
 			const runTimeoutReason = nextRunTimeoutTrigger(controlConfig, { startedAt: runStartedAt, now });
-			if (runTimeoutReason) {
-				killByTimeout(now, runTimeoutReason);
+			const emitRunTimeoutNotice = (to: "timed_out_escalating" | "needs_attention", message: string): boolean => {
+				const previous = progress.activityState;
+				progress.activityState = to;
+				emitControlEvent(buildControlEvent({
+					type: to,
+					from: previous,
+					to,
+					runId: options.runId,
+					agent: agent.name,
+					index: options.index,
+					ts: now,
+					lastActivityAt: progress.lastActivityAt ?? startTime,
+					message,
+					reason: "run_wall_clock_timeout",
+					turns: result.usage.turns,
+					tokens: progress.tokens,
+					toolCount: progress.toolCount,
+					currentTool: progress.currentTool,
+					currentToolDurationMs: currentToolDurationMs(now),
+					currentPath: progress.currentPath,
+					elapsedMs: Math.max(0, now - runStartedAt),
+				}));
 				return true;
+			};
+			const limitSeconds = Math.floor(controlConfig.runWallClockTimeoutMs / 1000);
+			if (runTimeoutReason) {
+				if (runTimeoutBlocksNewWork(controlConfig)) {
+					killByTimeout(now, runTimeoutReason);
+					return true;
+				}
+				// timeoutAction "notify": the deadline is advisory. Say so once, then let it run.
+				if (runTimeoutNotified) return false;
+				runTimeoutNotified = true;
+				return emitRunTimeoutNotice(
+					"needs_attention",
+					`${agent.name} passed the ${limitSeconds}s run wall-clock limit — timeoutAction is "notify", so the run continues uninterrupted; use interrupt to stop it`,
+				);
+			}
+			// Warn before the deadline, not after it, so the child can still wrap up.
+			if (!runTimeoutNudged && runTimeoutNudgeDue(controlConfig, { startedAt: runStartedAt, now })) {
+				runTimeoutNudged = true;
+				return emitRunTimeoutNotice(
+					"timed_out_escalating",
+					`${agent.name} is ${Math.floor(controlConfig.escalationGraceMs / 1000)}s from the ${limitSeconds}s run wall-clock limit — wrap up now or it will be killed`,
+				);
 			}
 			const lastActivityAt = progress.lastActivityAt ?? startTime;
 			const idleState = deriveActivityState({
@@ -959,7 +1007,7 @@ export async function runSync(
 	const runStartedAt = options.runStartedAt ?? Date.now();
 	const runOptions: RunSyncOptions = options.runStartedAt === runStartedAt ? options : { ...options, runStartedAt };
 	const runControlConfig = runOptions.controlConfig ?? DEFAULT_CONTROL_CONFIG;
-	if (runControlConfig.enabled && nextRunTimeoutTrigger(runControlConfig, { startedAt: runStartedAt, now: Date.now() })) {
+	if (runControlConfig.enabled && runTimeoutBlocksNewWork(runControlConfig) && nextRunTimeoutTrigger(runControlConfig, { startedAt: runStartedAt, now: Date.now() })) {
 		return createRunWallClockTimeoutResult(agent, task, runOptions, runStartedAt);
 	}
 
@@ -1025,7 +1073,9 @@ export async function runSync(
 	try {
 		const modelsToTry = candidates.length > 0 ? candidates : [undefined];
 		for (let i = 0; i < modelsToTry.length; i++) {
-			if (runControlConfig.enabled && nextRunTimeoutTrigger(runControlConfig, { startedAt: runStartedAt, now: Date.now() })) {
+			// No child is in flight between fallback attempts, so there is nothing to nudge:
+			// enforce or don't. Under "notify" the deadline is advisory and fallback continues.
+			if (runControlConfig.enabled && runTimeoutBlocksNewWork(runControlConfig) && nextRunTimeoutTrigger(runControlConfig, { startedAt: runStartedAt, now: Date.now() })) {
 				lastResult = createRunWallClockTimeoutResult(agent, task, runOptions, runStartedAt);
 				break;
 			}

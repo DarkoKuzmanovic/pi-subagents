@@ -9,7 +9,10 @@ import {
 
 const CONTROL_EVENT_TYPES: ControlEventType[] = ["active_long_running", "needs_attention", "timed_out_escalating", "timed_out", "timeout_killed"];
 const CONTROL_NOTIFICATION_CHANNELS: ControlNotificationChannel[] = ["event", "async", "intercom"];
-const DEFAULT_NOTIFY_ON: ControlEventType[] = ["active_long_running", "needs_attention"];
+// `timed_out_escalating` is on by default because it is the last warning before a child
+// is killed — the parent can still `wrap-up` on it. Terminal `timed_out`/`timeout_killed`
+// stay off: by then the outcome is already visible in the run result.
+const DEFAULT_NOTIFY_ON: ControlEventType[] = ["active_long_running", "needs_attention", "timed_out_escalating"];
 
 export const DEFAULT_CONTROL_CONFIG: ResolvedControlConfig = {
 	enabled: true,
@@ -109,6 +112,44 @@ export function deriveActivityState(input: {
 
 	if (ageMs > input.config.needsAttentionAfterMs) return "needs_attention";
 	return undefined;
+}
+
+/**
+ * Whether the pre-deadline wrap-up nudge is due for a run.
+ *
+ * Fires once at `runWallClockTimeoutMs - escalationGraceMs`, i.e. before the deadline
+ * rather than after it, so a live child gets a real window to checkpoint and the parent
+ * gets a warning it can still act on (`wrap-up`) instead of a corpse.
+ *
+ * Nudging *after* the deadline was rejected: the deadline also terminates queued work and
+ * marks the run failed, so a post-deadline grace window would leave children running
+ * against durable `failed` state and would break the synchronous stop that dispatch
+ * gating depends on.
+ *
+ * Only `escalate_then_kill` nudges. `auto_kill` opts out of warning; `notify` never
+ * terminates, so there is nothing to warn about.
+ */
+export function runTimeoutNudgeDue(
+	config: ResolvedControlConfig,
+	metrics: { startedAt: number; now: number },
+): boolean {
+	if (config.timeoutAction !== "escalate_then_kill") return false;
+	const nudgeAfterMs = config.runWallClockTimeoutMs - config.escalationGraceMs;
+	// A grace window at least as long as the deadline leaves no room to warn early.
+	if (nudgeAfterMs <= 0) return false;
+	return metrics.now - metrics.startedAt > nudgeAfterMs;
+}
+
+/**
+ * Whether an already-expired run deadline should stop new work from starting.
+ *
+ * Applies where no child is in flight yet (run entry, and between model-fallback
+ * attempts), so there is nothing to nudge and escalation is meaningless: the choice
+ * is only enforce or don't. Under `notify` the deadline is advisory, so new work
+ * proceeds and the run has no duration backstop — stop it with `interrupt` instead.
+ */
+export function runTimeoutBlocksNewWork(config: ResolvedControlConfig): boolean {
+	return config.timeoutAction !== "notify";
 }
 
 export function buildControlEvent(input: {

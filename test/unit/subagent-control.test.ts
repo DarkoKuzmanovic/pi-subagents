@@ -8,6 +8,8 @@ import {
 	formatControlIntercomMessage,
 	formatControlNoticeMessage,
 	resolveControlConfig,
+	runTimeoutBlocksNewWork,
+	runTimeoutNudgeDue,
 	shouldNotifyControlEvent,
 } from "../../src/runs/shared/subagent-control.ts";
 import { nextLongRunningTrigger, nextStepTimeoutTrigger, nextRunTimeoutTrigger } from "../../src/runs/shared/long-running-guard.ts";
@@ -74,7 +76,7 @@ describe("subagent control attention state", () => {
 		const activeEvent = buildControlEvent({ type: "active_long_running", to: "active_long_running", runId: "run-1", agent: "worker" });
 		assert.equal(shouldNotifyControlEvent(config, event), true);
 		assert.equal(shouldNotifyControlEvent(config, activeEvent), true);
-		assert.deepEqual(config.notifyOn, ["active_long_running", "needs_attention"]);
+		assert.deepEqual(config.notifyOn, ["active_long_running", "needs_attention", "timed_out_escalating"]);
 		assert.deepEqual(config.notifyChannels, ["event", "async", "intercom"]);
 	});
 
@@ -140,7 +142,7 @@ describe("subagent control attention state", () => {
 			notifyOn: ["bogus" as never],
 			notifyChannels: ["bogus" as never],
 		});
-		assert.deepEqual(custom.notifyOn, ["active_long_running", "needs_attention"]);
+		assert.deepEqual(custom.notifyOn, ["active_long_running", "needs_attention", "timed_out_escalating"]);
 		assert.deepEqual(custom.notifyChannels, ["event", "async", "intercom"]);
 	});
 
@@ -386,5 +388,46 @@ describe("timeout escalation flow", () => {
 		assert.match(message, /Grace: subagent will be killed if no activity within 5s/);
 		assert.match(message, /Action: no child message route registered/);
 		assert.doesNotMatch(message, /Nudge sent via intercom/);
+	});
+});
+
+describe("run wall-clock timeout handling", () => {
+	const autoKill = resolveControlConfig(undefined, { runWallClockTimeoutMs: 100_000, timeoutAction: "auto_kill" });
+	const escalate = resolveControlConfig(undefined, { runWallClockTimeoutMs: 100_000, timeoutAction: "escalate_then_kill", escalationGraceMs: 30_000 });
+	const notifyOnly = resolveControlConfig(undefined, { runWallClockTimeoutMs: 100_000, timeoutAction: "notify" });
+
+	it("defaults to escalate_then_kill", () => {
+		assert.equal(resolveControlConfig().timeoutAction, "escalate_then_kill");
+	});
+
+	it("blocks new work once the deadline fires unless the action is notify", () => {
+		assert.equal(runTimeoutBlocksNewWork(autoKill), true);
+		assert.equal(runTimeoutBlocksNewWork(escalate), true);
+		assert.equal(runTimeoutBlocksNewWork(notifyOnly), false);
+	});
+
+	it("nudges one grace window before the deadline, not after it", () => {
+		// grace 30s before a 100s limit => nudge due strictly after 70s
+		assert.equal(runTimeoutNudgeDue(escalate, { startedAt: 0, now: 70_000 }), false);
+		assert.equal(runTimeoutNudgeDue(escalate, { startedAt: 0, now: 70_001 }), true);
+		// still due at and past the deadline; callers latch it so it only emits once
+		assert.equal(runTimeoutNudgeDue(escalate, { startedAt: 0, now: 100_000 }), true);
+		// the nudge lands while the run is still under the deadline, so it can still wrap up
+		assert.equal(nextRunTimeoutTrigger(escalate, { startedAt: 0, now: 70_001 }), undefined);
+	});
+
+	it("only escalate_then_kill nudges", () => {
+		assert.equal(runTimeoutNudgeDue(autoKill, { startedAt: 0, now: 99_999 }), false);
+		assert.equal(runTimeoutNudgeDue(notifyOnly, { startedAt: 0, now: 99_999 }), false);
+	});
+
+	it("does not nudge when the grace window leaves no room before the deadline", () => {
+		const graceSwallowsLimit = resolveControlConfig(undefined, {
+			runWallClockTimeoutMs: 30_000,
+			timeoutAction: "escalate_then_kill",
+			escalationGraceMs: 30_000,
+		});
+		assert.equal(runTimeoutNudgeDue(graceSwallowsLimit, { startedAt: 0, now: 29_999 }), false);
+		assert.equal(runTimeoutNudgeDue(graceSwallowsLimit, { startedAt: 0, now: 60_000 }), false);
 	});
 });

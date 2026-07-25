@@ -129,15 +129,15 @@ const ControlOverrides = Type.Object({
 	activeNoticeAfterTokens: Type.Optional(Type.Integer({ minimum: 1, description: "Optional active-long-running notice threshold by total tokens (disabled by default)" })),
 	failedToolAttemptsBeforeAttention: Type.Optional(Type.Integer({ minimum: 1, description: "Consecutive mutating-tool failures before escalating to needs_attention (default: 3)" })),
 	notifyOn: Type.Optional(Type.Array(Type.String({ enum: ["active_long_running", "needs_attention", "timed_out_escalating", "timed_out", "timeout_killed"] }), {
-		description: "Control event types that should notify the parent/orchestrator. Defaults to active_long_running and needs_attention.",
+		description: "Control event types that should notify the parent/orchestrator. Defaults to active_long_running, needs_attention, and timed_out_escalating (the last warning before a child is killed, so the parent can still wrap it up).",
 	})),
 	notifyChannels: Type.Optional(Type.Array(Type.String({ enum: ["event", "async", "intercom"] }), {
 		description: "Notification channels to use when available. Defaults to event, async, and intercom.",
 	})),
 	stepInactivityTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Per-step inactivity timeout in ms. Kill step if no child event for this duration (default: 300000 = 5min)" })),
-	runWallClockTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Overall run wall-clock timeout in ms. Kill entire run if total elapsed exceeds this (default: 1800000 = 30min)" })),
-	timeoutAction: Type.Optional(Type.String({ enum: ["notify", "escalate_then_kill", "auto_kill"], description: "Action on timeout: 'notify' (current behavior), 'escalate_then_kill' (nudge then kill), 'auto_kill' (immediate kill). Default: escalate_then_kill" })),
-	escalationGraceMs: Type.Optional(Type.Integer({ minimum: 1, description: "Grace period in ms after escalation nudge before killing (default: 30000 = 30s). Only used with escalate_then_kill." })),
+	runWallClockTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Overall run wall-clock timeout in ms, measured from run start (default: 1800000 = 30min). What happens when it fires is governed by timeoutAction, same as the step-inactivity timeout." })),
+	timeoutAction: Type.Optional(Type.String({ enum: ["notify", "escalate_then_kill", "auto_kill"], description: "What a fired timeout does. Governs BOTH stepInactivityTimeoutMs and runWallClockTimeoutMs. 'escalate_then_kill' (default) sends a nudge so the child can wrap up, then kills after escalationGraceMs. 'auto_kill' kills immediately. 'notify' only reports and never kills \u2014 which removes the run-duration backstop entirely, so stop such a run with the interrupt action." })),
+	escalationGraceMs: Type.Optional(Type.Integer({ minimum: 1, description: "Grace period in ms between the escalation nudge and the kill (default: 30000 = 30s). Only used with escalate_then_kill. Applies to both the step-inactivity and run wall-clock deadlines." })),
 });
 
 export const SubagentParams = Type.Object({

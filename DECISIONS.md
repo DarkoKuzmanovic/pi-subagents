@@ -85,3 +85,17 @@ Append-only project decisions. Historical workflow decisions remain here even wh
 **Decision:** Keep the v0.41.0 durable async OM milestone as M6 rather than renumbering it to fill M3–M5; leave those IDs unused.
 
 **Rationale:** Durable async OM source markers already identify their foundation as M6.1. Renumbering the roadmap would sever that lineage, while canonical `M<n>` IDs are not required to be contiguous.
+
+## 2026-07-24 — Warn before the run wall-clock deadline rather than kill-with-grace after it
+
+**Decision:** `timeoutAction` now governs the run wall-clock deadline as well as step inactivity. Under `escalate_then_kill` the `timed_out_escalating` nudge fires one `escalationGraceMs` *before* the deadline; the deadline itself stays a synchronous hard stop. Under `notify` the deadline becomes advisory everywhere — no kill, no dispatch gating. `timed_out_escalating` joins the default `notifyOn` set.
+
+**Rationale:** The schema documented `timeoutAction` as "action on timeout", but only the step-inactivity path consulted it; the run deadline killed unconditionally. A merely-slow child was destroyed with its whole context and the parent got a corpse instead of a warning it could act on with `wrap-up`.
+
+**Alternatives considered:**
+
+- *Post-deadline grace window (nudge at the deadline, kill `escalationGraceMs` later):* implemented first, then rejected. It broke five existing integration tests that assert the shared deadline stops dispatch **synchronously**, and it was incoherent besides — the deadline also terminates queued work and marks the run `failed`, so the grace window would leave children running against durable failed state.
+- *Leaving the pre-flight checks (run entry, between model-fallback attempts) unconditional:* rejected. `notify` would then appear to work until model fallback engaged, at which point the run would die anyway. Half-gating is less predictable than either extreme.
+- *Leaving `notifyOn` defaults alone:* rejected. `appendControlEvent` filters on `notifyOn`, so the new nudge would have been dropped before reaching anyone and the change would have shipped as a no-op.
+
+**Accepted cost:** `timeoutAction: "notify"` removes the run-duration backstop entirely. Documented in README, CHANGELOG, and the tool schema; `interrupt` is the stated way to stop such a run.

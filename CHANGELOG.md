@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.44.1] - 2026-07-24
+
+> The run wall-clock deadline now warns before it kills, and honours `timeoutAction` like the inactivity deadline always has.
+
+### Added
+
+- **Pre-deadline wrap-up nudge.** Under `escalate_then_kill` (the default) a `timed_out_escalating` control event now fires one `escalationGraceMs` *before* the run wall-clock deadline, naming the remaining time. A parent watching an async run can spend that window on `wrap-up` and keep the child's work, instead of receiving a corpse at the deadline. The nudge is emitted against every live step and latched, so it fires once per run.
+
+### Changed
+
+- **`timeoutAction` governs the run wall-clock deadline, not just step inactivity.** Its documented contract said "action on timeout" while the run deadline killed unconditionally. Now `notify` makes that deadline advisory — nothing is killed, queued work still dispatches, model fallback still proceeds, and a single `needs_attention` notice reports the overrun. **This removes the run-duration backstop entirely; stop such a run with the `interrupt` action.** `auto_kill` and `escalate_then_kill` continue to enforce it.
+- **`timed_out_escalating` is now notified by default.** `control.notifyOn` defaults to `active_long_running`, `needs_attention`, and `timed_out_escalating`. Without this the new nudge would be filtered out before reaching anyone. Terminal `timed_out`/`timeout_killed` remain off by default — by then the outcome is already in the run result.
+
+### Notes
+
+- The deadline itself remains a **synchronous** hard stop: queued steps, parallel siblings, and model-fallback attempts are still refused the moment it fires. Warning *before* the deadline was chosen over a grace period *after* it precisely to preserve that — a post-deadline grace window would leave children running against a run already marked `failed`.
+- Where no child is in flight (run entry, and between model-fallback attempts) there is nothing to wrap up, so those paths only distinguish enforce (`auto_kill`, `escalate_then_kill`) from don't (`notify`).
 ## [0.44.0] - 2026-07-24
 
 > Pi-style revamp of the `/subagents` model-configuration overlay, built against the documented `pi-tui` API: a stabilized component tree, fuzzy model search, a dedicated thinking-level view, display polish, and safe reversible resets.
