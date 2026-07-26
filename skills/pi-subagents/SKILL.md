@@ -299,6 +299,28 @@ parent session. It does **not** create a fresh minimal review context or filter
 history down to only the relevant parts. Use it when you want a separate review
 or execution thread that can still reference the parent session history.
 
+**A fork inherits context *pressure*, not just history.** Forking from a long
+orchestrator session hands the child a nearly-full window: it can compact within
+seconds and drift onto the parent's agenda instead of its own task. For
+self-contained work — build this file, write these tests — pass `context: "fresh"`
+explicitly. Reserve fork for work that genuinely needs the parent thread.
+
+Which agents fork by default: `oracle` only. That is correct — advisory review needs
+your context, and `oracle-fresh` is the clean sibling. `worker` and `worker-heavy`
+forked until 2026-07-24, when a forked worker compacted 11 seconds in and never wrote
+its deliverable; both are now `fresh`.
+
+`context: "lineage"` gives a clean child still linked to the parent, but does **not**
+support `worktree` or per-task `cwd` overrides
+(`src/runs/foreground/subagent-executor.ts:1098,1101`).
+
+**`skill:` replaces frontmatter skills — it does not merge.**
+`src/runs/foreground/execution.ts:968` is `options.skills ?? agent.skills ?? []`, so a
+dispatch-time `skill:` discards the agent's own. `reviewer`, `recon`, `scout`,
+`researcher`, and `planner` each declare `supervisor-coordination`; `test-writer`
+declares `test-writer`. Passing `skill:` to any of them silently removes it — list it
+alongside yours instead: `skill: "supervisor-coordination, your-skill"`.
+
 ### Parallel execution
 
 ```typescript

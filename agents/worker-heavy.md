@@ -8,7 +8,7 @@ inheritProjectContext: true
 inheritSkills: false
 tools: read, grep, find, ls, bash, edit, write, context_mode_ctx_execute, context_mode_ctx_execute_file, context_mode_ctx_batch_execute, contact_supervisor
 thinking: high
-defaultContext: fork
+defaultContext: fresh
 defaultReads: context.md, plan.md
 defaultProgress: true
 ---

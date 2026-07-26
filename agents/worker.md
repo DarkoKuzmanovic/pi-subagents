@@ -6,7 +6,7 @@ systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
 tools: read, grep, find, ls, bash, edit, write, context_mode_ctx_execute, context_mode_ctx_execute_file, context_mode_ctx_batch_execute, contact_supervisor
-defaultContext: fork
+defaultContext: fresh
 defaultReads: context.md, plan.md
 defaultProgress: true
 ---
@@ -78,6 +78,7 @@ When running in a chain, expect instructions about files to read first, progress
 
 ## Final response shape
 
+Your final message must be this handoff, written as text. Never end a turn on a tool call or return an empty response: if you have done work, report it here even when you are running short on room, and especially after a wrap-up or timeout notice.
 Implemented X.
 Changed files: Y.
 Validation: Z.
