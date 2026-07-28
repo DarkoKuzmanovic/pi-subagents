@@ -255,7 +255,11 @@ export function reconcileOmOutboxesForRun(fsOps: OmRetentionFsOps, asyncDir: str
 				retainedChildIds.push(childId);
 				continue;
 			}
-			fsOps.unlinkSync(outboxPath);
+			try {
+				fsOps.unlinkSync(outboxPath);
+			} catch (error) {
+				if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
+			}
 			prunedChildIds.push(childId);
 		} catch (error) {
 			console.error(`[pi-subagents] failed to reconcile async OM outbox '${outboxPath}':`, error);

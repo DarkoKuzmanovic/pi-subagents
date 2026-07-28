@@ -1,6 +1,6 @@
 {
   "name": "pi-subagents",
-  "version": "0.44.1",
+  "version": "0.44.2",
   "description": "Pi extension for delegating tasks to subagents with chains, parallel execution, and TUI clarification",
   "author": "Darko Kuzmanovic",
   "license": "MIT",

@@ -343,6 +343,93 @@ describe("async-om-retention", () => {
 			assert.ok(fs.existsSync(resolveOmReceiptPath(asyncDir, "c000001")));
 		});
 
+		it("treats an ENOENT while pruning as an already-completed concurrent cleanup", () => {
+			const asyncDir = path.join(tempDir, "run-a");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			const outbox = buildCompletionOutbox(makeDelivery(), [{ type: "a" }]);
+			publishCompletionOutbox(asyncDir, outbox);
+			const outboxPath = resolveOmOutboxPath(asyncDir, "c000001");
+			const outboxOnDisk = JSON.parse(fs.readFileSync(outboxPath, "utf-8"));
+			const receipt = makeValidReceipt(outbox, computeCanonicalSha256(outboxOnDisk).sha256);
+			fs.mkdirSync(path.join(asyncDir, ASYNC_OM_RECEIPTS_DIRECTORY), { recursive: true });
+			fs.writeFileSync(resolveOmReceiptPath(asyncDir, "c000001"), JSON.stringify(receipt), "utf-8");
+
+			const racingFs = {
+				existsSync: fs.existsSync,
+				readFileSync(targetPath: string, _encoding: string): string {
+					return fs.readFileSync(targetPath, "utf-8");
+				},
+				readdirSync(targetPath: string): string[] {
+					return fs.readdirSync(targetPath);
+				},
+				unlinkSync(targetPath: string): void {
+					fs.unlinkSync(targetPath);
+					const error = new Error("outbox was already removed by another reconciliation pass") as NodeJS.ErrnoException;
+					error.code = "ENOENT";
+					throw error;
+				},
+			};
+			const originalConsoleError = console.error;
+			const loggedErrors: unknown[][] = [];
+			console.error = (...args: unknown[]) => {
+				loggedErrors.push(args);
+			};
+			let outcome: ReturnType<typeof reconcileOmOutboxesForRun>;
+			try {
+				outcome = reconcileOmOutboxesForRun(racingFs, asyncDir);
+			} finally {
+				console.error = originalConsoleError;
+			}
+
+			assert.deepEqual(outcome.prunedChildIds, ["c000001"]);
+			assert.deepEqual(outcome.retainedChildIds, []);
+			assert.equal(fs.existsSync(outboxPath), false);
+			assert.deepEqual(loggedErrors, []);
+		});
+
+		it("retains and reports an outbox when pruning fails with a non-ENOENT error", () => {
+			const asyncDir = path.join(tempDir, "run-a");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			const outbox = buildCompletionOutbox(makeDelivery(), [{ type: "a" }]);
+			publishCompletionOutbox(asyncDir, outbox);
+			const outboxPath = resolveOmOutboxPath(asyncDir, "c000001");
+			const outboxOnDisk = JSON.parse(fs.readFileSync(outboxPath, "utf-8"));
+			const receipt = makeValidReceipt(outbox, computeCanonicalSha256(outboxOnDisk).sha256);
+			fs.mkdirSync(path.join(asyncDir, ASYNC_OM_RECEIPTS_DIRECTORY), { recursive: true });
+			fs.writeFileSync(resolveOmReceiptPath(asyncDir, "c000001"), JSON.stringify(receipt), "utf-8");
+
+			const permissionDeniedFs = {
+				existsSync: fs.existsSync,
+				readFileSync(targetPath: string, _encoding: string): string {
+					return fs.readFileSync(targetPath, "utf-8");
+				},
+				readdirSync(targetPath: string): string[] {
+					return fs.readdirSync(targetPath);
+				},
+				unlinkSync(_targetPath: string): void {
+					const error = new Error("permission denied") as NodeJS.ErrnoException;
+					error.code = "EACCES";
+					throw error;
+				},
+			};
+			const originalConsoleError = console.error;
+			const loggedErrors: unknown[][] = [];
+			console.error = (...args: unknown[]) => {
+				loggedErrors.push(args);
+			};
+			let outcome: ReturnType<typeof reconcileOmOutboxesForRun>;
+			try {
+				outcome = reconcileOmOutboxesForRun(permissionDeniedFs, asyncDir);
+			} finally {
+				console.error = originalConsoleError;
+			}
+
+			assert.deepEqual(outcome.prunedChildIds, []);
+			assert.deepEqual(outcome.retainedChildIds, ["c000001"]);
+			assert.equal(fs.existsSync(outboxPath), true);
+			assert.equal(loggedErrors.length, 1);
+		});
+
 		it("retains an outbox when the on-disk receipt has a well-formed hash but a malformed shape (e.g. a numeric importedAt)", () => {
 			const asyncDir = path.join(tempDir, "run-a");
 			fs.mkdirSync(asyncDir, { recursive: true });

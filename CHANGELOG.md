@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.44.2] - 2026-07-28
+
+> Async OM outbox reconciliation is now idempotent when concurrent cleanup wins the unlink race.
+
+### Fixed
+
+- **Concurrent async OM outbox cleanup no longer emits false reconciliation failures.** After a receipt has been validated, an `ENOENT` from `unlinkSync` is treated as an already-completed prune. All other filesystem errors still follow the existing log-and-retain path for retry.
+
+### Tests
+
+- Added regressions proving concurrent `ENOENT` cleanup is recorded as pruned while non-`ENOENT` failures such as `EACCES` remain reported and retained.
+
 ## [0.44.1] - 2026-07-24
 
 > The run wall-clock deadline now warns before it kills, and honours `timeoutAction` like the inactivity deadline always has.
