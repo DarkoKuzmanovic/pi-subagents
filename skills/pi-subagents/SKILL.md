@@ -21,7 +21,7 @@ When a `/crew` run is active, Crew owns planning state, role/lane selection, par
 ## When to Use
 
 - **Advisory review**: use fresh-context `reviewer` agents for adversarial code review, or fork to `oracle` when inherited decisions and drift matter
-- **Implementation handoff**: after an approved direction, use `worker` by default; add `lane: "easy"` for small low-risk edits, `lane: "hard"` for difficult work, and a test-writing prompt/skill for focused test work
+- **Implementation handoff**: after an approved direction, use `worker` by default; add `lane: "normal"` for ordinary edits, `lane: "hard"` for difficult work, and a test-writing prompt/skill for focused test work
 - **Recon and planning**: use `recon` for local or web-backed context, then `planner`
 - **Parallel exploration**: run multiple non-conflicting tasks concurrently
 - **Long-running work**: launch async/background runs and inspect them later
@@ -171,7 +171,7 @@ and user/project agents override builtins with the same name.
 | `researcher`  | `recon`               | Use `recon` with web research prompt    |
 | `synthesizer` | `reviewer`                      | Use `reviewer` with synthesis prompt/skill        |
 | `test-writer` | `worker`                        | Use `worker` with test-writing prompt/skill       |
-| `worker-light`| `worker` + lane                 | Use `worker` with `lane: "easy"` override         |
+| `worker-light`| `worker` + lane                 | Use `worker` with `lane: "normal"` override       |
 | `worker-heavy`| `worker` + lane                 | Use `worker` with `lane: "hard"` override         |
 | `oracle-fresh`| `oracle`                        | Use `oracle` with `context: "fresh"` and reads   |
 | `deslopper`   | `janitor`                       | Use `janitor`                                     |
@@ -262,13 +262,13 @@ Precedence is by parsed runtime name:
 
 Model lanes route a named agent through configured model/thinking pairs without duplicate role agents. Configure them in `~/.pi/agent/settings.json` under `subagents.modelLanes`; the parent chooses a lane, never the child.
 
-| Agent | Lanes | Select when |
+| Agent | Example lanes | Select when |
 |---|---|---|
-| `worker` | `easy`, `medium`, `hard` | Bounded edit; normal implementation; architecture-sensitive or high-blast-radius work. |
-| `reviewer` | `quick`, `standard`, `deep` | Focused tests/docs/correctness; normal diff review; security, data integrity, architecture, or release-critical review. |
+| `worker` | `normal`, `hard` | Ordinary implementation; architecture-sensitive or high-blast-radius work. |
+| `reviewer` | `standard`, `deep` | Normal diff review; security, data integrity, architecture, or release-critical review. |
 
 ```typescript
-subagent({ agent: "worker", lane: "easy", task: "..." });
+subagent({ agent: "worker", lane: "normal", task: "..." });
 subagent({ agent: "reviewer", lane: "deep", context: "fresh", task: "Review this migration. Do not edit." });
 ```
 
@@ -758,7 +758,7 @@ When you are the orchestrating agent for a new feature or non-trivial change, fa
 
 Keep builtin agent defaults unless the user explicitly asks for a different model, thinking level, skills, output behavior, context mode, or other override. Do not add overrides just because you are orchestrating; the defaults encode the intended role behavior. In particular, `worker` and `oracle` default to forked context; `recon`, `planner`, `reviewer`, and `janitor` default to fresh context with curated reads where specified.
 
-Choose the implementation worker deliberately: use `worker` with `lane: "easy"` for small, low-risk edits with a clear local pattern; plain `worker` for ordinary 2–3 file implementation; and `worker` with `lane: "hard"` for architecture-sensitive, schema/config/routing, tricky-test, or high-blast-radius work. If the task is specifically to add or repair tests without product behavior changes, use `worker` with a test-writing skill or prompt rather than a generic implementation worker.
+Choose the implementation worker deliberately: use `worker` with `lane: "normal"` for ordinary implementation with a clear local pattern, and `worker` with `lane: "hard"` for architecture-sensitive, schema/config/routing, tricky-test, or high-blast-radius work. If the task is specifically to add or repair tests without product behavior changes, use `worker` with a test-writing skill or prompt rather than a generic implementation worker.
 
 When the user approves launching a subagent to carry out a plan or workflow, treat that as approval to generate a proper role-specific meta prompt for that subagent. Include the approved plan path or summary, clarified requirements, non-goals, relevant context, role boundaries, files or areas to inspect, acceptance criteria, expected output, and validation expectations. Do not pass vague instructions like “implement the plan fully” or “review this” by themselves.
 
@@ -783,7 +783,7 @@ Keep orchestration authority in the parent session. Child subagents should not l
 
 1. Clarify first. This is mandatory. Gather local or external context with `recon`, then ask the user clarifying questions with `ask_user` until scope, acceptance criteria, constraints, and non-goals are clear.
 2. Plan when useful. For complex work, call `planner` or write a plan doc yourself and get approval before implementation. For simple work, confirm shared understanding and explicitly note why planning is skipped.
-3. Implement with one writer. After approval, launch `worker` with a proper meta prompt that includes clarified requirements, relevant context, plan path or summary, acceptance criteria, and validation expectations. Use `lane: "easy"` for small low-risk work and `lane: "hard"` for difficult work. `worker` defaults to forked context; pass `context: "fresh"` only when you intentionally want a fresh child.
+3. Implement with one writer. After approval, launch `worker` with a proper meta prompt that includes clarified requirements, relevant context, plan path or summary, acceptance criteria, and validation expectations. Use `lane: "normal"` for ordinary work and `lane: "hard"` for difficult work. `worker` defaults to forked context; pass `context: "fresh"` only when you intentionally want a fresh child.
 4. Review after implementation. After the worker completes, launch parallel fresh-context `reviewer` agents for correctness/regressions, tests/validation, and simplicity/maintainability. Use `output: false` unless review artifacts are explicitly needed.
 5. Synthesize, then run the fix worker. Separate blockers, fixes worth doing now, optional improvements, and feedback to ignore/defer, then launch a forked `worker` to apply fixes worth doing now when the workflow is implementation-authorized. If reviewers found scope/product/architecture choices that were not approved, ask the user first instead of applying them.
 6. Validate and complete. After the fix worker returns, run or confirm focused validation, update docs/changelog when relevant, and summarize what changed and why.

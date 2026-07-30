@@ -6,8 +6,7 @@ import { getUserAgentSettingsPath, readSettingsFileStrict } from "../agents/agen
 /** Canonical model lane skeleton seeded when none exists. Model IDs are starters for bakeoff tuning. */
 const MODEL_LANES_SKELETON = {
 	worker: {
-		easy: { model: "deepseek/deepseek-v4-flash", thinking: "high" },
-		medium: { model: "zai/glm-5.1", thinking: "high" },
+		normal: { model: "zai/glm-5.1", thinking: "high" },
 		hard: { model: "anthropic/claude-sonnet-4-6", thinking: "medium" },
 	},
 };

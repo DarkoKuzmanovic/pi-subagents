@@ -59,7 +59,7 @@ const TaskItem = Type.Object({
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking for this task" })),
 	model: Type.Optional(Type.String({ description: "Override model for this task (e.g. 'google/gemini-3-pro')" })),
-	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this task (for example 'easy' or 'hard')." })),
+	lane: Type.Optional(Type.String({ description: "Select a configured model lane for this task." })),
 	thinking: Type.Optional(Type.String({ enum: [...THINKING_LEVELS], description: "Thinking level override for this task. Takes precedence over agent config for this dispatch only." })),
 	skill: Type.Optional(SkillOverride),
 });

@@ -157,7 +157,7 @@ The extension ships with six builtin agents you can use immediately:
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `recon`    | Local or external context before planning: relevant files, entry points, data flow, risks, source-backed notes, and handoff material.       |
 | `planner`  | A concrete implementation plan from existing context. It should read and plan, not edit code.                                               |
-| `worker`   | Implementation work, including lane-based easy/hard routing and approved oracle handoffs. It edits files, validates, and escalates decisions. |
+| `worker`   | Implementation work, including lane-based normal/hard routing and approved oracle handoffs. It edits files, validates, and escalates decisions. |
 | `reviewer` | Code review, synthesis, and small fix-back guidance. It checks the implementation against the task/plan, tests, edge cases, and simplicity. |
 | `oracle`   | A second opinion before acting. It challenges assumptions, catches drift, and recommends the safest next move without editing.              |
 | `janitor`  | Repository hygiene: dead code, stale docs, orphaned artifacts, naming issues, and structural cleanup. Use `--review` for audit-only.       |

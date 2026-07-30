@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `tasks[].lane` tool-schema description no longer advertises a hardcoded lane name.** It previously read `(for example 'easy' or 'hard')`, but lane names are user-configured in `subagents.modelLanes` and resolve per-agent, so a shipped literal is wrong on any host that renamed its lanes. Because `resolveModelLaneOverrides` throws `Unknown model lane '<name>' for agent '<agent>'` with no fallback, a model following the schema's own example could hard-fail the dispatch. The description now matches its three siblings, which never carried examples.
+
+### Changed
+
+- **`MODEL_LANES_SKELETON` seeds `worker: { normal, hard }` instead of `worker: { easy, medium, hard }`.** The two-lane shape matches the current convention. Starter model IDs are unchanged: the former `medium` model becomes `normal` and `hard` is untouched, so the seed still assumes no provider auth beyond what it already did. Only affects fresh installs with no `subagents.modelLanes` at all; existing configs are never overwritten.
 ## [0.44.2] - 2026-07-28
 
 > Async OM outbox reconciliation is now idempotent when concurrent cleanup wins the unlink race.

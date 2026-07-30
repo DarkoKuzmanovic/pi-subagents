@@ -164,14 +164,13 @@ describe("seedModelLanesIfMissing", () => {
 		assert.deepEqual(readSettings(), { subagents: ["invalid"], other: true });
 	});
 
-	it("seeds worker easy/medium/hard skeleton", () => {
+	it("seeds worker normal/hard skeleton", () => {
 		const sp = settingsPath();
 		seedModelLanesIfMissing(sp);
 		const result = readSettings() as {
-			subagents?: { modelLanes?: { worker?: { easy?: unknown; medium?: unknown; hard?: unknown } } };
+			subagents?: { modelLanes?: { worker?: { normal?: unknown; hard?: unknown } } };
 		};
-		assert.ok(result.subagents?.modelLanes?.worker?.easy, "worker.easy should exist");
-		assert.ok(result.subagents?.modelLanes?.worker?.medium, "worker.medium should exist");
+		assert.ok(result.subagents?.modelLanes?.worker?.normal, "worker.normal should exist");
 		assert.ok(result.subagents?.modelLanes?.worker?.hard, "worker.hard should exist");
 	});
 });
