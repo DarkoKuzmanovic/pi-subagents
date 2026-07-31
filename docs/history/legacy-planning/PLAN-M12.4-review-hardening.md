@@ -61,3 +61,11 @@ No behavior change in the normal case. In the edge case, a clear error instead o
 - dispatches: 0/0
 - completed-outcomes: 0
 - child-runtime-minutes: 0
+
+## Close-out
+
+M12.4.1 is done: owner-only directory and file modes are enforced at `src/runs/background/async-execution.ts:227-237`.
+
+M12.4.2 is done through `inspectRun` delegation at `src/runs/foreground/subagent-executor.ts:2614-2627`. The plan's `live` / `completed` wording was superseded by the canonical `running` / `complete` vocabulary, and this close-out added a regression test.
+
+M12.4.3 satisfied its stated acceptance check: `!.` dot-access sites are at 0. However, 139 broader-form non-null assertions remain repo-wide as separate pre-existing debt.

@@ -10,10 +10,17 @@ import { Key, matchesKey } from "@earendil-works/pi-tui";
 import {
 	discoverAgents,
 	discoverAgentsAll,
+	getProjectAgentSettingsPath,
+	getUserAgentSettingsPath,
 	removeBuiltinAgentOverride,
 	saveBuiltinAgentOverride,
 	type ChainConfig,
 } from "../agents/agents.ts";
+import {
+	applyUserModelLaneMutations,
+	readModelLanesFromSettingsFile,
+	type ModelLaneMap,
+} from "../agents/model-lanes.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import {
 	SubagentHubComponent,
@@ -781,6 +788,27 @@ export function registerSlashCommands(
 				return;
 			}
 
+			// Lane data is read before the overlay opens so the editor never renders
+			// state it failed to load. Project lanes stay display-only.
+			const userSettingsPath = getUserAgentSettingsPath();
+			const projectSettingsPath = getProjectAgentSettingsPath(cwd);
+			const readLanes = (filePath: string | null): ModelLaneMap | undefined => {
+				try {
+					return readModelLanesFromSettingsFile(filePath);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					ctx.ui.notify(
+						`Cannot open subagent hub: ${message} Settings path: ${filePath}`,
+						"error",
+					);
+					return undefined;
+				}
+			};
+			const userLanes = readLanes(userSettingsPath);
+			if (!userLanes) return;
+			const projectLanes = readLanes(projectSettingsPath);
+			if (!projectLanes) return;
+
 			const result = await ctx.ui.custom(
 				(tui, theme, _kb, done) =>
 					new SubagentHubComponent(
@@ -790,6 +818,7 @@ export function registerSlashCommands(
 						availableModels,
 						currentProvider,
 						done,
+						{ user: userLanes, project: projectLanes },
 					),
 				{
 					overlay: true,
@@ -825,13 +854,33 @@ export function registerSlashCommands(
 					}
 				}
 
-				const changed = overrideAgentNames.size > 0 || (result.resetAgents && result.resetAgents.size > 0);
-				if (changed) {
+				// Staged lane edits persist once, user-scope only, after the overlay closed.
+				// The store re-reads settings here, so unrelated edits made while the
+				// overlay was open are merged rather than clobbered.
+				const laneMutations = result.laneMutations ?? [];
+				if (laneMutations.length > 0) {
+					applyUserModelLaneMutations(laneMutations);
+				}
+
+				const overridesChanged =
+					overrideAgentNames.size > 0 ||
+					(result.resetAgents !== undefined && result.resetAgents.size > 0);
+				const lanesChanged = laneMutations.length > 0;
+				if (overridesChanged && lanesChanged) {
+					ctx.ui.notify("Subagent overrides and model lanes updated", "success");
+				} else if (overridesChanged) {
 					ctx.ui.notify("Subagent overrides updated", "success");
+				} else if (lanesChanged) {
+					ctx.ui.notify("Subagent model lanes updated", "success");
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				ctx.ui.notify(`Failed to save overrides: ${message}`, "error");
+				// Overrides and lanes are separate writes: report the exact failure without
+				// implying the whole save was transactional or partially succeeded.
+				ctx.ui.notify(
+					`Failed to save subagent settings: ${message} Other changes in this save may already have been applied.`,
+					"error",
+				);
 			}
 		},
 	});

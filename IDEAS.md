@@ -28,6 +28,7 @@ Narrow scope · tools restricted to what the job needs · `worktree: true` for a
 ### Keep
 
 - [ ] **Persistent/warm child workers** — reuse a small pool of separate child `pi` processes to reduce startup and extension-load latency while preserving crash isolation. Requires explicit worker identity, idle timeout, context reset, session ownership, cancellation, and leak cleanup. Do not replace child processes with in-process sessions.
+- [ ] **Mechanical non-null assertion sweep** — 139 non-null assertions remain on 132 lines across 22 production files. AGENTS.md broadly bans them, while M12.4 covered only the 24 `!.` dot-access sites. Concentrations are `src/runs/foreground/chain-clarify.ts`, `src/runs/foreground/chain-execution.ts`, `src/runs/foreground/subagent-executor.ts`, `src/tui/render.ts`, and `src/agents/agent-management.ts`; treat a future mechanical sweep as medium-high regression risk.
 - [ ] **Graceful oversized-output truncation** — return a stable `PARTIAL — full output at <path>` envelope instead of failing or flooding the parent. Reuse existing result files and preserve failed-run diagnostics.
 - [ ] **Pending-work-aware completion semantics** — prevent a parent or chain from claiming completion while delegated children, background shells, or session jobs remain live. This may graduate into M12 after its transport/ownership spike.
 - [ ] **Recursive self-dispatch guard test** — prove `maxSubagentDepth` blocks recursive chain/skill self-dispatch at runtime, not only in configuration.

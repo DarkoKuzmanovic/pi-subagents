@@ -1267,4 +1267,603 @@ describe("/subagents config shortcut", {
 			else process.env.VISUAL = savedVisual;
 		}
 	});
+
+	it("/subagents edit seeds worker.normal/worker.hard only when modelLanes is absent", async () => {
+		const savedVisual = process.env.VISUAL;
+		try {
+			process.env.VISUAL = "/usr/bin/true";
+			await withIsolatedHome(async () => {
+				const settingsPath = userSettingsPathForHome();
+				writeSettingsFixture(settingsPath, { theme: "dark" });
+				await runRegisteredCommand("subagents", "edit", process.cwd(), () => {});
+				const seeded = readSettingsFixture(settingsPath);
+				assert.equal(seeded.theme, "dark");
+				assert.deepEqual(
+					(seeded.subagents as { modelLanes?: LaneMapFixture }).modelLanes,
+					{
+						worker: {
+							normal: { model: "zai/glm-5.1", thinking: "high" },
+							hard: { model: "anthropic/claude-sonnet-4-6", thinking: "medium" },
+						},
+					},
+				);
+
+				// A second run must not reseed over the user's own lane map.
+				writeSettingsFixture(settingsPath, {
+					theme: "dark",
+					subagents: { modelLanes: { worker: { custom: { model: "vendor/custom" } } } },
+				});
+				await runRegisteredCommand("subagents", "config", process.cwd(), () => {});
+				assert.deepEqual(
+					(readSettingsFixture(settingsPath).subagents as { modelLanes?: LaneMapFixture })
+						.modelLanes,
+					{ worker: { custom: { model: "vendor/custom" } } },
+				);
+			});
+		} finally {
+			if (savedVisual === undefined) delete process.env.VISUAL;
+			else process.env.VISUAL = savedVisual;
+		}
+	});
+});
+
+type LaneMapFixture = Record<
+	string,
+	Record<string, { model?: string; thinking?: string }>
+>;
+
+interface CapturedNotification {
+	message: string;
+	type?: string;
+}
+
+type HubFactory = (
+	tui: unknown,
+	theme: unknown,
+	keybindings: unknown,
+	done: (result: unknown) => void,
+) => unknown;
+
+/** Narrow accessor for the lane state the hub receives from the slash handler. */
+interface LaneComponentState {
+	projectLanes: LaneMapFixture;
+	laneDrafts: Array<{
+		agentName: string;
+		name: string;
+		model?: string;
+		thinking?: string;
+	}>;
+}
+
+function userSettingsPathForHome(): string {
+	return path.join(os.homedir(), ".pi", "agent", "settings.json");
+}
+
+function writeSettingsFixture(filePath: string, settings: unknown): void {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	fs.writeFileSync(filePath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
+}
+
+function readSettingsFixture(filePath: string): Record<string, unknown> {
+	return JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>;
+}
+
+/** Builds the real hub component from the factory the handler hands to ctx.ui.custom. */
+function constructHubFromFactory(factory: HubFactory): LaneComponentState {
+	const component = factory(
+		{ requestRender() {} },
+		{
+			fg: (_key: string, text: string) => text,
+			bold: (text: string) => text,
+		},
+		{},
+		() => {},
+	);
+	return component as LaneComponentState;
+}
+
+async function runRegisteredCommand(
+	commandName: string,
+	args: string,
+	cwd: string,
+	notify: (message: string, type?: string) => void,
+	custom?: (...customArgs: unknown[]) => Promise<unknown>,
+	hasUI = false,
+): Promise<void> {
+	const commands = new Map<string, RegisteredSlashCommand>();
+	const pi = {
+		events: createEventBus(),
+		registerCommand(name: string, spec: RegisteredSlashCommand) {
+			commands.set(name, spec);
+		},
+		registerShortcut() {},
+		sendMessage(_message: unknown) {},
+	};
+	assert.ok(registerSlashCommands, "slash-commands.ts must export registerSlashCommands");
+	registerSlashCommands(pi, createState(cwd));
+	const command = commands.get(commandName);
+	assert.ok(command, `expected a registered /${commandName} command`);
+	await command.handler(
+		args,
+		createCommandContext({
+			cwd,
+			hasUI,
+			notify,
+			...(custom ? { custom } : {}),
+		}),
+	);
+}
+
+async function runSubagentsHub(options: {
+	cwd: string;
+	setup?: () => void;
+	custom?: (factory: HubFactory) => Promise<unknown>;
+	after?: () => void;
+}): Promise<{ notifications: CapturedNotification[]; customCalls: number }> {
+	return withIsolatedHome(async () => {
+		options.setup?.();
+		const notifications: CapturedNotification[] = [];
+		let customCalls = 0;
+		await runRegisteredCommand(
+			"subagents",
+			"",
+			options.cwd,
+			(message, type) => {
+				notifications.push({ message, type });
+			},
+			async (...customArgs: unknown[]) => {
+				customCalls += 1;
+				const factory = customArgs[0] as HubFactory;
+				return options.custom ? await options.custom(factory) : undefined;
+			},
+			true,
+		);
+		options.after?.();
+		return { notifications, customCalls };
+	});
+}
+
+describe("/subagents lane wiring", {
+	skip: !available ? "slash-commands.ts not importable" : undefined,
+}, () => {
+	beforeEach(() => {
+		clearSlashSnapshots?.();
+	});
+
+	it("passes separate user and project lane maps into the overlay", async () => {
+		await withTempProject("pi-subagents-lane-scopes-", async (root) => {
+			let captured: LaneComponentState | undefined;
+			const { customCalls } = await runSubagentsHub({
+				cwd: root,
+				setup: () => {
+					writeSettingsFixture(userSettingsPathForHome(), {
+						subagents: {
+							modelLanes: {
+								worker: {
+									normal: { model: "user/normal" },
+									hard: { model: "user/hard" },
+								},
+							},
+						},
+					});
+					writeSettingsFixture(path.join(root, ".pi", "settings.json"), {
+						subagents: {
+							modelLanes: {
+								worker: { normal: { model: "project/normal", thinking: "high" } },
+							},
+						},
+					});
+				},
+				custom: async (factory) => {
+					captured = constructHubFromFactory(factory);
+					return undefined;
+				},
+			});
+
+			assert.equal(customCalls, 1);
+			assert.ok(captured, "expected the hub factory to be invoked");
+			// Scope identity is preserved: the same lane name exists in both maps.
+			assert.deepEqual(captured?.projectLanes, {
+				worker: { normal: { model: "project/normal", thinking: "high" } },
+			});
+			assert.deepEqual(
+				captured?.laneDrafts.map((draft) => ({
+					agentName: draft.agentName,
+					name: draft.name,
+					model: draft.model,
+				})),
+				[
+					{ agentName: "worker", name: "normal", model: "user/normal" },
+					{ agentName: "worker", name: "hard", model: "user/hard" },
+				],
+			);
+		});
+	});
+
+	it("persists lane mutations only after the overlay resolves, and only to user settings", async () => {
+		await withTempProject("pi-subagents-lane-persist-", async (root) => {
+			const projectSettingsPath = path.join(root, ".pi", "settings.json");
+			let userSettingsPath = "";
+			let userBytesBefore = "";
+			let userBytesDuringOverlay = "";
+			let projectBytesBefore = "";
+			let projectBytesAfter = "";
+			let savedLanes: LaneMapFixture | undefined;
+			let savedRoot: Record<string, unknown> | undefined;
+
+			const { notifications } = await runSubagentsHub({
+				cwd: root,
+				setup: () => {
+					userSettingsPath = userSettingsPathForHome();
+					writeSettingsFixture(userSettingsPath, {
+						theme: "dark",
+						subagents: {
+							agentOverrides: { worker: { model: "openai/model-0" } },
+							modelLanes: { worker: { normal: { model: "user/normal" } } },
+						},
+					});
+					writeSettingsFixture(projectSettingsPath, {
+						subagents: { modelLanes: { worker: { hard: { model: "project/hard" } } } },
+					});
+					userBytesBefore = fs.readFileSync(userSettingsPath, "utf-8");
+					projectBytesBefore = fs.readFileSync(projectSettingsPath, "utf-8");
+				},
+				custom: async () => {
+					userBytesDuringOverlay = fs.readFileSync(userSettingsPath, "utf-8");
+					return {
+						overrides: new Map<string, string>(),
+						laneMutations: [
+							{
+								kind: "upsert",
+								agentName: "worker",
+								laneName: "fast",
+								patch: { model: "vendor/fast", thinking: "low" },
+							},
+						],
+					};
+				},
+				after: () => {
+					savedRoot = readSettingsFixture(userSettingsPath);
+					savedLanes = (savedRoot.subagents as { modelLanes?: LaneMapFixture })
+						.modelLanes;
+					projectBytesAfter = fs.readFileSync(projectSettingsPath, "utf-8");
+				},
+			});
+
+			// Nothing is written while the overlay is open.
+			assert.equal(userBytesDuringOverlay, userBytesBefore);
+			assert.deepEqual(savedLanes, {
+				worker: {
+					normal: { model: "user/normal" },
+					fast: { model: "vendor/fast", thinking: "low" },
+				},
+			});
+			assert.equal(savedRoot?.theme, "dark");
+			assert.deepEqual(
+				(savedRoot?.subagents as { agentOverrides?: Record<string, unknown> })
+					.agentOverrides,
+				{ worker: { model: "openai/model-0" } },
+			);
+			// Project settings are display-only and must be byte-identical.
+			assert.equal(projectBytesAfter, projectBytesBefore);
+			assert.deepEqual(notifications, [
+				{ message: "Subagent model lanes updated", type: "success" },
+			]);
+		});
+	});
+
+	it("merges the lane write into settings changed while the overlay was open", async () => {
+		await withTempProject("pi-subagents-lane-merge-", async (root) => {
+			let savedRoot: Record<string, unknown> | undefined;
+
+			const { notifications } = await runSubagentsHub({
+				cwd: root,
+				setup: () => {
+					writeSettingsFixture(userSettingsPathForHome(), {
+						theme: "dark",
+						subagents: { modelLanes: { worker: { normal: { model: "user/normal" } } } },
+					});
+				},
+				// Another writer touches the same file while the overlay is open: a new root key
+				// and a sibling lane the overlay never saw. The lane write must merge, not replace.
+				custom: async () => {
+					writeSettingsFixture(userSettingsPathForHome(), {
+						theme: "dark",
+						mcpServers: { local: { command: "node" } },
+						subagents: {
+							modelLanes: {
+								worker: {
+									normal: { model: "user/normal" },
+									sibling: { model: "other-writer/sibling" },
+								},
+							},
+						},
+					});
+					return {
+						overrides: new Map<string, string>(),
+						laneMutations: [
+							{
+								kind: "upsert",
+								agentName: "worker",
+								laneName: "fast",
+								patch: { model: "vendor/fast" },
+							},
+						],
+					};
+				},
+				after: () => {
+					savedRoot = readSettingsFixture(userSettingsPathForHome());
+				},
+			});
+
+			assert.equal(savedRoot?.theme, "dark");
+			assert.deepEqual(savedRoot?.mcpServers, { local: { command: "node" } });
+			assert.deepEqual(
+				(savedRoot?.subagents as { modelLanes?: LaneMapFixture }).modelLanes,
+				{
+					worker: {
+						normal: { model: "user/normal" },
+						sibling: { model: "other-writer/sibling" },
+						fast: { model: "vendor/fast" },
+					},
+				},
+			);
+			assert.deepEqual(notifications, [
+				{ message: "Subagent model lanes updated", type: "success" },
+			]);
+		});
+	});
+	const noWriteScenarios: Array<{ label: string; result: unknown }> = [
+		{ label: "an undefined result", result: undefined },
+		{ label: "a ctrl+c cancel result", result: { overrides: new Map<string, string>() } },
+		{
+			label: "an empty lane mutation list",
+			result: { overrides: new Map<string, string>(), laneMutations: [] },
+		},
+	];
+
+	for (const scenario of noWriteScenarios) {
+		it(`writes nothing for ${scenario.label}`, async () => {
+			await withTempProject("pi-subagents-lane-nowrite-", async (root) => {
+				let userBytesBefore = "";
+				let userBytesAfter = "";
+				const { notifications } = await runSubagentsHub({
+					cwd: root,
+					setup: () => {
+						writeSettingsFixture(userSettingsPathForHome(), {
+							subagents: { modelLanes: { worker: { normal: { model: "user/normal" } } } },
+						});
+						userBytesBefore = fs.readFileSync(userSettingsPathForHome(), "utf-8");
+					},
+					custom: async () => scenario.result,
+					after: () => {
+						userBytesAfter = fs.readFileSync(userSettingsPathForHome(), "utf-8");
+					},
+				});
+
+				assert.equal(userBytesAfter, userBytesBefore);
+				assert.deepEqual(notifications, []);
+			});
+		});
+	}
+
+	it("refuses to open the overlay when the user lane shape is malformed", async () => {
+		await withTempProject("pi-subagents-lane-bad-user-", async (root) => {
+			const projectSettingsPath = path.join(root, ".pi", "settings.json");
+			let userSettingsPath = "";
+			let userBytesBefore = "";
+			let userBytesAfter = "";
+			let projectBytesBefore = "";
+			let projectBytesAfter = "";
+
+			const { notifications, customCalls } = await runSubagentsHub({
+				cwd: root,
+				setup: () => {
+					userSettingsPath = userSettingsPathForHome();
+					writeSettingsFixture(userSettingsPath, {
+						subagents: { modelLanes: { worker: { normal: "not-an-object" } } },
+					});
+					writeSettingsFixture(projectSettingsPath, {
+						subagents: { modelLanes: { worker: { hard: { model: "project/hard" } } } },
+					});
+					userBytesBefore = fs.readFileSync(userSettingsPath, "utf-8");
+					projectBytesBefore = fs.readFileSync(projectSettingsPath, "utf-8");
+				},
+				custom: async () => ({
+					overrides: new Map<string, string>(),
+					laneMutations: [
+						{ kind: "upsert", agentName: "worker", laneName: "fast", patch: {} },
+					],
+				}),
+				after: () => {
+					userBytesAfter = fs.readFileSync(userSettingsPath, "utf-8");
+					projectBytesAfter = fs.readFileSync(projectSettingsPath, "utf-8");
+				},
+			});
+
+			assert.equal(customCalls, 0, "overlay must not open on a malformed lane shape");
+			assert.equal(notifications.length, 1);
+			assert.equal(notifications[0]?.type, "error");
+			assert.match(notifications[0]?.message ?? "", /must be an object/);
+			assert.ok(
+				(notifications[0]?.message ?? "").includes(userSettingsPath),
+				`expected the user settings path in: ${notifications[0]?.message}`,
+			);
+			assert.equal(userBytesAfter, userBytesBefore);
+			assert.equal(projectBytesAfter, projectBytesBefore);
+		});
+	});
+
+	it("refuses to open the overlay when the project lane shape is malformed", async () => {
+		await withTempProject("pi-subagents-lane-bad-project-", async (root) => {
+			const projectSettingsPath = path.join(root, ".pi", "settings.json");
+			let userSettingsPath = "";
+			let userBytesBefore = "";
+			let userBytesAfter = "";
+			let projectBytesBefore = "";
+			let projectBytesAfter = "";
+
+			const { notifications, customCalls } = await runSubagentsHub({
+				cwd: root,
+				setup: () => {
+					userSettingsPath = userSettingsPathForHome();
+					writeSettingsFixture(userSettingsPath, {
+						subagents: { modelLanes: { worker: { normal: { model: "user/normal" } } } },
+					});
+					writeSettingsFixture(projectSettingsPath, {
+						subagents: { modelLanes: { worker: { hard: { thinking: "loud" } } } },
+					});
+					userBytesBefore = fs.readFileSync(userSettingsPath, "utf-8");
+					projectBytesBefore = fs.readFileSync(projectSettingsPath, "utf-8");
+				},
+				custom: async () => ({
+					overrides: new Map<string, string>(),
+					laneMutations: [
+						{ kind: "upsert", agentName: "worker", laneName: "fast", patch: {} },
+					],
+				}),
+				after: () => {
+					userBytesAfter = fs.readFileSync(userSettingsPath, "utf-8");
+					projectBytesAfter = fs.readFileSync(projectSettingsPath, "utf-8");
+				},
+			});
+
+			assert.equal(customCalls, 0, "overlay must not open on a malformed lane shape");
+			assert.equal(notifications.length, 1);
+			assert.equal(notifications[0]?.type, "error");
+			assert.match(notifications[0]?.message ?? "", /invalid 'thinking'/);
+			assert.ok(
+				(notifications[0]?.message ?? "").includes(projectSettingsPath),
+				`expected the project settings path in: ${notifications[0]?.message}`,
+			);
+			assert.equal(userBytesAfter, userBytesBefore);
+			assert.equal(projectBytesAfter, projectBytesBefore);
+		});
+	});
+
+	it("surfaces a store rejection verbatim and claims no success", async () => {
+		await withTempProject("pi-subagents-lane-store-error-", async (root) => {
+			let userBytesBefore = "";
+			let userBytesAfter = "";
+			const { notifications } = await runSubagentsHub({
+				cwd: root,
+				setup: () => {
+					writeSettingsFixture(userSettingsPathForHome(), {
+						subagents: { modelLanes: { worker: { normal: { model: "user/normal" } } } },
+					});
+					userBytesBefore = fs.readFileSync(userSettingsPathForHome(), "utf-8");
+				},
+				// A lane deleted externally while the overlay was open: the store rejects
+				// the stale removal and the whole batch fails.
+				custom: async () => ({
+					overrides: new Map<string, string>(),
+					laneMutations: [{ kind: "remove", agentName: "worker", laneName: "ghost" }],
+				}),
+				after: () => {
+					userBytesAfter = fs.readFileSync(userSettingsPathForHome(), "utf-8");
+				},
+			});
+
+			assert.equal(userBytesAfter, userBytesBefore);
+			assert.equal(notifications.length, 1);
+			assert.equal(notifications[0]?.type, "error");
+			assert.match(
+				notifications[0]?.message ?? "",
+				/Cannot remove model lane 'ghost' for agent 'worker'/,
+			);
+			assert.equal(
+				notifications.some((note) => note.type === "success"),
+				false,
+			);
+		});
+	});
+
+	it("still saves and resets role-default overrides", async () => {
+		await withTempProject("pi-subagents-override-save-", async (root) => {
+			let savedOverrides: Record<string, unknown> | undefined;
+			const saveRun = await runSubagentsHub({
+				cwd: root,
+				custom: async () => ({
+					overrides: new Map<string, string>([["worker", "openai/model-0"]]),
+					thinkingOverrides: new Map<string, string>([["worker", "high"]]),
+				}),
+				after: () => {
+					savedOverrides = (
+						readSettingsFixture(userSettingsPathForHome()).subagents as {
+							agentOverrides?: Record<string, unknown>;
+						}
+					).agentOverrides;
+				},
+			});
+
+			assert.deepEqual(savedOverrides, {
+				worker: { model: "openai/model-0", thinking: "high" },
+			});
+			assert.deepEqual(saveRun.notifications, [
+				{ message: "Subagent overrides updated", type: "success" },
+			]);
+
+			let resetOverrides: Record<string, unknown> | undefined = { present: true };
+			const resetRun = await runSubagentsHub({
+				cwd: root,
+				setup: () => {
+					writeSettingsFixture(userSettingsPathForHome(), {
+						subagents: {
+							agentOverrides: { worker: { model: "openai/model-0", thinking: "high" } },
+						},
+					});
+				},
+				custom: async () => ({
+					overrides: new Map<string, string>(),
+					resetAgents: new Set<string>(["worker"]),
+				}),
+				after: () => {
+					resetOverrides = (
+						readSettingsFixture(userSettingsPathForHome()).subagents as {
+							agentOverrides?: Record<string, unknown>;
+						} | undefined
+					)?.agentOverrides;
+				},
+			});
+
+			assert.equal(resetOverrides, undefined);
+			assert.deepEqual(resetRun.notifications, [
+				{ message: "Subagent overrides updated", type: "success" },
+			]);
+		});
+	});
+
+	it("reports both domains when overrides and lanes are saved together", async () => {
+		await withTempProject("pi-subagents-both-domains-", async (root) => {
+			let savedSubagents: Record<string, unknown> | undefined;
+			const { notifications } = await runSubagentsHub({
+				cwd: root,
+				custom: async () => ({
+					overrides: new Map<string, string>([["worker", "openai/model-0"]]),
+					laneMutations: [
+						{
+							kind: "upsert",
+							agentName: "worker",
+							laneName: "normal",
+							patch: { model: "vendor/normal" },
+						},
+					],
+				}),
+				after: () => {
+					savedSubagents = readSettingsFixture(userSettingsPathForHome())
+						.subagents as Record<string, unknown>;
+				},
+			});
+
+			assert.deepEqual(savedSubagents?.agentOverrides, {
+				worker: { model: "openai/model-0" },
+			});
+			assert.deepEqual(savedSubagents?.modelLanes, {
+				worker: { normal: { model: "vendor/normal" } },
+			});
+			assert.deepEqual(notifications, [
+				{ message: "Subagent overrides and model lanes updated", type: "success" },
+			]);
+		});
+	});
 });

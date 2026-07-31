@@ -156,6 +156,10 @@ export class Container {
   }
 }
 
+// Mirrors @earendil-works/pi-tui dist/components/select-list.js: setSelectedIndex
+// clamps without notifying, arrows wrap and fire onSelectionChange, enter fires
+// onSelect, escape/ctrl+c fire onCancel. setFilter is unused by this extension,
+// so the shim tracks a single item list.
 export class SelectList {
   constructor(items, height, theme) {
     this.items = items || [];
@@ -164,10 +168,10 @@ export class SelectList {
     this.theme = theme;
   }
   getSelected() { return this.items[this.selectedIndex]; }
+  getSelectedItem() { return this.items[this.selectedIndex] || null; }
   setSelectedIndex(index) {
     const max = Math.max(0, this.items.length - 1);
     this.selectedIndex = Math.min(Math.max(0, index), max);
-    if (this.onSelectionChange) this.onSelectionChange(this.getSelected());
   }
   render(width) {
     return this.items.slice(0, this.height).map((item, index) => {
@@ -177,9 +181,31 @@ export class SelectList {
       return prefix + label + description;
     });
   }
-  handleInput() { return false; }
-  handleKey() { return false; }
-  invalidate() { return false; }
+  notifySelectionChange() {
+    const item = this.items[this.selectedIndex];
+    if (item && this.onSelectionChange) this.onSelectionChange(item);
+  }
+  handleInput(data) {
+    if (matchesKey(data, "up")) {
+      this.selectedIndex = this.selectedIndex === 0 ? this.items.length - 1 : this.selectedIndex - 1;
+      this.notifySelectionChange();
+      return;
+    }
+    if (matchesKey(data, "down")) {
+      this.selectedIndex = this.selectedIndex === this.items.length - 1 ? 0 : this.selectedIndex + 1;
+      this.notifySelectionChange();
+      return;
+    }
+    if (matchesKey(data, "enter")) {
+      const item = this.items[this.selectedIndex];
+      if (item && this.onSelect) this.onSelect(item);
+      return;
+    }
+    if (matchesKey(data, "escape", "ctrl+c")) {
+      if (this.onCancel) this.onCancel();
+    }
+  }
+  invalidate() {}
 }
 
 export class SettingsList {

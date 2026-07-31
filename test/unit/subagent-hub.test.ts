@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-let SubagentHubComponent: new (...args: unknown[]) => any | undefined;
+let SubagentHubComponent: (new (...args: unknown[]) => any) | undefined;
 let available = false;
 
 // Compute project root from this test file's location (test/unit/ → repo root)
@@ -1656,7 +1656,7 @@ test("subagent-hub: thinking view width invariant holds", {
 
 // ── Phase 4: display polish ─────────────────────────────────────────────
 
-test("subagent-hub: header shows agent count and modified count", {
+test("subagent-hub: header shows agent count and override count", {
 	skip: !available,
 }, () => {
 	const agents = makeAgentsWithOverride(
@@ -1675,21 +1675,21 @@ test("subagent-hub: header shows agent count and modified count", {
 	);
 
 	const rendered = component.render(84).join("\n");
-	assert.match(stripAnsi(rendered), /Subagent Models \(3 agents · 0 modified\)/, "header shows count with zero modified");
+	assert.match(stripAnsi(rendered), /Subagent Models \(3 agents · 0 overrides\)/, "header labels the count as overrides");
 
 	// Dirty-only agent.
 	component.agentModelOverrides.set("a", "anthropic/model-1");
 	componentState(component).dirtyAgents.add("a");
 	component.invalidate();
 	let after = component.render(84).join("\n");
-	assert.match(stripAnsi(after), /Subagent Models \(3 agents · 1 modified\)/, "dirty-only counts as modified");
+	assert.match(stripAnsi(after), /Subagent Models \(3 agents · 1 override\)/, "dirty-only counts as an override");
 
 	// Reset-only agent (requires persisted override metadata).
 	component.selectedAgentIndex = 1;
 	component.resetSelectedAgent();
 	component.invalidate();
 	after = component.render(84).join("\n");
-	assert.match(stripAnsi(after), /Subagent Models \(3 agents · 2 modified\)/, "reset-only counts as modified");
+	assert.match(stripAnsi(after), /Subagent Models \(3 agents · 2 overrides\)/, "reset-only counts as an override");
 
 	// Both dirty and reset: counted once in the union.
 	component.agentModelOverrides.set("c", "anthropic/model-2");
@@ -1697,7 +1697,8 @@ test("subagent-hub: header shows agent count and modified count", {
 	componentState(component).resetAgents.add("c");
 	component.invalidate();
 	after = component.render(84).join("\n");
-	assert.match(stripAnsi(after), /Subagent Models \(3 agents · 3 modified\)/, "dirty-and-reset counted once in union");
+	assert.match(stripAnsi(after), /Subagent Models \(3 agents · 3 overrides\)/, "dirty-and-reset counted once in union");
+	assert.doesNotMatch(stripAnsi(after), /lane edit/, "no lane segment when nothing lane-related is staged");
 });
 
 test("subagent-hub: persisted marker shows for agents with override", {
@@ -2537,4 +2538,945 @@ test("subagent-hub: reset-confirm view width invariant holds", {
 			assert.ok(visibleWidth(line) <= width, `width ${width}: line exceeds bounds (${visibleWidth(line)})`);
 		}
 	}
+});
+
+// ── M2.2: staged lane editing ──────────────────────────────────────
+
+interface TestLanePatch {
+	model?: string | null;
+	thinking?: string | null;
+}
+
+interface TestLaneMutation {
+	kind: string;
+	agentName: string;
+	laneName: string;
+	originalLaneName?: string;
+	patch?: TestLanePatch;
+}
+
+interface TestLaneDraft {
+	id: string;
+	agentName: string;
+	originalName: string | undefined;
+	name: string;
+	model: string | undefined;
+	thinking: string | undefined;
+}
+
+interface TestSelectList {
+	onSelect?: (item: { value: string }) => void;
+	items: { value: string; label: string; description?: string }[];
+	selectedIndex: number;
+}
+
+/** Narrow accessor for the lane state exercised by these tests. */
+function laneState(component: unknown) {
+	return component as {
+		laneDrafts: TestLaneDraft[];
+		laneUndoStack: unknown[];
+		undoStack: unknown[];
+		laneNameError: string | undefined;
+		laneMessage: string | undefined;
+		selectedLaneRowId: string | undefined;
+		laneSelectList: TestSelectList | null;
+		modelSelectList: TestSelectList | null;
+		laneDeleteConfirmList: TestSelectList | null;
+		stagedLaneMutations: TestLaneMutation[];
+		enterLaneDetail(rowId: string): void;
+	};
+}
+
+const LANE_MODELS = [
+	{ provider: "openai", id: "model-0", fullId: "openai/model-0" },
+	{
+		provider: "deepseek",
+		id: "reasoner",
+		fullId: "deepseek/reasoner",
+		reasoning: true,
+		thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+	},
+	{ provider: "vendor", id: "no-reasoning", fullId: "vendor/no-reasoning", reasoning: false },
+];
+
+function makeLaneHub(
+	laneConfig: { user: Record<string, Record<string, { model?: string; thinking?: string }>>; project: Record<string, Record<string, { model?: string; thinking?: string }>> },
+	onDone: (result: unknown) => void = () => {},
+	agentNames: string[] = ["worker"],
+) {
+	assert.ok(SubagentHubComponent, "SubagentHubComponent imported");
+	return new SubagentHubComponent(
+		makeMockTui(),
+		makeMockTheme(),
+		makeAgents(agentNames),
+		LANE_MODELS,
+		undefined,
+		onDone,
+		laneConfig,
+	);
+}
+
+/** Feed a string one keystroke at a time through the real input dispatcher. */
+function typeKeys(component: { handleInput(data: string): void }, text: string): void {
+	for (const ch of text) component.handleInput(ch);
+}
+
+/** Walk a SelectList cursor onto the item carrying `value` with real arrow keys. */
+function moveCursorTo(component: { handleInput(data: string): void }, list: TestSelectList | null | undefined, value: string): void {
+	assert.ok(list, `list present for ${value}`);
+	const index = list.items.findIndex((item) => item.value === value);
+	assert.ok(index >= 0, `${value} present in the list`);
+	const steps = (index - list.selectedIndex + list.items.length) % list.items.length;
+	for (let i = 0; i < steps; i++) component.handleInput("\x1b[B");
+	assert.equal(list.selectedIndex, index, `cursor landed on ${value}`);
+}
+
+/** Move onto `value` with arrow keys, then confirm it with enter. */
+function selectByKeys(component: { handleInput(data: string): void }, list: TestSelectList | null | undefined, value: string): void {
+	moveCursorTo(component, list, value);
+	component.handleInput("\r");
+}
+
+test("subagent-hub: lane drafts clone user lanes and stay mutation-free until edited", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: { worker: { normal: { model: "openai/model-0" }, hard: { model: "deepseek/reasoner", thinking: "high" } } },
+		project: {},
+	});
+
+	const state = laneState(component);
+	assert.equal(state.laneDrafts.length, 2, "both user lanes cloned into drafts");
+	assert.deepEqual(state.laneDrafts.map((d) => d.name).sort(), ["hard", "normal"]);
+	assert.equal(state.stagedLaneMutations.length, 0, "untouched lanes emit no mutations");
+});
+
+test("subagent-hub: l opens the lane list and esc returns to the agent list", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({ user: { worker: { normal: { model: "openai/model-0" } } }, project: {} });
+
+	component.render(84);
+	component.handleInput("l");
+	assert.match(stripAnsi(component.render(84).join("\n")), /Model Lanes/, "lane list opened");
+
+	component.handleInput("\x1b");
+	assert.match(stripAnsi(component.render(84).join("\n")), /Subagent Models/, "esc returns to agents");
+});
+
+test("subagent-hub: add flow stages nothing until both name and model are chosen", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({ user: {}, project: {} });
+	const state = laneState(component);
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+
+	// Escape at the name step cancels with no draft.
+	component.handleInput("n");
+	typeKeys(component, "fast");
+	component.handleInput("\x1b");
+	assert.equal(state.laneDrafts.length, 0, "esc at name stages nothing");
+
+	// Escape at the model step also cancels with no draft.
+	component.render(84);
+	component.handleInput("n");
+	typeKeys(component, "fast");
+	component.handleInput("\r");
+	component.render(84);
+	assert.match(stripAnsi(component.render(84).join("\n")), /Lane Model/, "model picker opened");
+	component.handleInput("\x1b");
+	assert.equal(state.laneDrafts.length, 0, "esc at model stages nothing");
+
+	// Completing both steps stages exactly one create mutation.
+	component.render(84);
+	component.handleInput("n");
+	typeKeys(component, "fast");
+	component.handleInput("\r");
+	component.render(84);
+	selectByKeys(component, state.modelSelectList, "openai/model-0");
+
+	assert.equal(state.laneDrafts.length, 1, "first lane created for a role with no lane map");
+	const mutations = state.stagedLaneMutations;
+	assert.equal(mutations.length, 1);
+	assert.deepEqual(mutations[0], {
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "fast",
+		patch: { model: "openai/model-0" },
+	});
+});
+
+test("subagent-hub: lane model edit emits an upsert carrying originalLaneName", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({ user: { worker: { normal: { model: "openai/model-0" } } }, project: {} });
+	const state = laneState(component);
+	const draftId = state.laneDrafts[0]?.id ?? "";
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	selectByKeys(component, state.laneSelectList, `user:${draftId}`); // enter opens the lane detail
+	component.handleInput("m");
+	component.render(84);
+	selectByKeys(component, state.modelSelectList, "deepseek/reasoner");
+
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "normal",
+		originalLaneName: "normal",
+		patch: { model: "deepseek/reasoner" },
+	}]);
+});
+
+test("subagent-hub: lane thinking edit stages a level and inherit clears it with null", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({ user: { worker: { normal: { model: "deepseek/reasoner" } } }, project: {} });
+	const state = laneState(component);
+	const draftId = state.laneDrafts[0]?.id ?? "";
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	selectByKeys(component, state.laneSelectList, `user:${draftId}`);
+	component.handleInput("t");
+	component.render(84);
+	component.handleInput("\r"); // inherit → off
+	assert.equal(state.laneDrafts[0]?.thinking, "off");
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "normal",
+		originalLaneName: "normal",
+		patch: { thinking: "off" },
+	}]);
+
+	// Cycle back to inherit: the staged patch clears the field with null.
+	component.handleInput("\r"); // off → high
+	component.handleInput("\r"); // high → xhigh
+	component.handleInput("\r"); // xhigh → inherit
+	assert.equal(state.laneDrafts[0]?.thinking, undefined, "inherit clears the draft level");
+	assert.equal(state.stagedLaneMutations.length, 0, "back to the original value emits nothing");
+});
+
+test("subagent-hub: rename stages an upsert and add-then-remove is a no-op", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({ user: { worker: { normal: { model: "openai/model-0" } } }, project: {} });
+	const state = laneState(component);
+	const draftId = state.laneDrafts[0]?.id ?? "";
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	selectByKeys(component, state.laneSelectList, `user:${draftId}`);
+	component.handleInput("r");
+	for (let i = 0; i < "normal".length; i++) component.handleInput("\x7f");
+	typeKeys(component, "quick");
+	component.handleInput("\r");
+
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "quick",
+		originalLaneName: "normal",
+		patch: {},
+	}]);
+
+	// Add a brand-new lane, then delete it: nothing is emitted for it.
+	component.handleInput("\x1b"); // detail → lane list
+	component.render(84);
+	component.handleInput("n");
+	typeKeys(component, "scratch");
+	component.handleInput("\r");
+	component.render(84);
+	selectByKeys(component, state.modelSelectList, "openai/model-0");
+	const created = state.laneDrafts.find((draft) => draft.name === "scratch");
+	assert.ok(created, "scratch lane staged");
+	component.render(84);
+	moveCursorTo(component, state.laneSelectList, `user:${created.id}`);
+	component.render(84);
+	component.handleInput("d");
+	component.render(84);
+	selectByKeys(component, state.laneDeleteConfirmList, "delete");
+
+	assert.equal(state.laneDrafts.some((draft) => draft.name === "scratch"), false, "scratch lane removed");
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "quick",
+		originalLaneName: "normal",
+		patch: {},
+	}], "add-then-remove contributes no mutation");
+});
+
+test("subagent-hub: removes are emitted before an upsert that reuses the freed name", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: { worker: { fast: { model: "openai/model-0" }, slow: { model: "deepseek/reasoner" } } },
+		project: {},
+	});
+	const state = laneState(component);
+	const fastId = state.laneDrafts.find((draft) => draft.name === "fast")?.id ?? "";
+	const slowId = state.laneDrafts.find((draft) => draft.name === "slow")?.id ?? "";
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	moveCursorTo(component, state.laneSelectList, `user:${fastId}`);
+	component.render(84);
+	component.handleInput("d");
+	component.render(84);
+	selectByKeys(component, state.laneDeleteConfirmList, "delete");
+
+	component.render(84);
+	selectByKeys(component, state.laneSelectList, `user:${slowId}`);
+	component.handleInput("r");
+	for (let i = 0; i < "slow".length; i++) component.handleInput("\x7f");
+	typeKeys(component, "fast");
+	component.handleInput("\r");
+
+	const mutations = state.stagedLaneMutations;
+	assert.equal(mutations.length, 2);
+	assert.deepEqual(mutations[0], { kind: "remove", agentName: "worker", laneName: "fast" });
+	assert.deepEqual(mutations[1], {
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "fast",
+		originalLaneName: "slow",
+		patch: {},
+	});
+});
+
+test("subagent-hub: lane undo is LIFO and never touches the reset undo stack", {
+	skip: !available,
+}, () => {
+	const agents = makeAgentsWithOverride(["worker"], ["openai/model-0"], [true]);
+	assert.ok(SubagentHubComponent, "SubagentHubComponent imported");
+	const component = new SubagentHubComponent(
+		makeMockTui(),
+		makeMockTheme(),
+		agents,
+		LANE_MODELS,
+		undefined,
+		() => {},
+		{ user: { worker: { normal: { model: "openai/model-0" } } }, project: {} },
+	);
+	const state = laneState(component);
+	const draftId = state.laneDrafts[0]?.id ?? "";
+
+	// Stage an override reset first; its undo stack must stay independent.
+	component.render(84);
+	component.handleInput("x");
+	assert.ok(componentState(component).resetAgents.has("worker"), "reset staged");
+
+	component.handleInput("l");
+	state.enterLaneDetail(`user:${draftId}`);
+	component.handleInput("m");
+	component.render(84);
+	state.modelSelectList?.onSelect?.({ value: "deepseek/reasoner" });
+	component.handleInput("r");
+	for (let i = 0; i < "normal".length; i++) component.handleInput("\x7f");
+	typeKeys(component, "quick");
+	component.handleInput("\r");
+	assert.equal(state.laneUndoStack.length, 2, "two lane transactions staged");
+
+	// Lane undo (from the lane list) unwinds the rename, then the model edit.
+	component.handleInput("\x1b"); // detail → lane list
+	component.handleInput("u");
+	assert.equal(state.laneDrafts[0]?.name, "normal", "rename undone");
+	assert.equal(state.laneDrafts[0]?.model, "deepseek/reasoner", "model edit still staged");
+	component.handleInput("u");
+	assert.equal(state.laneDrafts[0]?.model, "openai/model-0", "model edit undone");
+	assert.equal(state.stagedLaneMutations.length, 0, "fully undone lanes emit nothing");
+
+	// The override reset is untouched by lane undo and still undoable from main.
+	assert.ok(componentState(component).resetAgents.has("worker"), "reset survives lane undo");
+	component.handleInput("\x1b"); // lane list → main
+	component.render(84);
+	component.handleInput("u");
+	assert.equal(componentState(component).resetAgents.has("worker"), false, "main u undoes the reset");
+});
+
+test("subagent-hub: ctrl+c discards staged lane changes, esc from main returns them", {
+	skip: !available,
+}, () => {
+	const cancelled: { laneMutations?: TestLaneMutation[]; resetAgents?: Set<string> }[] = [];
+	const cancelHub = makeLaneHub(
+		{ user: { worker: { normal: { model: "openai/model-0" } } }, project: {} },
+		(result) => { cancelled.push(result as { laneMutations?: TestLaneMutation[] }); },
+	);
+	const cancelState = laneState(cancelHub);
+	cancelHub.render(84);
+	cancelHub.handleInput("l");
+	cancelState.enterLaneDetail(`user:${cancelState.laneDrafts[0]?.id ?? ""}`);
+	cancelHub.handleInput("m");
+	cancelHub.render(84);
+	cancelState.modelSelectList?.onSelect?.({ value: "deepseek/reasoner" });
+	assert.equal(cancelState.stagedLaneMutations.length, 1, "precondition: a lane edit is staged");
+	cancelHub.handleInput("\x1b"); // detail → lane list
+	cancelHub.handleInput("\x03"); // ctrl+c
+	assert.equal(cancelled.length, 1);
+	assert.equal(cancelled[0]?.laneMutations, undefined, "ctrl+c returns no lane mutations");
+	assert.equal(cancelled[0]?.resetAgents, undefined, "ctrl+c returns no resets");
+
+	const saved: { laneMutations?: TestLaneMutation[] }[] = [];
+	const saveHub = makeLaneHub(
+		{ user: { worker: { normal: { model: "openai/model-0" } } }, project: {} },
+		(result) => { saved.push(result as { laneMutations?: TestLaneMutation[] }); },
+	);
+	const saveState = laneState(saveHub);
+	saveHub.render(84);
+	saveHub.handleInput("l");
+	saveState.enterLaneDetail(`user:${saveState.laneDrafts[0]?.id ?? ""}`);
+	saveHub.handleInput("m");
+	saveHub.render(84);
+	saveState.modelSelectList?.onSelect?.({ value: "deepseek/reasoner" });
+	saveHub.handleInput("\x1b"); // detail → lane list
+	saveHub.handleInput("\x1b"); // lane list → main
+	saveHub.render(84);
+	saveHub.cycleThinkingLevel(); // an agent-domain edit alongside the lane edit
+	saveHub.handleInput("\x1b"); // esc from main = done
+
+	assert.equal(saved.length, 1);
+	assert.equal(saved[0]?.laneMutations?.length, 1, "lane mutations returned on esc");
+	assert.equal(saved[0]?.laneMutations?.[0]?.laneName, "normal");
+});
+
+test("subagent-hub: invalid and duplicate lane names stay in the name view with an inline error", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: { worker: { normal: { model: "openai/model-0" } } },
+		project: {},
+	});
+	const state = laneState(component);
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	component.handleInput("n");
+	typeKeys(component, "Bad Name");
+	component.handleInput("\r");
+	let rendered = stripAnsi(component.render(84).join("\n"));
+	assert.match(rendered, /New Lane/, "stays in the name view");
+	assert.match(rendered, /Invalid lane name/, "inline invalid-name error");
+	assert.match(rendered, /Bad Name/, "draft input preserved");
+	assert.equal(state.laneDrafts.length, 1, "nothing staged");
+
+	// Correct it to an existing name: duplicate is rejected the same way.
+	for (let i = 0; i < "Bad Name".length; i++) component.handleInput("\x7f");
+	typeKeys(component, "normal");
+	component.handleInput("\r");
+	rendered = stripAnsi(component.render(84).join("\n"));
+	assert.match(rendered, /already exists/, "inline duplicate-name error");
+	assert.equal(state.laneDrafts.length, 1, "still nothing staged");
+});
+
+test("subagent-hub: a legacy lane name is editable, renameable, and deletable in place", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: { worker: { "Legacy Lane": { model: "openai/model-0" } } },
+		project: {},
+	});
+	const state = laneState(component);
+	const draftId = state.laneDrafts[0]?.id ?? "";
+
+	component.render(84);
+	component.handleInput("l");
+	const listRender = stripAnsi(component.render(84).join("\n"));
+	assert.match(listRender, /legacy name/, "legacy marker rendered");
+
+	// Edit the model under the same key.
+	state.enterLaneDetail(`user:${draftId}`);
+	component.handleInput("m");
+	component.render(84);
+	state.modelSelectList?.onSelect?.({ value: "deepseek/reasoner" });
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "Legacy Lane",
+		originalLaneName: "Legacy Lane",
+		patch: { model: "deepseek/reasoner" },
+	}], "in-place edit keeps the legacy key");
+
+	// Renaming to an invalid target is rejected; a valid target is accepted.
+	component.handleInput("r");
+	for (let i = 0; i < "Legacy Lane".length; i++) component.handleInput("\x7f");
+	typeKeys(component, "Still Bad");
+	component.handleInput("\r");
+	assert.match(stripAnsi(component.render(84).join("\n")), /Invalid lane name/);
+	for (let i = 0; i < "Still Bad".length; i++) component.handleInput("\x7f");
+	typeKeys(component, "legacy-lane");
+	component.handleInput("\r");
+	assert.equal(state.laneDrafts[0]?.name, "legacy-lane");
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "legacy-lane",
+		originalLaneName: "Legacy Lane",
+		patch: { model: "deepseek/reasoner" },
+	}]);
+
+	// Deleting a legacy lane emits a plain remove for the on-disk key.
+	component.handleInput("\x1b"); // detail → lane list
+	component.render(84);
+	component.handleInput("d");
+	component.render(84);
+	selectByKeys(component, state.laneDeleteConfirmList, "delete");
+	assert.deepEqual(state.stagedLaneMutations, [{ kind: "remove", agentName: "worker", laneName: "Legacy Lane" }]);
+});
+
+test("subagent-hub: a lane model change clamps an unsupported thinking level", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: { worker: { deep: { model: "deepseek/reasoner", thinking: "high" } } },
+		project: {},
+	});
+	const state = laneState(component);
+	const draftId = state.laneDrafts[0]?.id ?? "";
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	selectByKeys(component, state.laneSelectList, `user:${draftId}`);
+	component.handleInput("m");
+	component.render(84);
+	selectByKeys(component, state.modelSelectList, "vendor/no-reasoning");
+
+	assert.equal(state.laneDrafts[0]?.thinking, "off", "clamped to the only supported level");
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "deep",
+		originalLaneName: "deep",
+		patch: { model: "vendor/no-reasoning", thinking: "off" },
+	}]);
+});
+
+test("subagent-hub: an unsupported existing lane level warns without dirtying the draft", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: { worker: { odd: { model: "vendor/no-reasoning", thinking: "high" } } },
+		project: {},
+	});
+	const state = laneState(component);
+
+	component.render(84);
+	component.handleInput("l");
+	state.enterLaneDetail(`user:${state.laneDrafts[0]?.id ?? ""}`);
+	const rendered = stripAnsi(component.render(84).join("\n"));
+	assert.match(rendered, /not supported by vendor\/no-reasoning/, "warning rendered");
+	assert.equal(state.stagedLaneMutations.length, 0, "warning does not dirty the draft");
+});
+
+test("subagent-hub: esc and Cancel at the delete confirmation keep the lane", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({ user: { worker: { normal: { model: "openai/model-0" } } }, project: {} });
+	const state = laneState(component);
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	component.handleInput("d");
+	component.handleInput("\x1b"); // esc cancels the dialog
+	assert.equal(state.laneDrafts.length, 1, "lane kept after esc");
+
+	component.render(84);
+	component.handleInput("d");
+	component.render(84);
+	component.handleInput("\r"); // enter on the default row = Cancel
+	assert.equal(state.laneDrafts.length, 1, "lane kept after Cancel");
+	assert.equal(state.stagedLaneMutations.length, 0, "no mutation staged");
+});
+
+test("subagent-hub: arrow keys keep the delete target on the row under the cursor", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: {
+			worker: {
+				alpha: { model: "openai/model-0" },
+				beta: { model: "deepseek/reasoner" },
+				gamma: { model: "vendor/no-reasoning" },
+			},
+		},
+		project: {},
+	});
+	const state = laneState(component);
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	const rows = state.laneSelectList?.items ?? [];
+	assert.equal(rows.length, 3, "three lane rows listed");
+
+	// Without the onSelectionChange wiring the cursor moves but selectedLaneRowId does not,
+	// so `d` would stage a removal for the wrong lane.
+	component.handleInput("\x1b[B");
+	component.handleInput("\x1b[B");
+	assert.equal(state.laneSelectList?.selectedIndex, 2, "cursor on the third row");
+	assert.equal(state.selectedLaneRowId, rows[2]?.value, "row id tracks the cursor");
+
+	// Up wraps to the bottom from the top, exactly as the real SelectList does.
+	component.handleInput("\x1b[A");
+	component.handleInput("\x1b[A");
+	component.handleInput("\x1b[A");
+	assert.equal(state.laneSelectList?.selectedIndex, 2, "up from the first row wraps to the last");
+	assert.equal(state.selectedLaneRowId, rows[2]?.value, "row id tracks the wrap");
+
+	component.handleInput("d");
+	assert.match(
+		stripAnsi(component.render(84).join("\n")),
+		new RegExp(`Delete lane '${rows[2]?.label}'`),
+		"confirmation targets the cursor row",
+	);
+	selectByKeys(component, state.laneDeleteConfirmList, "delete");
+
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "remove",
+		agentName: "worker",
+		laneName: rows[2]?.label,
+	}], "only the cursor row is staged for removal");
+});
+test("subagent-hub: deleting a project row is refused with an inline read-only message", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: {},
+		project: { worker: { normal: { model: "openai/model-0" } } },
+	});
+	const state = laneState(component);
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	component.handleInput("d");
+	const rendered = stripAnsi(component.render(84).join("\n"));
+	assert.match(rendered, /read-only/, "inline read-only message");
+	assert.equal(state.stagedLaneMutations.length, 0, "project rows never stage mutations");
+});
+
+test("subagent-hub: lane undo never reverts a transaction staged under another role", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub(
+		{
+			user: {
+				worker: { fast: { model: "openai/model-0" } },
+				reviewer: { deep: { model: "openai/model-0" } },
+			},
+			project: {},
+		},
+		() => {},
+		["worker", "reviewer"],
+	);
+	const state = laneState(component);
+
+	// Stage a delete under worker.
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	component.handleInput("d");
+	component.render(84);
+	state.laneDeleteConfirmList?.onSelect?.({ value: "delete" });
+	assert.deepEqual(state.stagedLaneMutations, [{ kind: "remove", agentName: "worker", laneName: "fast" }]);
+
+	// Switch to reviewer and open its lane list.
+	component.handleInput("\x1b"); // lane list → main
+	component.selectedAgentIndex = 1;
+	component.render(84);
+	component.handleInput("l");
+	const reviewerList = stripAnsi(component.render(84).join("\n"));
+	assert.match(reviewerList, /Model Lanes \(reviewer/, "reviewer lane list open");
+	assert.doesNotMatch(reviewerList, /u undo/, "undo is not advertised for a role with nothing staged");
+
+	component.handleInput("u");
+	assert.match(state.laneMessage ?? "", /Nothing to undo for reviewer/, "explicit per-agent refusal");
+	assert.match(stripAnsi(component.render(84).join("\n")), /Nothing to undo for reviewer/, "message rendered");
+	assert.deepEqual(
+		state.stagedLaneMutations,
+		[{ kind: "remove", agentName: "worker", laneName: "fast" }],
+		"worker's staged delete survives an undo attempt from another role",
+	);
+});
+
+test("subagent-hub: lane undo is LIFO per agent with two roles interleaved", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub(
+		{
+			user: {
+				worker: { fast: { model: "openai/model-0" } },
+				reviewer: { deep: { model: "openai/model-0" } },
+			},
+			project: {},
+		},
+		() => {},
+		["worker", "reviewer"],
+	);
+	const state = laneState(component);
+	const workerDraftId = state.laneDrafts.find((draft) => draft.agentName === "worker")?.id ?? "";
+	const reviewerDraftId = state.laneDrafts.find((draft) => draft.agentName === "reviewer")?.id ?? "";
+
+	// Transaction 1: worker model edit.
+	component.render(84);
+	component.handleInput("l");
+	state.enterLaneDetail(`user:${workerDraftId}`);
+	component.handleInput("m");
+	component.render(84);
+	state.modelSelectList?.onSelect?.({ value: "deepseek/reasoner" });
+	component.handleInput("\x1b"); // detail → lane list
+	component.handleInput("\x1b"); // lane list → main
+
+	// Transaction 2: reviewer model edit.
+	component.selectedAgentIndex = 1;
+	component.render(84);
+	component.handleInput("l");
+	state.enterLaneDetail(`user:${reviewerDraftId}`);
+	component.handleInput("m");
+	component.render(84);
+	state.modelSelectList?.onSelect?.({ value: "deepseek/reasoner" });
+	component.handleInput("\x1b"); // detail → lane list
+	assert.equal(state.stagedLaneMutations.length, 2, "both roles have a staged edit");
+
+	// Undo on reviewer pops only the reviewer transaction.
+	component.handleInput("u");
+	assert.equal(
+		state.laneDrafts.find((draft) => draft.id === reviewerDraftId)?.model,
+		"openai/model-0",
+		"reviewer edit undone",
+	);
+	assert.equal(
+		state.laneDrafts.find((draft) => draft.id === workerDraftId)?.model,
+		"deepseek/reasoner",
+		"worker edit untouched",
+	);
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "fast",
+		originalLaneName: "fast",
+		patch: { model: "deepseek/reasoner" },
+	}]);
+
+	// The worker transaction is now on top but belongs to another role: refused here.
+	component.handleInput("u");
+	assert.match(state.laneMessage ?? "", /Nothing to undo for reviewer/);
+	assert.equal(state.stagedLaneMutations.length, 1, "worker edit still staged");
+
+	// Back on worker, the same key unwinds it.
+	component.handleInput("\x1b"); // lane list → main
+	component.selectedAgentIndex = 0;
+	component.render(84);
+	component.handleInput("l");
+	assert.match(stripAnsi(component.render(84).join("\n")), /u undo/, "undo advertised for the owning role");
+	component.handleInput("u");
+	assert.equal(state.stagedLaneMutations.length, 0, "worker edit undone from its own view");
+});
+
+test("subagent-hub: lane names are validated exactly as typed on create", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({ user: { worker: { normal: { model: "openai/model-0" } } }, project: {} });
+	const state = laneState(component);
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+
+	// Trailing whitespace is rejected, never trimmed into a valid name.
+	component.handleInput("n");
+	typeKeys(component, "fast ");
+	component.handleInput("\r");
+	let rendered = stripAnsi(component.render(84).join("\n"));
+	assert.match(rendered, /New Lane/, "stays in the name view");
+	assert.match(rendered, /Invalid lane name 'fast '/, "reports the name exactly as typed");
+	assert.equal(state.laneDrafts.length, 1, "trailing space stages nothing");
+	assert.equal(state.laneDrafts.some((draft) => draft.name === "fast"), false, "no silently trimmed lane");
+
+	// Leading whitespace is rejected the same way.
+	for (let i = 0; i < "fast ".length; i++) component.handleInput("\x7f");
+	typeKeys(component, " fast");
+	component.handleInput("\r");
+	rendered = stripAnsi(component.render(84).join("\n"));
+	assert.match(rendered, /Invalid lane name ' fast'/, "leading space reported as typed");
+	assert.equal(state.laneDrafts.length, 1, "leading space stages nothing");
+
+	// Whitespace-only input has nothing visible to echo, so it reports as (empty).
+	for (let i = 0; i < " fast".length; i++) component.handleInput("\x7f");
+	typeKeys(component, "  ");
+	component.handleInput("\r");
+	rendered = stripAnsi(component.render(84).join("\n"));
+	assert.match(rendered, /Invalid lane name '\(empty\)'/, "whitespace-only reported as empty");
+	assert.equal(state.laneDrafts.length, 1, "whitespace-only stages nothing");
+});
+
+test("subagent-hub: lane rename is validated exactly as typed", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({ user: { worker: { normal: { model: "openai/model-0" } } }, project: {} });
+	const state = laneState(component);
+	const draftId = state.laneDrafts[0]?.id ?? "";
+
+	component.render(84);
+	component.handleInput("l");
+	state.enterLaneDetail(`user:${draftId}`);
+
+	// Trailing whitespace.
+	component.handleInput("r");
+	for (let i = 0; i < "normal".length; i++) component.handleInput("\x7f");
+	typeKeys(component, "quick ");
+	component.handleInput("\r");
+	let rendered = stripAnsi(component.render(84).join("\n"));
+	assert.match(rendered, /Rename Lane/, "stays in the rename view");
+	assert.match(rendered, /Invalid lane name 'quick '/, "trailing space reported as typed");
+	assert.equal(state.laneDrafts[0]?.name, "normal", "name unchanged");
+	assert.equal(state.stagedLaneMutations.length, 0, "nothing staged");
+
+	// Leading whitespace.
+	for (let i = 0; i < "quick ".length; i++) component.handleInput("\x7f");
+	typeKeys(component, " quick");
+	component.handleInput("\r");
+	rendered = stripAnsi(component.render(84).join("\n"));
+	assert.match(rendered, /Invalid lane name ' quick'/, "leading space reported as typed");
+	assert.equal(state.laneDrafts[0]?.name, "normal", "name still unchanged");
+	assert.equal(state.stagedLaneMutations.length, 0, "still nothing staged");
+});
+
+test("subagent-hub: the main header surfaces staged lane changes alongside overrides", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: { worker: { normal: { model: "openai/model-0" }, spare: { model: "openai/model-0" } } },
+		project: {},
+	});
+	const state = laneState(component);
+	const normalId = state.laneDrafts.find((draft) => draft.name === "normal")?.id ?? "";
+
+	component.render(84);
+	assert.match(
+		stripAnsi(component.render(84).join("\n")),
+		/Subagent Models \(1 agents · 0 overrides\)/,
+		"no lane segment before anything is staged",
+	);
+
+	// One staged lane edit.
+	component.handleInput("l");
+	state.enterLaneDetail(`user:${normalId}`);
+	component.handleInput("m");
+	component.render(84);
+	state.modelSelectList?.onSelect?.({ value: "deepseek/reasoner" });
+	component.handleInput("\x1b"); // detail → lane list
+	component.handleInput("\x1b"); // lane list → main
+	assert.match(
+		stripAnsi(component.render(84).join("\n")),
+		/Subagent Models \(1 agents · 0 overrides · 1 lane edit\)/,
+		"esc-will-write state is visible from the main view",
+	);
+
+	// A second staged lane change pluralizes the segment.
+	component.handleInput("l");
+	component.render(84);
+	state.selectedLaneRowId = `user:${state.laneDrafts.find((draft) => draft.name === "spare")?.id ?? ""}`;
+	component.render(84);
+	component.handleInput("d");
+	component.render(84);
+	state.laneDeleteConfirmList?.onSelect?.({ value: "delete" });
+	component.handleInput("\x1b"); // lane list → main
+	assert.match(
+		stripAnsi(component.render(84).join("\n")),
+		/Subagent Models \(1 agents · 0 overrides · 2 lane edits\)/,
+		"plural lane segment",
+	);
+});
+
+test("subagent-hub: the read-only lane note is cleared when the list is re-entered", {
+	skip: !available,
+}, () => {
+	const component = makeLaneHub({
+		user: { worker: { mine: { model: "openai/model-0" } } },
+		project: { worker: { locked: { model: "openai/model-0" } } },
+	});
+	const state = laneState(component);
+
+	component.render(84);
+	component.handleInput("l");
+	component.render(84);
+	state.selectedLaneRowId = "project:locked";
+	component.render(84);
+	component.handleInput("d");
+	assert.match(stripAnsi(component.render(84).join("\n")), /read-only/, "inline read-only note shown");
+
+	// Visit a detail view and come back: the note no longer applies.
+	state.enterLaneDetail(`user:${state.laneDrafts[0]?.id ?? ""}`);
+	component.handleInput("\x1b"); // detail → lane list
+	assert.equal(state.laneMessage, undefined, "stale lane note cleared on return");
+	assert.doesNotMatch(
+		stripAnsi(component.render(84).join("\n")),
+		/is read-only/,
+		"stale note no longer rendered under the list",
+	);
+});
+
+test("subagent-hub: a lane model change keeps a thinking level the new model supports", {
+	skip: !available,
+}, () => {
+	// Two reasoning models with the same supported levels: the clamp must RETAIN, not reset.
+	const retainModels = [
+		{ provider: "openai", id: "model-0", fullId: "openai/model-0" },
+		{
+			provider: "deepseek",
+			id: "reasoner",
+			fullId: "deepseek/reasoner",
+			reasoning: true,
+			thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		},
+		{
+			provider: "moonshot",
+			id: "thinker",
+			fullId: "moonshot/thinker",
+			reasoning: true,
+			thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" },
+		},
+	];
+	assert.ok(SubagentHubComponent, "SubagentHubComponent imported");
+	const component = new SubagentHubComponent(
+		makeMockTui(),
+		makeMockTheme(),
+		makeAgents(["worker"]),
+		retainModels,
+		undefined,
+		() => {},
+		{ user: { worker: { deep: { model: "deepseek/reasoner", thinking: "xhigh" } } }, project: {} },
+	);
+	const state = laneState(component);
+	const draftId = state.laneDrafts[0]?.id ?? "";
+
+	component.render(84);
+	component.handleInput("l");
+	state.enterLaneDetail(`user:${draftId}`);
+	component.handleInput("m");
+	component.render(84);
+	state.modelSelectList?.onSelect?.({ value: "moonshot/thinker" });
+
+	assert.equal(state.laneDrafts[0]?.thinking, "xhigh", "supported level retained, not clamped");
+	assert.notEqual(state.laneDrafts[0]?.thinking, "off", "clamp did not fall back to off");
+	assert.deepEqual(state.stagedLaneMutations, [{
+		kind: "upsert",
+		agentName: "worker",
+		laneName: "deep",
+		originalLaneName: "deep",
+		patch: { model: "moonshot/thinker" },
+	}], "only the model changed");
 });

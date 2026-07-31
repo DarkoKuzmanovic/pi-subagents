@@ -2,13 +2,30 @@
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-07-31
+
 ### Fixed
 
 - **The `tasks[].lane` tool-schema description no longer advertises a hardcoded lane name.** It previously read `(for example 'easy' or 'hard')`, but lane names are user-configured in `subagents.modelLanes` and resolve per-agent, so a shipped literal is wrong on any host that renamed its lanes. Because `resolveModelLaneOverrides` throws `Unknown model lane '<name>' for agent '<agent>'` with no fallback, a model following the schema's own example could hard-fail the dispatch. The description now matches its three siblings, which never carried examples.
 
+### Added
+
+- **Interactive lane editor in `/subagents` (M2.2).** Pressing `l` from the main agent list opens a lane overlay for the selected role with a non-searchable `SelectList` of project and user lanes. The lane list supports `enter` for details, `n` for a new lane (name → model flow), `d` for delete with a Cancel-defaulted confirmation, `u` for an LIFO lane undo, and `esc` to return to the agent list. The lane detail view exposes `m` (model), `t` (thinking — shows only levels the current lane model supports plus `inherit`), and `r` (rename). Nested views keep `enter`, `esc`, and `ctrl+c` semantics; `ctrl+c` discards every staged lane change and override. Project lanes are labeled `effective · read-only` and show no mutation keys; a user lane shadowed by a same-named project lane is labeled `shadowed by project` and stays editable and deletable. The lane undo stack is separate from the existing override-reset undo.
+- **Atomic, merge-preserving user-lane store (M2.1).** `src/agents/model-lanes.ts` now exports `applyUserModelLaneMutations(mutations)` for batched user-scope lane edits, alongside `MODEL_LANE_NAME_PATTERN` (`/^[a-z0-9][a-z0-9-]*$/`), `isValidModelLaneName`, and the `UserModelLaneMutation` (`upsert`/`remove`) union. The function reads the existing settings file once, validates the current `subagents.modelLanes` shape with the same parser reads use, applies every mutation to a raw in-memory copy, and writes once via `writeSettingsFile` (now exported from `src/agents/agents.ts`). The target path is resolved internally, so no caller can direct a lane write at project scope. Root fields, sibling `subagents` fields (including `agentOverrides`), sibling roles/lanes, and unrelated properties on a targeted lane are preserved. A malformed file is rejected without being overwritten.
+- **Slash command reads user and project lanes, persists staged mutations once (M2.3).** `/subagents` reads user lanes from `getUserAgentSettingsPath()` and project lanes from `getProjectAgentSettingsPath(cwd)` before opening the overlay; if either read fails the overlay does not open and the offending path is named. After the overlay returns, lane mutations are applied once, user-scope only, through the store inside the existing persistence `try/catch`. The store re-reads settings at save time so unrelated edits made while the overlay was open are merged rather than replaced. `/subagents config`, `/subagents json`, and `/subagents edit` still short-circuit and seed the JSON fallback before any TUI lane reads.
+
 ### Changed
 
 - **`MODEL_LANES_SKELETON` seeds `worker: { normal, hard }` instead of `worker: { easy, medium, hard }`.** The two-lane shape matches the current convention. Starter model IDs are unchanged: the former `medium` model becomes `normal` and `hard` is untouched, so the seed still assumes no provider auth beyond what it already did. Only affects fresh installs with no `subagents.modelLanes` at all; existing configs are never overwritten.
+
+### Documentation
+
+- **Lane editor added to README, the bundled `pi-subagents` skill, and the architecture index.** README: new `Model lanes and the /subagents lane editor` section under "Configuring agents" with the key map, project/user scope display, shadow labels, supported-thinking filtering, and the JSON fallback; the Configuration reference now lists `subagents.modelLanes` alongside the extension's separate `config.json`. SKILL: orchestrating models are told lane management is interactive via `/subagents`, the JSON fallback remains, and existing `worker.normal` / `worker.hard` examples are unchanged. ARCHITECTURE: directory map and the "Where do I change X?" index identify `model-lanes.ts` as read + write ownership, `subagent-hub.ts` as staged UI, and `slash-commands.ts` as the user + project lane read and deferred persistence.
+### Tests
+- **Lane-store unit coverage.** `test/unit/model-lanes.test.ts` covers parse/resolve/project-vs-user precedence, legacy free-form lane names, invalid-shape errors with agent/lane/file context, the `applyUserModelLaneMutations` batch (atomicity on the first failing mutation, rename-with-original-name semantics, preservation of unrelated root / `subagents` / lane properties), and the `modelLanes.<agent>.<lane>` shape contract the store relies on.
+- **`/subagents config` seed coverage.** `test/unit/subagents-config.test.ts` proves `seedModelLanesIfMissing` seeds `worker.normal`/`worker.hard` only when the file is absent or `subagents.modelLanes` is missing, preserves unrelated `subagents` keys (e.g. existing `agentOverrides`), and is a no-op (`changed: false`) once a map is already present.
+- **Lane-overlay unit + integration coverage.** `test/unit/subagent-hub.test.ts` exercises staged lane editing against `subagent-hub.ts` directly (create / rename / model / thinking / delete / undo drafts, supported-thinking filtering, project-row read-only behavior, `shadowed by project` labels, `ctrl+c` discard, main-list `esc` apply). `test/integration/subagent-hub.test.ts` drives the same flows through real key sequences on the actual TUI component.
+
 ## [0.44.2] - 2026-07-28
 
 > Async OM outbox reconciliation is now idempotent when concurrent cleanup wins the unlink race.

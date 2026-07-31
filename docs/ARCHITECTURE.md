@@ -79,13 +79,13 @@ of failure. When debugging "child failed but sibling succeeded", check the conte
 | Directory | Responsibility | Start here |
 |---|---|---|
 | `src/extension/` | Extension entry point, `subagent` tool registration, schemas, config, doctor, fan-out child | `index.ts`, `schemas.ts` |
-| `src/agents/` | Agent & chain **definitions**: discovery, selection/merge, CRUD, serializers, frontmatter, model lanes, skills | `agents.ts`, `agent-selection.ts`, `model-lanes.ts` |
+| `src/agents/` | Agent & chain **definitions**: discovery, selection/merge, CRUD, serializers, frontmatter, model lanes (read + user-scope write), skills | `agents.ts`, `agent-selection.ts`, `model-lanes.ts` |
 | `src/runs/foreground/` | **Synchronous** dispatch: validation, routing, single, chains, chain TUI | `subagent-executor.ts` (the front gate) |
 | `src/runs/background/` | **Async** dispatch + run lifecycle: child process, job tracking, status, recovery, notifications | `subagent-runner.ts`, `async-execution.ts` |
 | `src/runs/shared/` | Cross-cutting **run** helpers used by both fg and bg | `model-fallback.ts`, `single-output.ts`, `pi-args.ts` |
 | `src/shared/` | Generic utilities and types (not run-specific) | `types.ts`, `settings.ts`, `fork-context.ts` |
-| `src/slash/` | `/`-command surface and bridges into the executor | `slash-commands.ts` |
-| `src/tui/` | Rendering: result widgets, hub, nested render | `render.ts`, `subagent-hub.ts` |
+| `src/slash/` | `/`-command surface and bridges into the executor; reads user + project lanes for the `/subagents` overlay and persists staged lane mutations once after close | `slash-commands.ts` |
+| `src/tui/` | Rendering: result widgets, hub, nested render; `subagent-hub.ts` stages lane draft/result state and exposes the lane overlays (lane list, detail, name, model, thinking, delete-confirm) without writing to disk | `render.ts`, `subagent-hub.ts` |
 | `src/intercom/` | Cross-agent messaging / result delivery | `intercom-bridge.ts` |
 | `src/types/` | Ambient type shims | `node-shims.d.ts` |
 | `agents/` (repo root) | The builtin agent role markdown (`worker.md`, `planner.md`, …) | — |
@@ -101,7 +101,7 @@ of failure. When debugging "child failed but sibling succeeded", check the conte
 |---|---|
 | The `subagent` tool description / parameters | `src/extension/schemas.ts`, `src/extension/index.ts` |
 | What happens for an **unknown agent** name | `src/agents/agent-selection.ts` (`formatUnknownAgentError`, `looksLikeModelId`) + call sites in `subagent-executor.ts`, `async-execution.ts`, `chain-execution.ts` |
-| How a role resolves to a **model / thinking level / lane** | `src/agents/model-lanes.ts`, `src/shared/model-info.ts`, `src/agents/agents.ts` |
+| How a role resolves to a **model / thinking level / lane** | `src/agents/model-lanes.ts` (read + user-scope write; owns `applyUserModelLaneMutations`, `MODEL_LANE_NAME_PATTERN`, `isValidModelLaneName`, `UserModelLaneMutation`), `src/shared/model-info.ts`, `src/agents/agents.ts` (exports `writeSettingsFile`) |
 | **fresh / fork / lineage** context behavior | `src/shared/fork-context.ts` (+ `tool-name-sanitizer.ts`) |
 | How the **child `pi` process** is spawned / argv built | `src/runs/shared/pi-spawn.ts`, `pi-args.ts` |
 | **Failure classification** (retryable vs transport vs hard) | `src/runs/shared/model-fallback.ts` (`isRetryableModelFailure`, `isTransportFailure`) |
@@ -110,8 +110,8 @@ of failure. When debugging "child failed but sibling succeeded", check the conte
 | **Chain** execution / the clarify TUI | `src/runs/foreground/{chain-execution,chain-clarify}.ts`, `src/agents/chain-serializer.ts` |
 | **Parallel** fan-out / worktrees | `src/runs/background/parallel-groups.ts`, `src/runs/shared/{parallel-utils,worktree}.ts` |
 | **Settings / config** shape and resolution | `src/shared/settings.ts`, `src/extension/config.ts` |
-| **TUI** rendering of results / widget | `src/tui/render.ts`, `src/extension/index.ts` (message renderers) |
-| **Slash commands** | `src/slash/slash-commands.ts`, `slash-bridge.ts` |
+| **TUI** rendering of results / widget | `src/tui/render.ts`, `src/extension/index.ts` (message renderers); lane overlays (list, detail, name, model, thinking, delete-confirm) and staged lane draft/result state live in `src/tui/subagent-hub.ts` |
+| **Slash commands** | `src/slash/slash-commands.ts` (reads user + project lanes for the `/subagents` overlay, persists staged lane mutations once after it closes), `slash-bridge.ts` |
 | Builtin **agent roles** (prompts, tools, defaults) | `agents/*.md` (markdown frontmatter, not TS) |
 
 ---

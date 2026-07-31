@@ -241,6 +241,25 @@ describe("subagent recovery and inspection actions", { skip: !createSubagentExec
 		assert.match(text(missing), /No run handle found/);
 	});
 
+	it("recovers a completed async run with its canonical complete state", async () => {
+		const { executor } = makeExecutor();
+		assert.ok(executor);
+		const completedId = uniqueId("recover-complete");
+		const asyncDir = trackAsyncDir(completedId, {
+			runId: completedId,
+			mode: "single",
+			state: "complete",
+			startedAt: 1,
+			endedAt: 2,
+		});
+		trackHandle({ id: completedId, kind: "async", asyncDir, startedAt: 1 });
+
+		const recovered = await executeAction(executor, { action: "recover", id: completedId });
+
+		assert.match(text(recovered), /resolved \(kind: async, state: complete\)/);
+		assert.doesNotMatch(text(recovered), /state: (?:live|running)/);
+	});
+
 	it("inspects live and completed async runs with compact summaries", async () => {
 		const { executor, state } = makeExecutor();
 		assert.ok(executor);

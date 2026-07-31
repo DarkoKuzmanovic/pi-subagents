@@ -274,7 +274,9 @@ subagent({ agent: "reviewer", lane: "deep", context: "fresh", task: "Review this
 
 Inline `model`/`thinking` overrides a lane; a lane overrides the agent's default config. Same-named project lanes override user lanes. Unknown lanes fail before spawning.
 
-To edit lane JSON, use `/subagents config` (or `/subagents json` or `/subagents edit`).
+Lane management is interactive. Run `/subagents` (no args) to open the lane editor: select an agent, press `l`, and stage creates, renames, model/thinking edits, or deletes. The overlay is staged — nothing is written until you confirm with `esc` from the agent list, and `ctrl+c` discards every staged lane change. The editor persists only to user-scope `~/.pi/agent/settings.json`; project lanes stay read-only and display as `effective · read-only`. A user lane shadowed by a same-named project lane stays editable and deletable, but editing it does not change what dispatch resolves while the project lane still wins. The model/thinking clamp behaves the same way the agent model picker does, with the same edit/display path distinction documented in the README: **edit path** — when you change a lane's model in the TUI, the lane's currently-selected thinking level is **kept** if the new model supports it; otherwise it is clamped to `off` (or the first supported level when `off` is unavailable); a previously-supported pairing persists by default and only changes when the new model can't represent it. **display path** — a level already stored in `~/.pi/agent/settings.json` that the current model does not support is shown with a warning and left untouched (the lane's `thinking` is not dirty-marked by the warning); the stored value persists in the file until you stage an explicit change.
+
+For hand-edited lanes, the `/subagents config` (or `/subagents json` or `/subagents edit`) shortcut still opens `~/.pi/agent/settings.json` in your editor. The two control planes are mutually visible: TUI edits and hand-edited JSON both update the same file, and changes you make there appear the next time you open the overlay.
 
 ### Single agent
 

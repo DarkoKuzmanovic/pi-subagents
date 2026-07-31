@@ -271,7 +271,7 @@ export function readSettingsFileStrict(filePath: string): Record<string, unknown
 	return parsed as Record<string, unknown>;
 }
 
-function writeSettingsFile(filePath: string, settings: Record<string, unknown>): void {
+export function writeSettingsFile(filePath: string, settings: Record<string, unknown>): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const content = JSON.stringify(settings, null, 2) + "\n";
 	const tmpPath = `${filePath}.tmp.${process.pid}`;

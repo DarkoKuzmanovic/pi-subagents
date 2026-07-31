@@ -19,6 +19,7 @@
 - [Configuring agents](#configuring-agents)
   - [Changing a builtin agent's model](#changing-a-builtin-agents-model)
   - [Builtin overrides](#builtin-overrides)
+  - [Model lanes and the `/subagents` lane editor](#model-lanes-and-the-subagents-lane-editor)
 - [Direct commands](#direct-commands)
   - [Per-step tasks](#per-step-tasks)
   - [Inline per-step config](#inline-per-step-config)
@@ -239,6 +240,43 @@ Example:
 Supported override fields are `model`, `fallbackModels`, `thinking`, `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `defaultContext`, `disabled`, `skills`, `tools`, and `systemPrompt`. Use `defaultContext: false` in builtin overrides to clear an inherited context default. Project overrides beat user overrides.
 
 Set `disabled: true` to hide a builtin from runtime discovery and agent-facing `subagent({ action: "list" })` output. For bulk control, set `subagents.disableBuiltins: true` in settings.
+
+### Model lanes and the `/subagents` lane editor
+
+Model lanes are named model/thinking pairs you attach to one agent. A parent picks a lane at dispatch time; the child never chooses its own. Lanes live in `subagents.modelLanes` under `~/.pi/agent/settings.json` (user scope) or `.pi/settings.json` (project scope). The same lane name under both scopes is supported: project scope wins at resolution time, but the user lane stays editable and is never overwritten silently. `/subagents config` (and `/subagents json` or `/subagents edit`) seeds a starter `worker.normal` / `worker.hard` map on first use — only when `subagents.modelLanes` is absent in the user settings file, and never silently overwriting an existing map. All other lanes, including any reviewer lanes, are user-created.
+
+The `/subagents` slash command opens an interactive editor for user-scope lanes. From the main agent list, press `l` to open the lane view for the selected role; the editor is staged — nothing is written to the settings file until you confirm with `esc` from the agent list, and `ctrl+c` discards everything.
+
+Lane list and editing keys:
+
+| Context          | Key          | Action                                                              |
+| ---------------- | ------------ | ------------------------------------------------------------------- |
+| Main agent list  | `l`          | Open lanes for the selected role                                    |
+| Main agent list  | `esc`        | Apply every staged lane change and override, then close the overlay |
+| Lane list        | `↑↓`         | Move between lanes                                                  |
+| Lane list        | `enter`      | Open lane details                                                   |
+| Lane list        | `n`          | Create a new lane (name → model)                                    |
+| Lane list        | `d`          | Delete the selected lane (asks for confirmation; default is Cancel) |
+| Lane list        | `u`          | Undo the last staged lane action (LIFO)                             |
+| Lane list        | `esc`        | Back to main agent list (changes still staged)                      |
+| Lane detail      | `m`          | Edit the lane's model                                               |
+| Lane detail      | `t`          | Edit the lane's thinking level (offers `inherit` + supported levels) |
+| Lane detail      | `r`          | Rename the lane                                                     |
+| Lane detail      | `esc`        | Back to lane list                                                   |
+| Any nested view  | `ctrl+c`     | Discard every staged lane change and override                       |
+
+The thinking picker shows only the levels the selected model supports, plus `inherit` to clear the override. There are two related but distinct behaviours — read them as the **edit path** vs the **display path**: **edit path:** when you change a lane's model in the TUI, the lane's currently-selected thinking level is **kept** if the new model supports it; otherwise it is clamped to `off` (or the first supported level when `off` is unavailable) — the same rule the agent model picker uses. So a previously-supported pairing persists by default and only changes when the new model can't represent it. **display path:** a level already stored in `~/.pi/agent/settings.json` that the current model does not support is shown with a warning and left untouched (the lane's `thinking` field is not dirty-marked by the warning); the stored value persists in the file until you stage an explicit change.
+
+Project lane rows are labeled `effective · read-only` and have no mutation keys. Pressing `d` on a project row shows an inline note that project lanes are edited in the project settings file. When a user lane is shadowed by a same-named project lane, the user row is labeled `shadowed by project` and displays the warning `shadowed by project — the project lane still wins at dispatch`. The shadowed user lane remains editable and deletable, but editing it does not change what dispatch resolves while the project lane exists. Note that `esc` on the lane list does not silently normalize an invalid name; the lane editor rejects unknown or duplicate names inline with a warning and keeps the draft.
+
+Lane names created or renamed through the TUI must match `/^[a-z0-9][a-z0-9-]*$/` — lowercase letters, digits, and hyphens, starting with a letter or digit. The store applies that rule only to create and rename targets. Existing free-form lane names in your settings keep working, keep resolving, and remain editable and deletable in place; they are tagged `legacy name` in the lane list.
+
+After the overlay closes, `/subagents` writes the staged user-scope mutations to `~/.pi/agent/settings.json` once, atomically, through the same merge-preserving writer used for built-in overrides. The store preserves all unrelated root fields, every other `subagents` field (including `agentOverrides`), other roles and lanes, and any unrelated properties on a targeted lane. A malformed `subagents.modelLanes` shape blocks the overlay from opening and notifies with the offending path — the file is never overwritten with a clean skeleton. If a project lane file is malformed, the overlay also does not open and the project path is named.
+
+For hand-edited lanes, the `/subagents config` (or `/subagents json` / `/subagents edit`) shortcut still opens `~/.pi/agent/settings.json` in your editor. The two control planes are mutually visible: TUI edits update the same file, and edits you make there appear the next time you open the overlay. Setting `subagents.modelLanes` directly in the project file is display-only — the project file is never written by the editor.
+If `settings.json` changes on disk while the lane editor is open (a hand-edit, another tool, or a second `/subagents` session), lanes added externally are merged in at save time — the store re-reads the file just before writing. Lanes you staged a remove or rename against, however, can disappear between staging and save: if any staged mutation targets a lane that no longer exists when the file is re-read, the **entire staged batch is rejected** with an error naming the file, agent, and lane, your staged lane edits are lost, and you have to redo them. The agent-override save and the lane-batch save are also **separate writes** — one can succeed while the other fails, and the failure notice names which one did not land rather than implying a single transactional save.
+
+Dispatch semantics are unchanged: lane precedence (project > user), and the unknown-lane throw in `resolveModelLaneOverrides` are not affected by the lane editor. Unknown lanes still fail before a child model is invoked.
 
 ## Direct commands
 
@@ -988,6 +1026,7 @@ After a worktree parallel step completes, per-agent diff stats are appended to t
 | `worktreeSetupHookTimeoutMs`     | number  | `30000`    | Timeout for the worktree setup hook.                                                                                                                                                                                                                          |
 | `inlineReadMaxBytes`             | number  | `204800`   | Max bytes for inline-read content in fresh-context children. Range: `[1024, 8MB]`.                                                                                                                                                                            |
 | `dynamicFanoutMaxItems`          | number  | none       | Default cap on dynamic-fanout expanded items when a step omits `expand.maxItems`. A dynamic step with no effective cap (neither here nor on the step) is rejected before execution.                                                                            |
+| `subagents.modelLanes`           | object  | none       | Named model/thinking pairs in `subagents.modelLanes.<agentName>.<laneName> = { model?, thinking? }`. Lives in `~/.pi/agent/settings.json` (user scope, editable in the `/subagents` TUI) or `.pi/settings.json` (project scope, display-only in the TUI). Project lanes override user lanes at dispatch time. Users must write project lanes by hand. Lane names created or renamed via the TUI must match `/^[a-z0-9][a-z0-9-]*$/`; pre-existing free-form lane names are accepted on read and remain editable in place. TUI persistence is atomic and merge-preserving. See [Model lanes and the `/subagents` lane editor](#model-lanes-and-the-subagents-lane-editor).                                                                                                                                                          |
 
 Bridge activation requires `pi-intercom` to be installed and enabled, a targetable session name, and `pi-intercom` in any explicit agent `extensions` allowlist. The default injected guidance tells children to use `contact_supervisor` with `reason: "need_decision"` when blocked and `reason: "progress_update"` for meaningful updates.
 

@@ -73,14 +73,16 @@ Plan work
 		assert.equal(planner?.defaultContext, "lineage");
 	});
 
-	it("loads packaged planner with fresh defaultContext and worker/oracle with fork", () => {
+	it("loads packaged planner, worker, and worker-heavy with fresh defaultContext and oracle with fork", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-default-context-"));
 		tempDirs.push(dir);
-		const agents = discoverAgents(dir, "both").agents;
+		const agents = discoverAgentsAll(dir).builtin;
 
-		for (const name of ["worker", "oracle"]) {
+		const oracle = agents.find((candidate) => candidate.name === "oracle" && candidate.source === "builtin");
+		assert.equal(oracle?.defaultContext, "fork", "oracle should default to fork context");
+		for (const name of ["worker", "worker-heavy"]) {
 			const agent = agents.find((candidate) => candidate.name === name && candidate.source === "builtin");
-			assert.equal(agent?.defaultContext, "fork", `${name} should default to fork context`);
+			assert.equal(agent?.defaultContext, "fresh", `${name} should default to fresh context`);
 		}
 		const planner = agents.find((a) => a.name === "planner" && a.source === "builtin");
 		assert.equal(planner?.defaultContext, "fresh", "planner should default to fresh context");
