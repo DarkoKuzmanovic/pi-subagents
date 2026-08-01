@@ -55,7 +55,11 @@ The worktree-transaction outcome takes the two-phase critical gate: one fresh
 `lane:deep` code review. No automatic project-end review repeat.
 
 **Outcome dispatch ceilings.** Contained protected → **5** delivered dispatches per
-outcome. M13.1 absorbs the critical-protected transaction → **6**.
+outcome. M13.1 absorbs the critical-protected transaction → originally **6**,
+**raised once to 8** on 2026-08-02 (see gate log). The raise is backed by a real
+contract change — R2's negative resolution added a rollback design and proof burden
+that did not exist when the ceiling was set. **Any further raise is a stop signal,
+not an adjustment.**
 
 **Promotion triggers.** A second repository entering scope; discovery that worktree
 seeding requires a new architectural surface (snapshot/restore) rather than a
@@ -323,6 +327,9 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 | 2026-08-02 | T2 worker | **delivered with a milestone-level negative finding** — see PROMOTION TRIGGER row. typecheck clean, 1356 unit (+12 new), 445 integration. 2 files, +1093/-8. **Patch held unapplied pending gate.** |
 | 2026-08-02 | **PROMOTION TRIGGER FIRED** | R2 resolved negatively: **`git apply` is NOT atomic.** Measured on git 2.55.0 — `git apply --check` returns 0 and the subsequent apply still fails mid-write, leaving a partial tree (2 modified, 1 deleted, 1 created). Git's all-or-nothing guarantee covers patches it *refuses*, not write-time failures. The T2 worker mitigated with a **compensating rollback** (unlink added paths, restore pre-existing from the clean index via `checkout-index -f`, prune created dirs). Already at Full, so the trigger converts to a risk re-check plus a mandatory critical gate rather than a tier change. |
 | 2026-08-02 | Patch conflict check | Both worker patches `git apply --check` clean and do not conflict — the disjoint-file parallel split held. Neither applied. |
+| 2026-08-02 | Ceiling raise 6 → 8 (M13.1) | User decision, over the orchestrator's recommendation to split M13.1 instead. **Justified by a documented contract change, not convenience:** R2 resolved negatively, adding a compensating-rollback design plus its proof burden that were never scoped when the ceiling was set. This is the FIRST raise. **A second raise is a stop signal** — per Crew, it would mean the number was never the constraint. Orchestrator's dissent recorded: splitting M13.1 was preferred because the transaction proved independently verifiable via its own 12 fixtures. |
+| 2026-08-02 | Critical gate ordered | User confirmed gating T1+T2 BEFORE T3/T4, so the rollback design is ratified or rejected before the foreground executor is built on it. Two-phase: fresh `scrutinize` (`reviewer` `lane:deep`), then a separate `reviewer` `lane:deep` code review. |
+| 2026-08-02 | Review staging | Patched state materialized in scratch worktree `/tmp/m13-review` on branch `crew/m13-review-scratch`, so reviewers read complete files rather than a 1093-line fragment. **The run branch remains clean and unmodified.** Branch is deliberately NOT named `pi-parallel-*`, so the orphan sweeper ignores it. Scratch is removed at gate close. |
 | 2026-08-02 | Runway verified by orchestrator | Load-bearing planner claims checked against source: `resolveRepoState` already hard-rejects a dirty tree; `createWorktrees(cwd, runId, count, {agents?, setupHook?})` and `WorktreeSetup{cwd,worktrees,baseCommit}` confirmed exact; `asyncByDefault` in `ExtensionConfig` confirmed as the cause of the unintended async dispatch. Advisory plan promoted to verified runway for M13.1 tasks 2 and 4. |
 | 2026-08-02 | New defect found during verification | `resolveRepoState`'s dirty-tree error instructs "Commit or stash changes first", but this repo prohibits `git stash`. Existing code contradicts its own conventions on the exact path D1's refusal depends on. Queued as an M13.1 fix, not deferred. |
 
