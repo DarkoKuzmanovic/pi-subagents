@@ -14,20 +14,55 @@ function listPendingFiles(dir) {
 		.sort();
 }
 
-function claimNextResponse(dir) {
-	for (const fileName of listPendingFiles(dir)) {
-		const sourcePath = path.join(dir, fileName);
-		const targetPath = path.join(dir, fileName.replace(/^pending-/, "consumed-"));
-		try {
-			fs.renameSync(sourcePath, targetPath);
-			return JSON.parse(fs.readFileSync(targetPath, "utf-8"));
-		} catch (error) {
-			if (error && typeof error === "object" && "code" in error) {
-				const code = error.code;
-				if (code === "ENOENT" || code === "EEXIST") continue;
-			}
-			throw error;
+function peekPendingResponse(dir, fileName) {
+	try {
+		return JSON.parse(fs.readFileSync(path.join(dir, fileName), "utf-8"));
+	} catch {
+		// The file may have been claimed by a sibling child between listing and reading.
+		return undefined;
+	}
+}
+
+/** Atomically claim one pending response. Returns undefined when a sibling won the race. */
+function claimPendingResponse(dir, fileName) {
+	const sourcePath = path.join(dir, fileName);
+	const targetPath = path.join(dir, fileName.replace(/^pending-/, "consumed-"));
+	try {
+		fs.renameSync(sourcePath, targetPath);
+		return JSON.parse(fs.readFileSync(targetPath, "utf-8"));
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error) {
+			const code = error.code;
+			if (code === "ENOENT" || code === "EEXIST") return undefined;
 		}
+		throw error;
+	}
+}
+
+// Two-pass claim so concurrent parallel children cannot swap responses:
+// 1. a response carrying `taskIncludes` is claimable only by a matching task;
+// 2. unkeyed responses stay first-come, preserving every existing test.
+function claimNextResponse(dir, taskText) {
+	const pending = listPendingFiles(dir);
+
+	if (typeof taskText === "string" && taskText.length > 0) {
+		for (const fileName of pending) {
+			const candidate = peekPendingResponse(dir, fileName);
+			const selector = candidate?.taskIncludes;
+			if (typeof selector !== "string" || selector.length === 0) continue;
+			if (!taskText.includes(selector)) continue;
+			const claimed = claimPendingResponse(dir, fileName);
+			if (claimed) return claimed;
+		}
+	}
+
+	for (const fileName of pending) {
+		const candidate = peekPendingResponse(dir, fileName);
+		if (candidate === undefined) continue;
+		// Keyed responses are reserved for their own task, never consumed as filler.
+		if (typeof candidate.taskIncludes === "string" && candidate.taskIncludes.length > 0) continue;
+		const claimed = claimPendingResponse(dir, fileName);
+		if (claimed) return claimed;
 	}
 
 	const defaultPath = path.join(dir, "default-response.json");
@@ -145,7 +180,7 @@ async function main() {
 
 	const args = process.argv.slice(2);
 	const jsonMode = isJsonMode(args);
-	const response = claimNextResponse(queueDir) ?? defaultResponse();
+	const response = claimNextResponse(queueDir, resolveTaskText(args)) ?? defaultResponse();
 	writeSessionFile(args);
 
 	// Simulate a child calling the structured_output tool: write the value to the capture path

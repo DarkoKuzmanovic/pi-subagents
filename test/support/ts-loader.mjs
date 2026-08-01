@@ -158,23 +158,30 @@ export class Container {
 
 // Mirrors @earendil-works/pi-tui dist/components/select-list.js: setSelectedIndex
 // clamps without notifying, arrows wrap and fire onSelectionChange, enter fires
-// onSelect, escape/ctrl+c fire onCancel. setFilter is unused by this extension,
-// so the shim tracks a single item list.
+// onSelect, escape/ctrl+c fire onCancel. setFilter matches the real component
+// exactly: prefix match on item.value, selection reset to 0, no callback fired.
 export class SelectList {
   constructor(items, height, theme) {
     this.items = items || [];
+    this.filteredItems = this.items;
     this.height = height || 10;
     this.selectedIndex = 0;
     this.theme = theme;
   }
-  getSelected() { return this.items[this.selectedIndex]; }
-  getSelectedItem() { return this.items[this.selectedIndex] || null; }
+  setFilter(filter) {
+    const needle = String(filter || "").toLowerCase();
+    this.filteredItems = this.items.filter((item) =>
+      String(item.value || "").toLowerCase().startsWith(needle));
+    this.selectedIndex = 0;
+  }
+  getSelected() { return this.filteredItems[this.selectedIndex]; }
+  getSelectedItem() { return this.filteredItems[this.selectedIndex] || null; }
   setSelectedIndex(index) {
-    const max = Math.max(0, this.items.length - 1);
+    const max = Math.max(0, this.filteredItems.length - 1);
     this.selectedIndex = Math.min(Math.max(0, index), max);
   }
   render(width) {
-    return this.items.slice(0, this.height).map((item, index) => {
+    return this.filteredItems.slice(0, this.height).map((item, index) => {
       const label = String(item.label || item);
       const description = item.description ? " " + item.description : "";
       const prefix = index === this.selectedIndex ? "> " : "  ";
@@ -182,22 +189,22 @@ export class SelectList {
     });
   }
   notifySelectionChange() {
-    const item = this.items[this.selectedIndex];
+    const item = this.filteredItems[this.selectedIndex];
     if (item && this.onSelectionChange) this.onSelectionChange(item);
   }
   handleInput(data) {
     if (matchesKey(data, "up")) {
-      this.selectedIndex = this.selectedIndex === 0 ? this.items.length - 1 : this.selectedIndex - 1;
+      this.selectedIndex = this.selectedIndex === 0 ? this.filteredItems.length - 1 : this.selectedIndex - 1;
       this.notifySelectionChange();
       return;
     }
     if (matchesKey(data, "down")) {
-      this.selectedIndex = this.selectedIndex === this.items.length - 1 ? 0 : this.selectedIndex + 1;
+      this.selectedIndex = this.selectedIndex === this.filteredItems.length - 1 ? 0 : this.selectedIndex + 1;
       this.notifySelectionChange();
       return;
     }
     if (matchesKey(data, "enter")) {
-      const item = this.items[this.selectedIndex];
+      const item = this.filteredItems[this.selectedIndex];
       if (item && this.onSelect) this.onSelect(item);
       return;
     }
@@ -218,6 +225,11 @@ export class SettingsList {
     this.options = options || {};
     this.selectedIndex = 0;
     this.searchQuery = "";
+  }
+  // Real SettingsList mutates the live item in place; callers read currentValue back.
+  updateValue(id, newValue) {
+    const item = this.items.find((entry) => entry.id === id);
+    if (item) item.currentValue = newValue;
   }
   getFilteredItems() {
     if (!this.searchQuery) return this.items;

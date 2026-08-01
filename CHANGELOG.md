@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Integration suite no longer flakes on the `namespaces inherited default outputs` tests.** The long-standing "fanout ordering race" was misdiagnosed as nondeterministic index-directory assignment; the runtime was already deterministic. The real cause was in the test harness: `mock-pi` handed out queued responses first-come, so two concurrently running parallel children could swap responses and a test asserting on `parallel-N/0-*` would read its sibling's output. `MockPiResponse` now accepts `taskIncludes`, which reserves a response for a child whose rendered task text contains that substring; responses without it keep the previous first-come behaviour, so no existing test changes meaning. Reproduced in 2 of 22 pre-fix full-suite runs and 0 of 12 post-fix runs. Test-only change; no runtime behaviour is affected.
+- **`SelectList.setFilter` now exists in the pi-tui test shim.** It was declared in `test/support/shims/pi-tui.d.ts` but missing from `test/support/ts-loader.mjs`, so any call would typecheck and then fail at test runtime. The implementation matches the installed component exactly — prefix match on `item.value`, selection reset to `0`, no `onSelectionChange` — and `SelectList` now reads selection, navigation, clamping and rendering through `filteredItems` like the real class. Auditing the whole shim against the installed `pi-tui` dist also surfaced `SettingsList.updateValue`, which is public on the real component but was undeclared and unimplemented here; it is now both.
+
+### Added
+
+- **`test/unit/pi-tui-shim-surface.test.ts`** exercises every member declared in the pi-tui shim behaviourally rather than by existence, so the next declared-but-missing method fails in one obvious place instead of hiding until a UI test calls it. Two deliberate simplifications are asserted rather than silently tolerated: the shim's `wrapTextWithAnsi` chunks by width where the real utility wraps on word boundaries, and `Text` accepts but ignores its padding arguments.
+- **`test/unit/mock-pi-response-routing.test.ts`** covers keyed response routing directly: a keyed response reaches its own task regardless of which child starts first, and a non-matching task falls through to an unkeyed response instead of consuming a reserved one.
 ## [0.45.0] - 2026-07-31
 
 ### Fixed

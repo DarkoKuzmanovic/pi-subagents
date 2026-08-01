@@ -143,8 +143,10 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
 		async () => {
 			mockPi!.onCall({ structured: { files: ["alpha.ts", "beta.ts"] }, output: "listed files" });
-			mockPi!.onCall({ output: "fallback alpha", writeOutput: "child alpha" });
-			mockPi!.onCall({ output: "fallback beta", writeOutput: "child beta" });
+			// Keyed to the per-item task text: materialized fanout children run concurrently,
+			// so an unkeyed queue swaps these two responses between parallel-1/0 and parallel-1/1.
+			mockPi!.onCall({ taskIncludes: "Review file alpha.ts", output: "fallback alpha", writeOutput: "child alpha" });
+			mockPi!.onCall({ taskIncludes: "Review file beta.ts", output: "fallback beta", writeOutput: "child beta" });
 
 			const id = `async-fanout-output-${Date.now().toString(36)}`;
 			executeAsyncChain!(id, {

@@ -26,23 +26,25 @@
 Known, accepted, and deliberately unbundled. Each entry states why it was not fixed in the milestone
 that surfaced it, so a future reader does not mistake it for an oversight.
 
-- **Fanout ordering race in the integration suite** — parallel children race over which materialized
-  index directory they claim, so a different test in the `namespaces inherited default outputs` family
-  fails intermittently under full-suite concurrency (`test/integration/async-dynamic-fanout.test.ts`,
-  `test/integration/async-execution.test.ts`). Isolated runs always pass. Proven **pre-existing** during
-  M2 by running the full suite in a pristine `HEAD` worktree containing no M2 code: it failed the same
-  family 2-of-2 runs. Not bundled into M2 because it predates that work and would have muddied the
-  three-model review diff. Fixing it means making index-directory assignment deterministic rather than
-  first-come. — effort:M
+- ~~**Fanout ordering race in the integration suite**~~ — **resolved 2026-07-24.** The diagnosis in this
+  entry was wrong: index-directory assignment was already deterministic. The nondeterminism was in the
+  test harness — `mock-pi`'s response queue was claimed first-come, so concurrent parallel children
+  swapped each other's responses and the assertion on `parallel-N/0-*` read the sibling's output.
+  `MockPiResponse.taskIncludes` now reserves a response for the matching task; unkeyed responses stay
+  first-come. Reproduced 2-of-22 pre-fix runs, 0-of-12 post-fix, with a dedicated regression in
+  `test/unit/mock-pi-response-routing.test.ts`.
 - **139 broader-form non-null assertions repo-wide** — `AGENTS.md` bans non-null assertions, but the
   M12.4 sweep only covered the 24 `!.` dot-access occurrences; the `!(`, `![`, and `!,` forms remain.
   Scoped out of M12.4 deliberately rather than missed. Per-file concentrations and the regression-risk
   assessment live in `IDEAS.md` — keep the detail there, not duplicated here. — effort:M
-- **`setFilter` missing from the pi-tui test shim** — declared in `test/support/shims/pi-tui.d.ts` but
-  unimplemented in `test/support/ts-loader.mjs`, so a future call would typecheck and then fail at test
-  runtime. Same class of gap as the `SelectList.handleInput` no-op closed during M2, which had been
-  hiding a wrong-lane-deletion bug. Worth auditing the whole shim against the real component surface
-  rather than fixing this one method. — effort:S
+- ~~**`setFilter` missing from the pi-tui test shim**~~ — **resolved 2026-07-24.** `setFilter` now
+  implements the installed component's semantics exactly (prefix match on `value`, selection reset to 0,
+  no callback), and `SelectList` reads through `filteredItems` like the real class. The audit against the
+  installed `pi-tui` dist also found `SettingsList.updateValue` real-public but undeclared, now added.
+  `test/unit/pi-tui-shim-surface.test.ts` exercises every declared member behaviourally, so the next
+  declared-but-missing gap fails there. Two known simplifications are asserted rather than hidden: the
+  shim's `wrapTextWithAnsi` chunks by width instead of word-wrapping, and `Text` accepts but ignores the
+  padding arguments.
 
 ## Deferred decisions
 

@@ -8,6 +8,12 @@ interface MockPiResponse {
 	stderr?: string;
 	exitCode?: number;
 	writeOutput?: string;
+	/**
+	 * Deterministic response routing. When set, only a child whose rendered task text
+	 * contains this substring may claim this response. Without it the queue stays
+	 * first-come, which silently swaps responses between concurrent parallel children.
+	 */
+	taskIncludes?: string;
 	structured?: unknown;
 	delay?: number;
 	keepAliveAfterFinalMessageMs?: number;

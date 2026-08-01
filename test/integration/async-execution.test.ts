@@ -443,8 +443,10 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 	});
 
 	it("namespaces inherited default outputs for async chain parallel tasks", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({ output: "fallback one", writeOutput: "child one" });
-		mockPi.onCall({ output: "fallback two", writeOutput: "child two" });
+		// Keyed to the task text: concurrent children claim the queue first-come, so an
+		// unkeyed queue swaps these two responses between parallel-0/0 and parallel-0/1.
+		mockPi.onCall({ taskIncludes: "Write one", output: "fallback one", writeOutput: "child one" });
+		mockPi.onCall({ taskIncludes: "Write two", output: "fallback two", writeOutput: "child two" });
 
 		const id = `async-chain-parallel-output-${Date.now().toString(36)}`;
 		executeAsyncChain!(id, {

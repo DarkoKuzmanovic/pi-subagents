@@ -88,6 +88,7 @@ export class SettingsList {
 		onClose: () => void,
 		options?: { enableSearch?: boolean },
 	);
+	updateValue(id: string, newValue: string): void;
 	handleInput?(data: string): void;
 	invalidate(): void;
 	render(width: number): string[];
