@@ -78,7 +78,9 @@ grant; the apply-back step proving non-atomic in practice (see Risk R2).
   kill condition: seeding from the exact logical baseline. That condition is live —
   `git worktree add` checks out a committed ref and carries neither uncommitted nor
   untracked work. D1's refusal path is the answer to it.
-  **⚠ Under pressure from findings R1, R3, R4 below. Not yet reopened.**
+  **⚠ D1 held under pressure.** R1 and R3 were consequences of D1, resolved by D5 and
+  D4 without reopening it. R4 remains open: D1's isolation is transactional, not
+  adversarial, and must be documented as such rather than implied by "isolated".
 
 - **D2 — Grader evidence.** The grader receives read-only tools (`read,grep,find,ls`)
   scoped to the **worktree**, not the real tree, and by default reads the produced
@@ -108,28 +110,62 @@ which contradicts D2. The doc also never states which tree the grader reads. Bot
 must be corrected in the spec, not silently diverged from in code. Placed as work in
 M13.1 task 1.
 
+## Post-grill decisions — locked 2026-08-02
+
+D4–D6 resolve findings that surfaced *after* the grill, during the planner's runway
+audit. They constrain the public contract and are as binding as D1–D3.
+
+- **D4 — One gated editing step per chain (v1).** A passing gate applies its diff to
+  the real tree, leaving it dirty, so a later gated step correctly refuses under D1.
+  This limit is **accepted and must be documented plainly**, not worked around.
+  Ungated steps after a gated one are unaffected, so the spec's own headline example
+  (gated worker → ungated summarizer) still works.
+  _Rejected:_ tracking prior-gate dirt to permit a later gate (subtle bookkeeping whose
+  failure mode is exactly what D1 exists to prevent); auto-committing between gates
+  (the tool would start writing history in the user's repo — far beyond this feature's
+  remit, and this project's convention is that only the orchestrator commits);
+  reopening D1.
+  _Acceptance impact:_ M13.1 must produce a clear, actionable refusal message for the
+  second-gate case, and README must state the limit.
+
+- **D5 — `accept-best` is dropped from the public contract.** `onExhausted` ships as
+  `fail | accept-last` only. Under D1 all attempts share one cumulative worktree, so
+  an earlier attempt's code no longer exists to apply — and because each attempt
+  *refines* the last rather than being an independent draft, `accept-last` already
+  yields the most-developed version. The concept largely dissolves under D1.
+  _Rejected:_ per-attempt worktrees behind an opt-in (two isolation models in one
+  codebase, with the less-tested path on the most safety-critical surface); deferring
+  to M13.2 (the public schema ships in M13.1, so an undeliverable value would be
+  published first).
+  _Known cost:_ no escape hatch when an over-strict grader's later feedback actively
+  degrades the work. Revisit only with evidence of that happening.
+
+- **D6 — Contract defaults.** `maxIterations` defaults to **2** (one retry): the gate
+  proves its value by catching a bad first attempt at bounded cost, and an author
+  wanting more says so explicitly — a conservative default for the spec's named
+  token-blow-up risk. D2's opt-down setting is named
+  **`evidence: "worktree" | "report-only"`**, describing what the grader is given
+  rather than how it behaves. Default is `"worktree"`.
+
 ## Findings that pressure the locked decisions
 
-Surfaced by the planner's runway audit, 2026-08-02. **None of these are resolved.**
-R1 and R3 are user decisions, not implementation details, and are queued for the
-orchestrator to put to the user before M13.1 dispatches.
+Surfaced by the planner's runway audit, 2026-08-02.
 
-- **R1 — `accept-best` is unimplementable as specified under D1.** D1 reuses ONE
-  cumulative worktree across attempts, so an older "best" attempt's diff no longer
-  exists to apply when the gate exhausts. Honouring `accept-best` needs either
-  per-attempt worktrees or snapshots, both of which D1 explicitly rejected. Options:
-  drop `accept-best` from the public contract; redefine it as best-*verdict*
-  reporting with last-diff application (dishonest, publishes an output that does not
-  match the applied code); or reopen D1. **Decision required before M13.2.**
+**R1 and R3 are RESOLVED** — by D5 and D4 respectively; both are retained below as
+the evidence trail for those decisions. **R2 and R4–R7 remain OPEN** and are carried
+into M13.1's acceptance criteria rather than deferred.
+
+- **R1 — RESOLVED by D5.** `accept-best` was unimplementable under D1: attempts share
+  one cumulative worktree, so an earlier attempt's diff no longer exists to apply.
+  `onExhausted` ships as `fail | accept-last` only.
 - **R2 — Apply atomicity is not established.** M13.1 must prove that a failed
   multi-file apply leaves the real tree unchanged. If git cannot supply that
   invariant through the chosen mechanism, the recorded promotion trigger fires.
-- **R3 — Multi-gate chains are sharply limited by D1's own refusal rule.** After a
-  gated step passes and applies its diff, the real tree is dirty. A second gated
-  editing step then sees a dirty baseline and refuses. This follows correctly from
-  D1 but means gates are effectively one-per-chain for editing steps unless the
-  refusal rule is relaxed or the orchestrator commits between gates.
-  **Decision required; materially affects the product shape.**
+- **R3 — RESOLVED by D4.** Multi-gate chains are limited by D1's own refusal rule:
+  after a gated step passes and applies its diff, the real tree is dirty, so a second
+  gated editing step refuses. Accepted as a documented v1 limit — one gated editing
+  step per chain. M13.1 must emit a clear, actionable refusal message for the
+  second-gate case, and README must state the limit.
 - **R4 — Producer confinement is cooperative, not enforced.** Worktree `cwd` does not
   prevent a producer from writing absolute paths or shelling out beyond the worktree.
   D1's "isolation" is transactional, not adversarial. If genuine confinement is
@@ -146,17 +182,15 @@ orchestrator to put to the user before M13.1 dispatches.
 
 ## Open questions
 
-- [ ] How does the gate *detect* that isolation would be blind beyond git cleanliness?
-      There is no independent detector for a logical dependency on earlier uncommitted
-      chain state (planner confirmed none exists).
-- [ ] Default `maxIterations`? Spec shows `3` in an example but names no default, and
-      the default governs the token-blow-up risk. **Blocks M13.1 task 1** (public
-      contract cannot ship with an unresolved default).
-- [ ] Public property name for D2's opt-down mode, e.g.
-      `evidence: "worktree" | "report-only"`. **Blocks M13.1 task 1.**
+- [ ] How the gate detects blindness *beyond* git cleanliness — there is no detector
+      for a logical dependency on earlier uncommitted chain state (planner confirmed
+      none exists). D4 makes this less urgent (one gated editing step per chain) but
+      does not eliminate it.
 - [ ] Which checks can a gate ask the orchestrator to run, and how are they declared?
       (M13.3; changes public schema.)
-- [ ] R1 and R3 above — user decisions.
+- [x] ~~Default `maxIterations`~~ — resolved by D6.
+- [x] ~~Public property name for D2's opt-down mode~~ — resolved by D6.
+- [x] ~~R1 / R3~~ — resolved by D5 / D4.
 
 ## Outcome map
 
@@ -176,7 +210,8 @@ M13.4. M13.2–M13.4 must not start until M13.1 passes its critical review gate.
 
 ## First slice — M13.1 (NOT YET CONFIRMED, NOT DISPATCHED)
 
-Blocked on: the two contract decisions in Open questions, and user confirmation.
+Contract decisions RESOLVED (D4, D5, D6). **Blocked only on explicit user
+confirmation of the wave.** No worker has been dispatched.
 
 | # | Task | Difficulty | Depends |
 |---|---|---|---|
