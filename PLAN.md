@@ -330,6 +330,9 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 | 2026-08-02 | Ceiling raise 6 → 8 (M13.1) | User decision, over the orchestrator's recommendation to split M13.1 instead. **Justified by a documented contract change, not convenience:** R2 resolved negatively, adding a compensating-rollback design plus its proof burden that were never scoped when the ceiling was set. This is the FIRST raise. **A second raise is a stop signal** — per Crew, it would mean the number was never the constraint. Orchestrator's dissent recorded: splitting M13.1 was preferred because the transaction proved independently verifiable via its own 12 fixtures. |
 | 2026-08-02 | Critical gate ordered | User confirmed gating T1+T2 BEFORE T3/T4, so the rollback design is ratified or rejected before the foreground executor is built on it. Two-phase: fresh `scrutinize` (`reviewer` `lane:deep`), then a separate `reviewer` `lane:deep` code review. |
 | 2026-08-02 | Review staging | Patched state materialized in scratch worktree `/tmp/m13-review` on branch `crew/m13-review-scratch`, so reviewers read complete files rather than a 1093-line fragment. **The run branch remains clean and unmodified.** Branch is deliberately NOT named `pi-parallel-*`, so the orphan sweeper ignores it. Scratch is removed at gate close. |
+| 2026-08-02 | Orchestrator verification | Ran the gates myself in the scratch worktree rather than trusting worker reports: typecheck clean, **1361 unit pass / 0 fail** (baseline 1344, +17), **445 integration pass / 0 fail**. Worker claims confirmed. |
+| 2026-08-02 | **CRITICAL GATE phase 1 — scrutinize — FIX-FIRST** | 4 load-bearing blockers, each with an independent machine reproduction (the reviewer built its own fixtures rather than asserting). **Claim 1 CONFIRMED independently:** `git apply --check`=0 then apply=128 with 4 paths partially changed. Blockers: (B1) no transaction lock — a concurrent edit can be accepted as success, or destroyed by rollback; reproduced both directions. (B2) SIGKILL after a partial git write has no compensation and no durable recovery; the existing SIGKILL fixture passes while this stays untested. (B3) `status.showUntrackedFiles=no` bypasses the dirty-tree refusal entirely — transaction created over hidden untracked work, invalidating the pristine-baseline premise D7 rests on. (B4) `validateGateVerdictSemantics` accepts dishonest verdicts: `pass:true` at score 0.5 under a 1.0 threshold, and duplicate criteria claiming full coverage. Should-fix: `pruneCreatedEmptyDirs` swallows all errors; strict creation inherits best-effort cleanup; no fixture covers `verify-failed` or rollback-time failure. |
+| 2026-08-02 | Claim 3 adjudicated | Reviewer AGREES with the worker's no-rollback-on-`verify-failed` choice — automatic rollback could destroy concurrent user edits, which B1 reproduced. **But the policy is incomplete:** verification compares path SETS only, so same-path content divergence is not a mismatch at all and can return success with bytes differing from the accepted worktree. |
 | 2026-08-02 | Runway verified by orchestrator | Load-bearing planner claims checked against source: `resolveRepoState` already hard-rejects a dirty tree; `createWorktrees(cwd, runId, count, {agents?, setupHook?})` and `WorktreeSetup{cwd,worktrees,baseCommit}` confirmed exact; `asyncByDefault` in `ExtensionConfig` confirmed as the cause of the unintended async dispatch. Advisory plan promoted to verified runway for M13.1 tasks 2 and 4. |
 | 2026-08-02 | New defect found during verification | `resolveRepoState`'s dirty-tree error instructs "Commit or stash changes first", but this repo prohibits `git stash`. Existing code contradicts its own conventions on the exact path D1's refusal depends on. Queued as an M13.1 fix, not deferred. |
 
@@ -338,14 +341,15 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 ```
 dispatches:        2        (T1 worker, T2 worker — both delivered)
 burned:            1        (planner cc6bab39 — no-write guard, ~12 min)
-review-bundles:    0
-review-dispatches: 0
+review-bundles:    1        (M13.1 critical gate, phase 1 of 2)
+review-dispatches: 1        (scrutinize — phase 2 deep review NOT yet run)
+fix-cycles:        0/1      (one blocker cycle available)
 worker-retries:    0
 oracle:            0
 direct-edits:      0
 compactions:       0
-child-runtime:     ~30 min / 180 ceiling
-session-dispatches: 3 / 12 ceiling
+child-runtime:     ~55 min / 180 ceiling
+session-dispatches: 4 / 12 ceiling
 ```
 
 ## Pre-run housekeeping
