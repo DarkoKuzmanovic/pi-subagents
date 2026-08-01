@@ -11,7 +11,7 @@ Run branch: `crew/m13-acceptance-gates`, cut from `main` @ `7fce02d`.
 | Risk | **contained protected** (worktree-transaction outcome: **critical protected**) |
 | Delivery | **local** — no delivery push, no PR |
 | started-at | 2026-08-02T00:16:31+02:00 |
-| first-worker-at | _(not yet)_ |
+| first-worker-at | 2026-08-02T00:52+02:00 (T1+T2 wave; ~36 min from started-at) |
 | completed-at | _(not yet)_ |
 
 **Evidence (five-fact checkpoint, orchestrator-authored before any child dispatch):**
@@ -147,6 +147,35 @@ audit. They constrain the public contract and are as binding as D1–D3.
   **`evidence: "worktree" | "report-only"`**, describing what the grader is given
   rather than how it behaves. Default is `"worktree"`.
 
+- **D7 — PENDING RATIFICATION: compensating rollback for non-atomic apply.**
+  The T2 worker discovered `git apply` is not atomic and chose a compensating
+  rollback (unlink added paths, restore pre-existing from the clean index via
+  `checkout-index -f`, prune created directories — sound only because pre-apply
+  re-validation guarantees a pristine tree at `baseCommit`).
+  **This is an architectural decision made by a worker, which Crew reserves to the
+  orchestrator. It is recorded, NOT accepted.** It must survive the two-phase
+  critical gate before any patch is integrated. Two sub-questions the reviewer must
+  pressure-test:
+  1. Is compensating rollback sound under every failure mode, including a failure of
+     `checkout-index` itself (worker reports residue in that case, leaving a state
+     only the user can resolve)?
+  2. `verify-failed` after a *successful* apply deliberately does NOT roll back — the
+     worker judged unwinding legitimately-applied work on an unexplained mismatch to
+     be worse than reporting it. The worker explicitly asked for a second opinion.
+  _Untested per worker report:_ submodule pointer changes (mode-160000); exec-bit
+  changes in repos with `core.fileMode` disabled; a failed discard still finalizes.
+
+- **D8 — Orchestrator error: the T1 `accept-best` criterion was mis-specified.**
+  T1's dispatch required `accept-best` to appear "NOWHERE in the repo". That was
+  wrong: `PLAN.md` retains `accept-best` in D5, R1, and the gate log **as the
+  decision trail explaining why it was dropped**, which is precisely what plan state
+  is for. The worker correctly reported the criterion unmet rather than deleting
+  history to satisfy it — good behavior, not a defect.
+  **Criterion narrowed to:** `accept-best` must not appear in shipped code, the
+  public schema, `agents/`, or `docs/plans/PLAN-acceptance-gates.md`. Occurrences in
+  `PLAN.md` history are required and must NOT be removed. T1 is judged against the
+  narrowed criterion.
+
 ## Findings that pressure the locked decisions
 
 Surfaced by the planner's runway audit, 2026-08-02.
@@ -158,7 +187,14 @@ into M13.1's acceptance criteria rather than deferred.
 - **R1 — RESOLVED by D5.** `accept-best` was unimplementable under D1: attempts share
   one cumulative worktree, so an earlier attempt's diff no longer exists to apply.
   `onExhausted` ships as `fail | accept-last` only.
-- **R2 — Apply atomicity is not established.** M13.1 must prove that a failed
+- **R2 — RESOLVED NEGATIVELY, then mitigated.** Apply atomicity is **not available
+  from git**. `git apply --check` passing does not imply the apply will succeed: it
+  validates applicability, not write-time success. A mid-write failure (unwritable
+  path, full disk) leaves a partially rewritten tree — reproduced under fixture on
+  git 2.55.0. Atomicity is therefore achieved by a **compensating rollback**, sound
+  only because pre-apply re-validation guarantees the tree was pristine at
+  `baseCommit`. See D7-PENDING; this design is a worker's choice and is NOT yet
+  ratified.
   multi-file apply leaves the real tree unchanged. If git cannot supply that
   invariant through the chosen mechanism, the recorded promotion trigger fires.
 - **R3 — RESOLVED by D4.** Multi-gate chains are limited by D1's own refusal rule:
@@ -208,9 +244,13 @@ planner did not author or alter the scope decision.
 foreground observation in M13.1 before D3's async parity re-proves it unattended in
 M13.4. M13.2–M13.4 must not start until M13.1 passes its critical review gate.
 
-## First slice — M13.1 (NOT YET CONFIRMED, NOT DISPATCHED)
+## First slice — M13.1 (T1+T2 DELIVERED, HELD UNAPPLIED PENDING CRITICAL GATE)
 
-Contract decisions RESOLVED (D4, D5, D6). **Blocked only on explicit user
+Contract decisions RESOLVED (D4, D5, D6). Wave 1 (T1+T2) confirmed and delivered.
+**Neither patch is integrated.** Both are held as artifacts because T2 made an
+architectural decision on the critical-protected surface (see D7-PENDING) and Crew
+forbids integrating unreviewed critical-protected work.
+Patches: `~/.pi/agent/sessions/.../subagent-artifacts/worktree-diffs/task-{0,1}-worker.patch`
 confirmation of the wave.** No worker has been dispatched.
 
 | # | Task | Difficulty | Depends |
@@ -278,13 +318,18 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 | 2026-08-02 | **PROCESS LAPSE** | Planner `cc6bab39` was dispatched **without** first mirroring the wave into `todo_write` and taking explicit user confirmation. The orchestrator treated the tier-selection option text ("one planner dispatch") as blanket authorization; that was inference, not instruction. The dispatch also resolved to **async by config default**, not deliberate choice, so a child ran unsupervised without a considered decision. Bounded harm: the planner wrote no files and was barred from authoring scope. Corrective: `todo_write` now precedes every dispatch, and no child runs without explicit wave confirmation. |
 | 2026-08-02 | planner `cc6bab39` | **BURNED** (~12 min), per Crew's explicit no-write rule — a no-write/backstop failure is never a ceiling dispatch, even though the task itself prohibited edits. Its returned plan is retained as **advisory input only**, not a delivered planning artifact. **No bounded retry taken:** retry exists to recover lost work, and nothing was lost — the full text is in the orchestrator's context. Re-dispatching would spend ~12 more minutes to reproduce output already held. Instead the orchestrator independently verified the load-bearing runway claims (next row), which is the check a delivered artifact would have earned. Flagged for the user to override if a clean delivered planning artifact is wanted. |
 | 2026-08-02 | Classification re-check | Full HOLDS — runway audit disproved the reuse hypothesis for the apply-back path |
+| 2026-08-02 | M13.1 wave 1 confirmed | User confirmed T1+T2 parallel. `async:false` set EXPLICITLY to defeat `asyncByDefault` and keep the wave supervised. |
+| 2026-08-02 | T1 worker | **delivered.** Gate contract, `GATE_VERDICT_SCHEMA`, `agents/grader.md` (tools exactly `read,grep,find,ls`), spec-defect correction. typecheck clean, 1349 unit, 445 integration. 9 files, +396/-20. **Patch held unapplied pending gate.** |
+| 2026-08-02 | T2 worker | **delivered with a milestone-level negative finding** — see PROMOTION TRIGGER row. typecheck clean, 1356 unit (+12 new), 445 integration. 2 files, +1093/-8. **Patch held unapplied pending gate.** |
+| 2026-08-02 | **PROMOTION TRIGGER FIRED** | R2 resolved negatively: **`git apply` is NOT atomic.** Measured on git 2.55.0 — `git apply --check` returns 0 and the subsequent apply still fails mid-write, leaving a partial tree (2 modified, 1 deleted, 1 created). Git's all-or-nothing guarantee covers patches it *refuses*, not write-time failures. The T2 worker mitigated with a **compensating rollback** (unlink added paths, restore pre-existing from the clean index via `checkout-index -f`, prune created dirs). Already at Full, so the trigger converts to a risk re-check plus a mandatory critical gate rather than a tier change. |
+| 2026-08-02 | Patch conflict check | Both worker patches `git apply --check` clean and do not conflict — the disjoint-file parallel split held. Neither applied. |
 | 2026-08-02 | Runway verified by orchestrator | Load-bearing planner claims checked against source: `resolveRepoState` already hard-rejects a dirty tree; `createWorktrees(cwd, runId, count, {agents?, setupHook?})` and `WorktreeSetup{cwd,worktrees,baseCommit}` confirmed exact; `asyncByDefault` in `ExtensionConfig` confirmed as the cause of the unintended async dispatch. Advisory plan promoted to verified runway for M13.1 tasks 2 and 4. |
 | 2026-08-02 | New defect found during verification | `resolveRepoState`'s dirty-tree error instructs "Commit or stash changes first", but this repo prohibits `git stash`. Existing code contradicts its own conventions on the exact path D1's refusal depends on. Queued as an M13.1 fix, not deferred. |
 
 ## Run metrics
 
 ```
-dispatches:        0        (delivered only)
+dispatches:        2        (T1 worker, T2 worker — both delivered)
 burned:            1        (planner cc6bab39 — no-write guard, ~12 min)
 review-bundles:    0
 review-dispatches: 0
@@ -292,8 +337,8 @@ worker-retries:    0
 oracle:            0
 direct-edits:      0
 compactions:       0
-child-runtime:     ~12 min / 180 ceiling
-session-dispatches: 1 / 12 ceiling
+child-runtime:     ~30 min / 180 ceiling
+session-dispatches: 3 / 12 ceiling
 ```
 
 ## Pre-run housekeeping
