@@ -328,7 +328,34 @@ passed forward._
 _Should-fixes, nits, and out-of-scope discoveries awaiting close-out transfer.
 Nothing is filed as a GitHub issue mid-run._
 
-- _(empty)_
+**Untested surfaces (disclosed in the module doc, not fixed):**
+- Submodule pointer changes enter the patch as mode-160000 entries; behavior unverified.
+- Repos with `core.fileMode` disabled: exec-bit changes will not land. Compounding
+  risk — the cycle-1 exec-bit comparison reads the real filesystem, so it could
+  report a mismatch git itself cannot see. No fixture.
+- New fixtures depend on a `git` shim on `PATH`; they self-skip on Windows or when
+  `command -v git` fails, so those paths are unverified on those platforms.
+
+**Accepted-but-incomplete behavior:**
+- A failed discard still finalizes the handoff (no retry). Residue is reported and
+  the 24h orphan sweeper is the only recovery path.
+- `verify-failed` after a SUCCESSFUL apply deliberately does not roll back. Both a
+  worker and a reviewer endorsed this (auto-rollback could destroy concurrent user
+  edits) — but it leaves the user owning a state only they can resolve.
+
+**Test-quality debt:**
+- The rubric-binding counterfactual is weaker than the others: its first observed
+  failure was an API-signature diagnostic mismatch rather than the semantic
+  assertion. Not unfailable, but it does not prove what the others prove.
+
+**Deferred to its own milestone (explicitly out of scope, do not build ad hoc):**
+- Lock file + on-disk journal for genuine crash recovery. Without it, a process
+  killed mid-apply leaves a partially written tree with no recovery, and a narrow
+  concurrent-editor race remains. Both are documented, not fixed.
+
+**Pre-existing debt, deliberately untouched:**
+- 139 broader-form non-null-assertion occurrences. `AGENTS.md` bans new ones; these
+  are accepted and must not be "fixed" opportunistically.
 
 ## Documentation evidence
 
