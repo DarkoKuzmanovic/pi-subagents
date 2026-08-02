@@ -336,6 +336,13 @@ Nothing is filed as a GitHub issue mid-run._
 - New fixtures depend on a `git` shim on `PATH`; they self-skip on Windows or when
   `command -v git` fails, so those paths are unverified on those platforms.
 
+**Open defect, scheduled but not yet fixed:**
+- Exported `GateVerdict.note` is `note?: string`, while both the TypeBox schema and
+  runtime validation REQUIRE a note. The public TypeScript contract therefore
+  admits values guaranteed to be rejected at runtime. Raised by the cycle-2
+  re-review and carried into the cycle-3 brief — recorded here independently so it
+  survives if that brief is descoped or rewritten.
+
 **Accepted-but-incomplete behavior:**
 - A failed discard still finalizes the handoff (no retry). Residue is reported and
   the 24h orphan sweeper is the only recovery path.
