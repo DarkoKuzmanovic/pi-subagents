@@ -55,6 +55,8 @@ The worktree-transaction outcome takes the two-phase critical gate: one fresh
 `lane:deep` code review. No automatic project-end review repeat.
 
 **Outcome dispatch ceilings.** Contained protected → **5** delivered dispatches per
+outcome. M13.1: originally 6 → 8 → **10** (raised twice; see gate log for the
+diagnosis that the real fault is scoping, not the number).
 outcome. M13.1 absorbs the critical-protected transaction → originally **6**,
 **raised once to 8** on 2026-08-02 (see gate log). The raise is backed by a real
 contract change — R2's negative resolution added a rollback design and proof burden
@@ -151,7 +153,31 @@ audit. They constrain the public contract and are as binding as D1–D3.
   **`evidence: "worktree" | "report-only"`**, describing what the grader is given
   rather than how it behaves. Default is `"worktree"`.
 
-- **D7 — PENDING RATIFICATION: compensating rollback for non-atomic apply.**
+- **D9 — RESOLVED (supersedes D7-PENDING): the apply-back is a best-effort
+  handoff, NOT a transaction.** Scrutinize proved the transactional claim false
+  under concurrency (B1) and interruption (B2). Rather than build a lock+journal
+  (rejected as unscoped) or drop apply-back (rejected), the GUARANTEE is narrowed to
+  what the code can actually honor, and the surface must stop advertising more:
+  1. **Rename away from `transaction`.** `WorktreeTransaction` → `WorktreeHandoff`,
+     and `create|inspect|apply|discardWorktreeTransaction` → `…WorktreeHandoff`,
+     `WorktreeTransactionError` → `WorktreeHandoffError`. Error codes unchanged.
+     "Handoff" states what it does — move work between trees — without implying ACID.
+  2. **Fix B3:** untracked-file detection must not be defeatable by user git config
+     (`status.showUntrackedFiles=no`). The pristine-baseline premise the rollback
+     rests on is only as good as this check.
+  3. **Verify CONTENT, not path sets.** Post-apply verification currently compares
+     path names only, so same-path byte divergence returns success. Must compare
+     bytes, and the regression test must exercise **same-path byte divergence
+     specifically** — a path-set-only assertion would pass against the bug.
+  4. **Shrink the B1 window:** re-validate cleanliness immediately before apply.
+     This narrows the race; it does NOT close it, and must not be described as if
+     it does.
+  5. **Document the residual risk explicitly** in the module doc: unsafe against a
+     mid-apply crash (B2) and against a concurrent editor (B1 residual). Disclosed,
+     not fixed.
+  _Deferred, not lost:_ lock + on-disk journal for genuine crash recovery is its own
+  milestone. Submodule pointer changes and `core.fileMode`-disabled repos remain
+  untested.
   The T2 worker discovered `git apply` is not atomic and chose a compensating
   rollback (unlink added paths, restore pre-existing from the clean index via
   `checkout-index -f`, prune created directories — sound only because pre-apply
@@ -333,6 +359,9 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 | 2026-08-02 | Orchestrator verification | Ran the gates myself in the scratch worktree rather than trusting worker reports: typecheck clean, **1361 unit pass / 0 fail** (baseline 1344, +17), **445 integration pass / 0 fail**. Worker claims confirmed. |
 | 2026-08-02 | **CRITICAL GATE phase 1 — scrutinize — FIX-FIRST** | 4 load-bearing blockers, each with an independent machine reproduction (the reviewer built its own fixtures rather than asserting). **Claim 1 CONFIRMED independently:** `git apply --check`=0 then apply=128 with 4 paths partially changed. Blockers: (B1) no transaction lock — a concurrent edit can be accepted as success, or destroyed by rollback; reproduced both directions. (B2) SIGKILL after a partial git write has no compensation and no durable recovery; the existing SIGKILL fixture passes while this stays untested. (B3) `status.showUntrackedFiles=no` bypasses the dirty-tree refusal entirely — transaction created over hidden untracked work, invalidating the pristine-baseline premise D7 rests on. (B4) `validateGateVerdictSemantics` accepts dishonest verdicts: `pass:true` at score 0.5 under a 1.0 threshold, and duplicate criteria claiming full coverage. Should-fix: `pruneCreatedEmptyDirs` swallows all errors; strict creation inherits best-effort cleanup; no fixture covers `verify-failed` or rollback-time failure. |
 | 2026-08-02 | Claim 3 adjudicated | Reviewer AGREES with the worker's no-rollback-on-`verify-failed` choice — automatic rollback could destroy concurrent user edits, which B1 reproduced. **But the policy is incomplete:** verification compares path SETS only, so same-path content divergence is not a mismatch at all and can return success with bytes differing from the accepted worktree. |
+| 2026-08-02 | **D7 RESOLVED → D9.** Guarantee narrowed | User decision: keep apply-back, stop claiming atomicity, refuse what is detectable, document the rest. See D9. |
+| 2026-08-02 | Ceiling raise 8 → 10 (SECOND raise) | User decision, over the orchestrator's recommendation to split. **The recorded stop signal was overridden.** Diagnosis performed rather than skipped: *what actually failed was the original scoping.* M13.1 fused a proven-hard critical surface with a contract surface; the gate's findings cluster along that exact seam (B1/B2/B3 transaction · B4 contract). The ceiling keeps binding because it was sized for one outcome and is being spent on two. Orchestrator dissent recorded; a third raise must return to this diagnosis rather than adjust the number. |
+| 2026-08-02 | Naming treated as a claim | `applyWorktreeTransaction` et al. imply ACID semantics the code does not provide; caveat docs alone cannot correct a name. Renaming NOW is free — the symbols are new and unintegrated — whereas post-release renaming costs a deprecation cycle. Folded into the D9 fix cycle. |
 | 2026-08-02 | Runway verified by orchestrator | Load-bearing planner claims checked against source: `resolveRepoState` already hard-rejects a dirty tree; `createWorktrees(cwd, runId, count, {agents?, setupHook?})` and `WorktreeSetup{cwd,worktrees,baseCommit}` confirmed exact; `asyncByDefault` in `ExtensionConfig` confirmed as the cause of the unintended async dispatch. Advisory plan promoted to verified runway for M13.1 tasks 2 and 4. |
 | 2026-08-02 | New defect found during verification | `resolveRepoState`'s dirty-tree error instructs "Commit or stash changes first", but this repo prohibits `git stash`. Existing code contradicts its own conventions on the exact path D1's refusal depends on. Queued as an M13.1 fix, not deferred. |
 
