@@ -378,6 +378,11 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 | 2026-08-02 | Orchestrator verification (cycle 2) | typecheck clean, **1377 unit / 0 fail** (+7 over 1370), **445 integration / 0 fail**. Invariant landings spot-checked directly in source rather than taken from the report. |
 | 2026-08-02 | ⚠ Worker report TRUNCATED mid-sentence | The cycle-2 report cut off during invariant 2 and never delivered the required fail-without-fix proof (revert → observe failure → restore), nor the "what other violation did you look for" answer. **Not treated as satisfied.** Carried to the re-review as an explicit verification task — the previous cycle's equivalent proof is what caught a test that could not fail. |
 | 2026-08-02 | ⚠ Session runway | ~150 min of the 180-minute child-runtime ceiling consumed. The re-review (dispatch 8) lands near ~170. **T3+T4 (9) and the closing review (10) do not fit this session** and need a checkpoint into a fresh one. PLAN.md is the handoff record; the candidate lives on `crew/m13-review-scratch` and nothing is integrated. |
+| 2026-08-02 | **RE-REVIEW (dispatch 8) — FIX-FIRST — "not fit to integrate"** | **Invariant 1 HOLDS** (positional exact-equality binding defeats omission, reordering, paraphrase, duplicates, empty rubric, type confusion, and unicode-normalization substitution; pass is recomputed from criterion booleans, not the reported score). **Invariants 2 and 3 DO NOT HOLD**, each broken a second time by a NEW mechanism. **(E1)** The hashed capture and the applied patch are not one snapshot: `worktree.ts:986-1017` stages and generates the patch from the temp index, then SEPARATELY reads live filesystem bytes for `captureId`. A write between those two steps makes the hash match the graded bytes while the patch carries different ones. Reproduced: real tree received `UNGRADDED`, capture reported `graded`. **(E2)** `sanitizedGitEnv()` strips eight variables but leaves `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*`, which can define clean filters that `git add -A` applies — `--no-textconv` does not disable clean filters. Reproduced with a committed `.gitattributes` and ambient config, no fake git binary: worktree held `graded content`, real tree received `UNGRADDED content`. |
+| 2026-08-02 | **Do NOT soften E1/E2 via `verify-failed`** | Both reproductions ended in `verify-failed` rather than a false success, and that is genuinely better than silent corruption — but it does **not** satisfy the invariant, which is *nothing ungraded reaches the real tree*. In both cases ungraded bytes were written to the user's real working tree. Recorded explicitly because the orchestrator's first instinct was to frame this as mitigating, and it is not. |
+| 2026-08-02 | Truncated-report claim RESOLVED | The re-reviewer supplied the fail-without-fix proof the cycle-2 worker never delivered. Restoring only the pre-fix implementation files against current tests: acceptance-gate 9 failed / 3 passed; the three worktree invariant tests 0 passed / 3 failed; capture-change and graded-snapshot tests both failed with `Missing expected exception`. Files restored from backup and verified byte-for-byte by SHA-256; suite green at 1377 after restoration. **Caveat recorded:** the rubric-binding counterfactual is less clean than the others — its first failure was an API-signature diagnostic mismatch rather than the semantic assertion. |
+| 2026-08-02 | Remaining should-fix | Exported `GateVerdict.note` is still `note?: string` while both schema and runtime validation require it — the public TypeScript contract permits values guaranteed to be rejected. All other cycle-2 should-fixes verified correctly implemented. |
+| 2026-08-02 | **ESCALATION #2 — both fix cycles spent, blockers outstanding** | fix-cycles 2/2 SPENT. **Nothing integrated. No follow-up dispatched.** Convergence data across three independent adversarial passes: **9 blockers total — 7 on the apply path, 2 on the contract path.** Invariant 1 (contract) held on its first fix. Invariants 2 and 3 (apply) have each now failed twice, broken by a different mechanism each time. Three passes have each found new load-bearing defects in the same surface; there is no evidence a fourth would come back empty. |
 | 2026-08-02 | Runway verified by orchestrator | Load-bearing planner claims checked against source: `resolveRepoState` already hard-rejects a dirty tree; `createWorktrees(cwd, runId, count, {agents?, setupHook?})` and `WorktreeSetup{cwd,worktrees,baseCommit}` confirmed exact; `asyncByDefault` in `ExtensionConfig` confirmed as the cause of the unintended async dispatch. Advisory plan promoted to verified runway for M13.1 tasks 2 and 4. |
 | 2026-08-02 | New defect found during verification | `resolveRepoState`'s dirty-tree error instructs "Commit or stash changes first", but this repo prohibits `git stash`. Existing code contradicts its own conventions on the exact path D1's refusal depends on. Queued as an M13.1 fix, not deferred. |
 
@@ -387,14 +392,14 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 dispatches:        2        (T1 worker, T2 worker — both delivered)
 burned:            1        (planner cc6bab39 — no-write guard, ~12 min)
 review-bundles:    1        (M13.1 critical gate, phase 1 of 2)
-review-dispatches: 2        (both gate phases complete; a re-review is owed after cycle 2)
+review-dispatches: 3        (scrutinize, deep review, cycle-2 re-review — all FIX-FIRST)
 fix-cycles:        2/2      (both cycles SPENT — any further blocker escalates again)
 worker-retries:    0
 oracle:            0
 direct-edits:      0
 compactions:       0
-child-runtime:     ~150 min / 180 ceiling  ⚠ RUNWAY — see checkpoint note
-session-dispatches: 7 / 12 ceiling
+child-runtime:     ~170 min / 180 ceiling  ⚠ EXHAUSTED — checkpoint required
+session-dispatches: 8 / 12 ceiling
 ```
 
 ## Pre-run housekeeping
