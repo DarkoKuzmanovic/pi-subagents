@@ -46,6 +46,21 @@ that surfaced it, so a future reader does not mistake it for an oversight.
   shim's `wrapTextWithAnsi` chunks by width instead of word-wrapping, and `Text` accepts but ignores the
   padding arguments.
 
+- **README–code drift: `--no-context-files` for fresh children is documented but unwired** (found 2026-08-02).
+  The README's fork-changes section claims fresh-context children spawn with `--no-context-files`. In code,
+  the flag is only pushed when `skipContextFiles` is set (`src/runs/shared/pi-args.ts`), which only happens
+  from `inlineReads === true` in chain paths — and nothing in the codebase sets `inlineReads`. Verified
+  empirically: fresh worker children quoted same-day-authored sentences from both global `AGENTS.md` and
+  `APPEND_SYSTEM.md` verbatim, so full global context reaches fresh children. Impact: fresh children carry
+  the driving-seat context the feature was meant to strip, and the README misdescribes runtime behavior.
+  Not fixed on discovery because it surfaced in a prompt-stack audit session and needs a decision first —
+  wire the flag (restore isolation) or fix the README (bless inheritance) — plus a spawn-args regression test.
+- **No-edits guard false-positives on read-only diagnostic dispatches** (found 2026-08-02, observed 4×).
+  Workers dispatched with explicitly read-only probe tasks ("edit nothing, quote a sentence from your
+  context") complete correctly, but the run is reported failed ("completed without making edits for an
+  implementation task"). The guard assumes every worker dispatch is an implementation task. Same scoping
+  reason for deferral; candidate fix is a diagnostic/read-only dispatch flag or task-text intent detection,
+  with the failure signal downgraded to informational for such runs.
 ## Deferred decisions
 
 Settled by explicit user decision, not oversight. Revisit only if usage argues otherwise.
