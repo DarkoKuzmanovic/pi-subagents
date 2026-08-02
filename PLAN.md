@@ -374,6 +374,10 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 | 2026-08-02 | **Second fix cycle GRANTED (explicit exception)** | User decision after escalation. Orchestrator recommendation was report-only v1 — C2 and C3 live entirely in the apply path and would simply cease to exist; user chose to keep the milestone whole. Dissent recorded. **Budget note:** this consumes dispatch 7, its re-review 8, leaving T3+T4 at 9–10 and pushing the closing outcome review past the ceiling of 10 — the same arithmetic for the third time. Standing diagnosis applies: the fault is the scoping, not the number. |
 | 2026-08-02 | Fix-brief method changed | C1 was authored by an orchestrator brief that specified the SYMPTOM the phase-1 reproduction happened to expose ("reject duplicate criteria") rather than the PROPERTY that must hold ("a verdict must be bound to the configured rubric"). The cycle-2 brief is written as invariants, with the failing case as illustration rather than as the specification. |
 | 2026-08-02 | **Dispatch accounting AUTHORIZED (no raise)** | Ceiling stays at 10; the overrun is resolved by cutting a dispatch rather than raising the number a third time. Approved allocation: **7** cycle-2 fix · **8** re-review of the fix delta · **9** T3+T4 COMBINED into one dispatch · **10** closing outcome review. T3 (grader read-only path guard) and T4 (foreground grade-once) are adjacent — both wire the gate into the foreground executor — so one worker covering both is sound. **Accepted cost: zero reserve.** A blocker at the closing review escalates to the user rather than being absorbed, which is the correct behaviour. The re-review at 8 is deliberately NOT folded into the close, because that surface produced blockers in both prior reviews and must not go unreviewed until the end. |
+| 2026-08-02 | Cycle-2 fix delivered (dispatch 7) | All three invariants implemented plus the reviewer's should-fix list. **I1:** `validateGateVerdictSemantics(verdict, rubric, threshold)` now takes the rubric itself and binds entry *i* to configured criterion *i* by exact string equality — the worker documented that any normalization would define an equivalence class a substituted criterion could hide inside, which is the right reasoning. **I2:** capture snapshots kind/bytes/exec-bit/symlink-target once and derives a sha256 `captureId` on `WorktreeChangeSummary`; `applyWorktreeHandoff(handoff, graded)` now REQUIRES the graded capture, re-captures, and refuses with a new `capture-changed` code before any write when ids differ; post-apply verification compares against the stored graded snapshot rather than re-reading the worktree. **I3:** central `sanitizedGitEnv()` in the single git runner, covering `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE`, `GIT_CEILING_DIRECTORIES`, restoring `GIT_INDEX_FILE` only where deliberate. 7 files, +686/-149. |
+| 2026-08-02 | Orchestrator verification (cycle 2) | typecheck clean, **1377 unit / 0 fail** (+7 over 1370), **445 integration / 0 fail**. Invariant landings spot-checked directly in source rather than taken from the report. |
+| 2026-08-02 | ⚠ Worker report TRUNCATED mid-sentence | The cycle-2 report cut off during invariant 2 and never delivered the required fail-without-fix proof (revert → observe failure → restore), nor the "what other violation did you look for" answer. **Not treated as satisfied.** Carried to the re-review as an explicit verification task — the previous cycle's equivalent proof is what caught a test that could not fail. |
+| 2026-08-02 | ⚠ Session runway | ~150 min of the 180-minute child-runtime ceiling consumed. The re-review (dispatch 8) lands near ~170. **T3+T4 (9) and the closing review (10) do not fit this session** and need a checkpoint into a fresh one. PLAN.md is the handoff record; the candidate lives on `crew/m13-review-scratch` and nothing is integrated. |
 | 2026-08-02 | Runway verified by orchestrator | Load-bearing planner claims checked against source: `resolveRepoState` already hard-rejects a dirty tree; `createWorktrees(cwd, runId, count, {agents?, setupHook?})` and `WorktreeSetup{cwd,worktrees,baseCommit}` confirmed exact; `asyncByDefault` in `ExtensionConfig` confirmed as the cause of the unintended async dispatch. Advisory plan promoted to verified runway for M13.1 tasks 2 and 4. |
 | 2026-08-02 | New defect found during verification | `resolveRepoState`'s dirty-tree error instructs "Commit or stash changes first", but this repo prohibits `git stash`. Existing code contradicts its own conventions on the exact path D1's refusal depends on. Queued as an M13.1 fix, not deferred. |
 
@@ -384,13 +388,13 @@ dispatches:        2        (T1 worker, T2 worker — both delivered)
 burned:            1        (planner cc6bab39 — no-write guard, ~12 min)
 review-bundles:    1        (M13.1 critical gate, phase 1 of 2)
 review-dispatches: 2        (both gate phases complete; a re-review is owed after cycle 2)
-fix-cycles:        1/2      (second cycle GRANTED as an explicit user exception)
+fix-cycles:        2/2      (both cycles SPENT — any further blocker escalates again)
 worker-retries:    0
 oracle:            0
 direct-edits:      0
 compactions:       0
-child-runtime:     ~115 min / 180 ceiling
-session-dispatches: 6 / 12 ceiling
+child-runtime:     ~150 min / 180 ceiling  ⚠ RUNWAY — see checkpoint note
+session-dispatches: 7 / 12 ceiling
 ```
 
 ## Pre-run housekeeping
