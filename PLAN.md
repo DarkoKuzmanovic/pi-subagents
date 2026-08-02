@@ -362,6 +362,10 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 | 2026-08-02 | **D7 RESOLVED → D9.** Guarantee narrowed | User decision: keep apply-back, stop claiming atomicity, refuse what is detectable, document the rest. See D9. |
 | 2026-08-02 | Ceiling raise 8 → 10 (SECOND raise) | User decision, over the orchestrator's recommendation to split. **The recorded stop signal was overridden.** Diagnosis performed rather than skipped: *what actually failed was the original scoping.* M13.1 fused a proven-hard critical surface with a contract surface; the gate's findings cluster along that exact seam (B1/B2/B3 transaction · B4 contract). The ceiling keeps binding because it was sized for one outcome and is being spent on two. Orchestrator dissent recorded; a third raise must return to this diagnosis rather than adjust the number. |
 | 2026-08-02 | Naming treated as a claim | `applyWorktreeTransaction` et al. imply ACID semantics the code does not provide; caveat docs alone cannot correct a name. Renaming NOW is free — the symbols are new and unintegrated — whereas post-release renaming costs a deprecation cycle. Folded into the D9 fix cycle. |
+| 2026-08-02 | D9 fix cycle | **delivered — fix-cycle 1/1 now SPENT.** All 7 required changes plus the 3 should-fixes. Rename to `WorktreeHandoff` complete. B3 fixed via `porcelainStatusArgs()` forcing `--untracked-files=all`, plus a wider audit that pins `core.quotePath` and the `diff.*` family so no user config can alter parsed git output. Verification now compares BYTES, mode, and symlink target rather than path sets. Pre-apply re-validation moved as late as possible. B4 reconciles `pass` against `score >= threshold` and rejects duplicate/empty criteria. |
+| 2026-08-02 | Fail-without-fix PROVEN, not asserted | The worker was required to revert each fix and re-run. It did, and reported specifics: reverting `resolveRepoState` → the `showUntrackedFiles=no` test failed with `Missing expected exception`; deleting the content-comparison block → the byte-divergence test failed. Both restored and re-run green. This is the check that distinguishes a real regression test from one that cannot fail. |
+| 2026-08-02 | Orchestrator verification of the fix | Re-ran everything myself: typecheck clean, **1370 unit / 0 fail**, **445 integration / 0 fail**. Confirmed "transaction" no longer describes the mechanism anywhere in `src/` or `test/`, and that every surviving mention of atomic/all-or-nothing is a DISCLAIMER rather than a claim. |
+| 2026-08-02 | Worker-disclosed scope creep, accepted | Fix touched `src/types/node-shims.d.ts` (+2: `Stats.mode`, `readlinkSync`) outside its allowlist — self-reported, not discovered. The repo hand-rolls Node types instead of using `@types/node`, so the content check would not compile without them. Accepted as necessary and minimal. **Carried to phase 2:** the worker flagged that its `-c` config pinning applies module-wide, including the pre-existing preview path (`createWorktrees`/`diffWorktrees`) — intended hardening, tests green, but broader than the handoff surface. Reviewer must rule on whether that stays module-wide or is scoped down. |
 | 2026-08-02 | Runway verified by orchestrator | Load-bearing planner claims checked against source: `resolveRepoState` already hard-rejects a dirty tree; `createWorktrees(cwd, runId, count, {agents?, setupHook?})` and `WorktreeSetup{cwd,worktrees,baseCommit}` confirmed exact; `asyncByDefault` in `ExtensionConfig` confirmed as the cause of the unintended async dispatch. Advisory plan promoted to verified runway for M13.1 tasks 2 and 4. |
 | 2026-08-02 | New defect found during verification | `resolveRepoState`'s dirty-tree error instructs "Commit or stash changes first", but this repo prohibits `git stash`. Existing code contradicts its own conventions on the exact path D1's refusal depends on. Queued as an M13.1 fix, not deferred. |
 
@@ -371,14 +375,14 @@ _One line per outcome, recorded before its gate. Both contracts must be reconcil
 dispatches:        2        (T1 worker, T2 worker — both delivered)
 burned:            1        (planner cc6bab39 — no-write guard, ~12 min)
 review-bundles:    1        (M13.1 critical gate, phase 1 of 2)
-review-dispatches: 1        (scrutinize — phase 2 deep review NOT yet run)
-fix-cycles:        0/1      (one blocker cycle available)
+review-dispatches: 1        (scrutinize — phase 2 deep review still pending)
+fix-cycles:        1/1      (D9 cycle SPENT — no further blocker cycle remains)
 worker-retries:    0
 oracle:            0
 direct-edits:      0
 compactions:       0
-child-runtime:     ~55 min / 180 ceiling
-session-dispatches: 4 / 12 ceiling
+child-runtime:     ~95 min / 180 ceiling
+session-dispatches: 5 / 12 ceiling
 ```
 
 ## Pre-run housekeeping
