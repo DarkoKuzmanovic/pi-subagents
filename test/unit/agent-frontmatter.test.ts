@@ -380,7 +380,7 @@ Do work
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
 			const agents = discoverAgentsAll(dir).builtin;
-			const workerTools = ["read", "grep", "find", "ls", "bash", "edit", "write", "context_mode_ctx_execute", "context_mode_ctx_execute_file", "context_mode_ctx_batch_execute", "contact_supervisor"];
+			const workerTools = ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"];
 			for (const name of ["worker", "worker-light", "worker-heavy"]) {
 				const agent = agents.find((candidate) => candidate.name === name);
 				assert.ok(agent, `${name} builtin should be discovered`);
