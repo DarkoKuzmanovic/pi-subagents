@@ -182,7 +182,7 @@ Packaged `worker` and `oracle` default to forked context when a launch omits `co
 | Gather context before planning | "Use recon to inspect the auth flow before planning."                              |
 | Run in the background       | "Run this in the background."                                                          |
 | Browse agents               | "Show me the available subagents."                                                     |
-| Use a saved workflow        | "Run `/mesh-review` on this branch."                                                   |
+| Use a saved workflow        | "Run `/multireview` on this branch."                                                   |
 | See running work            | "Show active async runs."                                                              |
 | Check setup                 | "Check whether subagents are configured correctly."                                    |
 
@@ -605,7 +605,7 @@ Create chains by writing `.chain.md` files directly or with the `subagent({ acti
 | ----- | ------------------------------------------- | ----------------------------------------------------------------------------- |
 | `go`  | recon → planner → worker → reviewer         | Full implementation pipeline: gather context, plan, implement, and review.    |
 
-The former `review` chain has been retired. Use `/mesh-review` for model-diverse review plus synthesis.
+The former `review` chain has been retired. Use `/multireview` for model-diverse review plus synthesis.
 
 ### Chain variables
 
@@ -752,8 +752,8 @@ The package includes reusable prompt templates for common workflows. You do not 
 
 | Prompt                        | Use it for                                                                                                  |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `/mesh-review`                | Launch fresh-context reviewers with distinct angles, then synthesize what to fix.                           |
-| `/mesh-recon`                 | Quick parallel recon pass; add `deep` for artifact-backed lane synthesis.                                   |
+| `/multireview`              | Launch fresh-context reviewers with distinct angles, then synthesize what to fix.                           |
+| `/multirecon`              | Quick parallel recon pass; add `deep` for artifact-backed lane synthesis.                                   |
 | `/mesh-handoff`               | Combine external research and `recon` passes into an implementation handoff plan and meta-prompt.           |
 | `/mesh-context`               | Run parallel `recon` passes for planning or implementation handoff context.                                 |
 | `/mesh-cleanup`               | Run review-only cleanup passes after implementation; add `autofix` to apply only fixes worth doing now.     |

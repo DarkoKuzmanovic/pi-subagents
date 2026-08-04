@@ -44,8 +44,8 @@ you are guiding a human through an interactive flow.
 
 Packaged prompt shortcuts are also available for repeatable workflows. Treat them as reusable orchestration recipes, not just human slash commands. When the user asks for one of these shapes, or when the workflow clearly fits, apply the same pattern directly with `subagent(...)` and other tools:
 
-- `/mesh-review` — fresh-context reviewers with distinct review angles, then synthesis
-- `/mesh-recon` — quick `recon` pass by default; add `deep` for artifact-backed synthesis with a `reviewer` synthesis pass
+- `/multireview` — fresh-context reviewers with distinct review angles, then synthesis
+- `/multirecon` — quick `recon` pass by default; add `deep` for artifact-backed synthesis with a `reviewer` synthesis pass
 - `/mesh-handoff` — external-reference research plus local `recon` passes, followed by a synthesis handoff plan and implementation-ready meta-prompt
 - `/mesh-context` — parallel `recon` passes for planning or implementation handoff context
 - `/mesh-cleanup` — cleanup review lanes for simplicity, slop, and verbosity; `autofix` applies only fixes worth doing now
@@ -57,13 +57,13 @@ Packaged prompt shortcuts are also available for repeatable workflows. Treat the
 
 The prompt templates in `prompts/` encode workflows the parent agent can run on demand. If the user provides a URL, issue, PR, plan, local file, screenshot, or freeform target, treat that target as the primary scope: read or fetch it before launching children, then include it explicitly in every child task. Do not depend on the parent conversation history when the recipe calls for fresh context.
 
-### Mesh review technique
+### Multireview technique
 
 Use this when the user wants adversarial review of a diff, plan, issue, file, or implemented work. Launch fresh-context `reviewer` agents with distinct angles generated from the actual target. Common angles are correctness/regressions, tests/validation, and simplicity/maintainability; adapt for TypeScript, UI, security, docs, or large structural changes. Reviewers should inspect files and diffs directly, return concise evidence-backed findings with file/line references, and avoid edits unless the user explicitly asks for a writer pass. The parent synthesizes fixes worth doing now, optional improvements, and feedback to ignore/defer before applying anything.
 
-### Mesh recon technique
+### Multirecon technique
 
-Use this when the question needs both external evidence and local implications. `/mesh-recon` is lightweight by default: combine `recon` passes for official docs, specs, ecosystem behavior, recent changes, benchmarks, primary sources, repository files, patterns, constraints, tests, and likely integration points. Give each child a distinct angle: external evidence, local code context, and practical tradeoffs. Ask for source links or file ranges, confidence level, gaps, and decision implications. Do not ask these children to edit unless implementation was explicitly requested. Use `/mesh-recon deep` when the question is decision-heavy enough to need lane artifact files plus a `reviewer` synthesis pass.
+Use this when the question needs both external evidence and local implications. `/multirecon` is lightweight by default: combine `recon` passes for official docs, specs, ecosystem behavior, recent changes, benchmarks, primary sources, repository files, patterns, constraints, tests, and likely integration points. Give each child a distinct angle: external evidence, local code context, and practical tradeoffs. Ask for source links or file ranges, confidence level, gaps, and decision implications. Do not ask these children to edit unless implementation was explicitly requested. Use `/multirecon deep` when the question is decision-heavy enough to need lane artifact files plus a `reviewer` synthesis pass.
 
 ### Mesh context technique
 
@@ -247,7 +247,7 @@ Built-in chain templates bundled with the package:
 
 - `go` — recon → planner → worker → reviewer
 
-The former `review` chain has been retired; use `/mesh-review` for parallel model-diverse review and synthesis.
+The former `review` chain has been retired; use `/multireview` for parallel model-diverse review and synthesis.
   Discovery is recursive. `.chain.md` files do not define agents. Agents and chains can set optional frontmatter `package: code-analysis`; `name: helper` plus `package: code-analysis` registers as runtime name `code-analysis.helper` while serialization keeps `name` and `package` separate.
 
 Precedence is by parsed runtime name:
@@ -675,12 +675,12 @@ copying a full builtin file.
 
 ## Prompt Template Integration
 
-The package includes prompt shortcuts for common workflows: `/mesh-review`,
-`/mesh-recon`, `/mesh-handoff`, `/mesh-context`, `/mesh-cleanup`, `/brainstorm`,
+The package includes prompt shortcuts for common workflows: `/multireview`,
+`/multirecon`, `/mesh-handoff`, `/mesh-context`, `/mesh-cleanup`, `/brainstorm`,
 `/write-plan`, and `/gather-context-and-clarify`. Use them when the user wants
 repeatable review, research, implementation-handoff context, design exploration,
 plan authoring, focused context gathering, or cleanup-review patterns.
-`/mesh-review autofix` and `/mesh-cleanup autofix` synthesize reviewer feedback
+`/multireview autofix` and `/mesh-cleanup autofix` synthesize reviewer feedback
 and then apply only the fixes worth doing now. Parent agents can also apply the
 same recipes directly with `subagent(...)` when the user describes the workflow
 in natural language instead of invoking a slash command.
@@ -767,8 +767,8 @@ When the user approves launching a subagent to carry out a plan or workflow, tre
 - `/brainstorm` maps to: stay design-first with the `brainstorming` skill; launch `recon` if local context matters and give it a web-research prompt if external evidence would shape the choice; ask clarifying questions with `ask_user`; compare 2–3 approaches with tradeoffs before any implementation.
 - `/write-plan` maps to: use the `writing-plans` skill; read the spec/intent and any referenced files; draft a step-by-step plan with file paths, signatures where they matter, explicit validation commands, and a placeholder scan.
 - `/gather-context-and-clarify` maps to: run `recon` for justified local or external knowledge gaps, synthesize what is known, then ask the smallest set of remaining questions with `ask_user` before planning or implementation.
-- `/mesh-review` maps to: launch fresh-context `reviewer` agents with distinct review angles; synthesize the feedback before applying anything.
-- `/mesh-recon` maps to: combine local `recon` context with external-evidence `recon` passes when current docs, ecosystem behavior, API details, or local implications matter; add `deep` for lane artifacts plus `reviewer` synthesis.
+- `/multireview` maps to: launch fresh-context `reviewer` agents with distinct review angles; synthesize the feedback before applying anything.
+- `/multirecon` maps to: combine local `recon` context with external-evidence `recon` passes when current docs, ecosystem behavior, API details, or local implications matter; add `deep` for lane artifacts plus `reviewer` synthesis.
 - `/mesh-handoff` maps to: run external-reference plus local/strategy `recon` passes, then a synthesis `recon` that writes an implementation handoff plan and implementation-ready meta-prompt.
 - `/mesh-context` maps to: run parallel `recon` passes for planning or implementation handoff context.
 - `/mesh-cleanup` maps to: use review-only cleanup passes after implementation, especially for simplicity, verbosity, slop, and redundant tests.
