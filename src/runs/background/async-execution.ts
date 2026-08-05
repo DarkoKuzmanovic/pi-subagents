@@ -105,11 +105,32 @@ function createPiRequire(): RequireLike | undefined {
 	}
 }
 
-const jitiCliPath: string | undefined = resolveJitiCliPath({
-	localRequire: require,
-	piRequire: createPiRequire(),
-	fileExists: fs.existsSync,
-});
+// Cache of the last-resolved jiti CLI path. Node module resolution and `fs.existsSync`
+// are cheap enough to redo per call; caching only the *validated* winner avoids paying
+// the probe cost when nothing has changed on disk.
+let cachedJitiCliPath: string | undefined;
+
+/**
+ * Resolve (and self-heal) the jiti CLI path. Prior versions computed this once at module
+ * load and cached it for the process lifetime, which meant a long-lived pi session that
+ * resolved to a local `node_modules/jiti` early would keep using that path even after the
+ * package was later removed (e.g. by an `npm install` in that extension's checkout), and
+ * would never fall through to the pi-bundled fallback that resolveJitiCliPath's probe
+ * ladder provides. Re-validating the cached path's existence on every call — and
+ * recomputing from scratch on a miss — makes async dispatch resilient to node_modules
+ * churn during a session instead of only across process restarts.
+ */
+function getJitiCliPath(): string | undefined {
+	if (cachedJitiCliPath !== undefined && fs.existsSync(cachedJitiCliPath)) {
+		return cachedJitiCliPath;
+	}
+	cachedJitiCliPath = resolveJitiCliPath({
+		localRequire: require,
+		piRequire: createPiRequire(),
+		fileExists: fs.existsSync,
+	});
+	return cachedJitiCliPath;
+}
 
 interface AsyncExecutionContext {
 	pi: ExtensionAPI;
@@ -201,13 +222,14 @@ export function formatAsyncStartedMessage(headline: string): string {
  * Check if jiti is available for async execution
  */
 export function isAsyncAvailable(): boolean {
-	return jitiCliPath !== undefined;
+	return getJitiCliPath() !== undefined;
 }
 
 /**
  * Spawn the async runner process
  */
 function spawnRunner(cfg: object, suffix: string, cwd: string, asyncDir?: string): { pid?: number; error?: string } {
+	const jitiCliPath = getJitiCliPath();
 	if (!jitiCliPath) {
 		return { error: "jiti for TypeScript execution could not be found" };
 	}
