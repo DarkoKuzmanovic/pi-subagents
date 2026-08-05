@@ -630,6 +630,8 @@ export interface RunSyncOptions {
 	nestedRoute?: NestedRouteInfo;
 	/** When set, the child must finish by calling structured_output with a schema-valid value; the validated value is attached to the result. */
 	outputSchema?: JsonSchemaObject;
+	/** Restrict grader read/search/list tools to this attempt worktree root. */
+	graderAllowedRoot?: string;
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";

@@ -27,6 +27,7 @@ interface WorktreeDiff {
 	insertions: number;
 	deletions: number;
 	patchPath: string;
+	changedFiles: string[];
 }
 
 interface WorktreeTaskCwdConflict {
@@ -415,6 +416,7 @@ function emptyDiff(index: number, agent: string, branch: string, patchPath: stri
 		insertions: 0,
 		deletions: 0,
 		patchPath,
+		changedFiles: [],
 	};
 }
 
@@ -449,6 +451,7 @@ function captureWorktreeDiff(
 	const diffStat = runGitChecked(worktree.path, ["diff", "--cached", "--stat", setup.baseCommit]).trim();
 	const patch = runGitChecked(worktree.path, ["diff", "--cached", setup.baseCommit]);
 	const numstat = runGitChecked(worktree.path, ["diff", "--cached", "--numstat", setup.baseCommit]);
+	const changedFiles = runGitChecked(worktree.path, ["diff", "--cached", "--name-only", "-z", setup.baseCommit]).split("\0").filter(Boolean);
 	fs.writeFileSync(patchPath, patch, "utf-8");
 
 	if (!patch.trim()) {
@@ -465,6 +468,7 @@ function captureWorktreeDiff(
 		insertions: parsed.insertions,
 		deletions: parsed.deletions,
 		patchPath,
+		changedFiles,
 	};
 }
 

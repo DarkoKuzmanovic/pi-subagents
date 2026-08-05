@@ -16,6 +16,7 @@ export const SUBAGENT_ORCHESTRATOR_TARGET_ENV = "PI_SUBAGENT_ORCHESTRATOR_TARGET
 export const SUBAGENT_RUN_ID_ENV = "PI_SUBAGENT_RUN_ID";
 export const SUBAGENT_CHILD_AGENT_ENV = "PI_SUBAGENT_CHILD_AGENT";
 export const SUBAGENT_CHILD_INDEX_ENV = "PI_SUBAGENT_CHILD_INDEX";
+export const SUBAGENT_GRADER_ALLOWED_ROOT_ENV = "PI_SUBAGENT_GRADER_ALLOWED_ROOT";
 // Nested route / fanout env vars (upstream v0.25.0)
 export const SUBAGENT_PARENT_EVENT_SINK_ENV = "PI_SUBAGENT_PARENT_EVENT_SINK";
 export const SUBAGENT_PARENT_CONTROL_INBOX_ENV = "PI_SUBAGENT_PARENT_CONTROL_INBOX";
@@ -61,6 +62,7 @@ interface BuildPiArgsInput {
 	parentCapabilityToken?: string;
 	skipContextFiles?: boolean;
 	structuredOutput?: { schemaPath: string; outputPath: string };
+	graderAllowedRoot?: string;
 	childAlwaysExtensions?: string[];
 }
 
@@ -312,6 +314,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	if (input.childIndex !== undefined) {
 		env[SUBAGENT_CHILD_INDEX_ENV] = String(input.childIndex);
 	}
+	if (input.graderAllowedRoot) env[SUBAGENT_GRADER_ALLOWED_ROOT_ENV] = input.graderAllowedRoot;
 	if (input.mcpDirectTools?.length) {
 		env.MCP_DIRECT_TOOLS = input.mcpDirectTools.join(",");
 	} else {

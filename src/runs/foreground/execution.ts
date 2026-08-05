@@ -225,6 +225,7 @@ async function runSingleAttempt(
 		parentRootRunId: options.nestedRoute?.rootRunId,
 		parentCapabilityToken: options.nestedRoute?.capabilityToken,
 		structuredOutput: shared.structuredOutput,
+		graderAllowedRoot: options.graderAllowedRoot,
 	});
 
 	const result: SingleResult = {
