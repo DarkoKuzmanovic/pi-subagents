@@ -9,10 +9,8 @@
  */
 
 import { describe, it, before, after, beforeEach, afterEach } from "node:test";
-import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
 import {
@@ -25,12 +23,7 @@ import {
 	tryImport,
 	events,
 } from "../support/helpers.ts";
-import {
-	CHAIN_RUNS_DIR,
-	INTERCOM_DETACH_REQUEST_EVENT,
-	SUBAGENT_BUDGET_EXHAUSTED_EVENT,
-	type BudgetExhaustedEvent,
-} from "../../src/shared/types.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT, SUBAGENT_BUDGET_EXHAUSTED_EVENT, type BudgetExhaustedEvent } from "../../src/shared/types.ts";
 import { DEFAULT_CONTROL_CONFIG } from "../../src/runs/shared/subagent-control.ts";
 
 interface TestSequentialStep {
@@ -46,13 +39,6 @@ interface TestSequentialStep {
 	skill?: string | string[] | false;
 	progress?: boolean;
 	cwd?: string;
-	gate?: {
-		rubric: string | string[];
-		grader?: string;
-		maxIterations?: number;
-		threshold?: number;
-		evidence?: "worktree" | "report-only";
-	};
 }
 
 interface TestParallelTask {
@@ -76,21 +62,14 @@ interface TestParallelStep {
 }
 
 interface TestDynamicParallelStep {
-	expand: {
-		from: { output: string; path: string };
-		item: string;
-		maxItems: number;
-	};
+	expand: { from: { output: string; path: string }; item: string; maxItems: number };
 	parallel: TestParallelTask;
 	collect: { as: string };
 	concurrency?: number;
 	failFast?: boolean;
 }
 
-type TestChainStep =
-	| TestSequentialStep
-	| TestParallelStep
-	| TestDynamicParallelStep;
+type TestChainStep = TestSequentialStep | TestParallelStep | TestDynamicParallelStep;
 
 interface ChainResultItem {
 	agent: string;
@@ -110,7 +89,7 @@ interface ChainExecutionResult {
 		results: ChainResultItem[];
 		chainAgents?: string[];
 		totalSteps?: number;
-		requestedAsync?: { chain: Array<{ thinking?: string }> };
+	requestedAsync?: { chain: Array<{ thinking?: string }> };
 	};
 }
 
@@ -118,18 +97,13 @@ interface ChainExecutionModule {
 	executeChain(params: Record<string, unknown>): Promise<ChainExecutionResult>;
 }
 
-const chainMod = await tryImport<ChainExecutionModule>(
-	"./src/runs/foreground/chain-execution.ts",
-);
+const chainMod = await tryImport<ChainExecutionModule>("./src/runs/foreground/chain-execution.ts");
 const available = !!chainMod;
 const executeChain = chainMod?.executeChain;
 
-describe("chain execution — sequential", {
-	skip: !available ? "pi packages not available" : undefined,
-}, () => {
+describe("chain execution — sequential", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
 	let artifactsDir: string;
-	let chainDir: string;
 	let mockPi: MockPi;
 
 	before(() => {
@@ -144,13 +118,11 @@ describe("chain execution — sequential", {
 	beforeEach(() => {
 		tempDir = createTempDir();
 		artifactsDir = path.join(tempDir, "artifacts");
-		chainDir = createTempDir("pi-chain-gate-");
 		mockPi.reset();
 	});
 
 	afterEach(() => {
 		removeTempDir(tempDir);
-		removeTempDir(chainDir);
 	});
 
 	function makeChainParams(
@@ -173,45 +145,15 @@ describe("chain execution — sequential", {
 	}
 
 	function readCallArgs(index: number): string[] {
-		const callFiles = fs
-			.readdirSync(mockPi.dir)
+		const callFiles = fs.readdirSync(mockPi.dir)
 			.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
 			.sort();
 		const callFile = callFiles[index];
 		assert.ok(callFile, `expected call ${index}`);
-		const args = JSON.parse(
-			fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8"),
-		).args as string[];
+		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
 		// Fresh-context dispatches (the default here) now append --no-context-files after the
 		// task arg; strip it so task-text assertions via .at(-1) keep working unmodified.
 		return args.filter((arg) => arg !== "--no-context-files");
-	}
-
-	function runGit(cwd: string, args: string[]): string {
-		const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-		assert.equal(
-			result.status,
-			0,
-			result.stderr || `git ${args.join(" ")} failed`,
-		);
-		return result.stdout.trim();
-	}
-
-	function initGitRepo(repoDir: string): void {
-		runGit(repoDir, ["init"]);
-		runGit(repoDir, ["config", "user.email", "tests@example.com"]);
-		runGit(repoDir, ["config", "user.name", "Chain Gate Tests"]);
-		fs.writeFileSync(path.join(repoDir, "tracked.txt"), "initial\n", "utf8");
-		runGit(repoDir, ["add", "tracked.txt"]);
-		runGit(repoDir, ["commit", "-m", "initial"]);
-	}
-
-	function gitStatus(repoDir: string): string {
-		const result = spawnSync("git", ["-C", repoDir, "status", "--porcelain"], {
-			encoding: "utf8",
-		});
-		assert.equal(result.status, 0, result.stderr || "git status failed");
-		return result.stdout;
 	}
 
 	function writePackageSkill(packageRoot: string, skillName: string): void {
@@ -219,15 +161,7 @@ describe("chain execution — sequential", {
 		fs.mkdirSync(skillDir, { recursive: true });
 		fs.writeFileSync(
 			path.join(packageRoot, "package.json"),
-			JSON.stringify(
-				{
-					name: `${skillName}-pkg`,
-					version: "1.0.0",
-					pi: { skills: [`./skills/${skillName}`] },
-				},
-				null,
-				2,
-			),
+			JSON.stringify({ name: `${skillName}-pkg`, version: "1.0.0", pi: { skills: [`./skills/${skillName}`] } }, null, 2),
 			"utf-8",
 		);
 		fs.writeFileSync(
@@ -248,10 +182,7 @@ describe("chain execution — sequential", {
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`chain should succeed: ${JSON.stringify(result.content)}`,
-		);
+		assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
 		assert.equal(result.details.results.length, 2);
 		assert.equal(result.details.results[0].agent, "analyst");
 		assert.equal(result.details.results[1].agent, "reporter");
@@ -266,12 +197,7 @@ describe("chain execution — sequential", {
 			const result = await executeChain(
 				makeChainParams(
 					[{ agent: "worker", task: "Do work", thinking: "high" }],
-					[
-						makeAgent("worker", {
-							model: "openai/gpt-5-mini",
-							thinking: "high",
-						}),
-					],
+					[makeAgent("worker", { model: "openai/gpt-5-mini", thinking: "high" })],
 					{
 						clarify: true,
 						ctx: {
@@ -285,18 +211,13 @@ describe("chain execution — sequential", {
 								}),
 							},
 							model: { provider: "openai" },
-							modelRegistry: {
-								getAvailable: () => [{ provider: "openai", id: "gpt-5-mini" }],
-							},
+							modelRegistry: { getAvailable: () => [{ provider: "openai", id: "gpt-5-mini" }] },
 						},
 					},
 				),
 			);
 
-			assert.ok(
-				!result.isError,
-				`chain should succeed: ${JSON.stringify(result.content)}`,
-			);
+			assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
 			const args = readCallArgs(mockPi.callCount() - 1);
 			const modelIndex = args.indexOf("--model");
 			assert.notEqual(modelIndex, -1, "expected a model argument");
@@ -339,16 +260,14 @@ describe("chain execution — sequential", {
 			exhaustedEvent = payload as BudgetExhaustedEvent;
 		});
 
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{ agent: "scout", task: "First" },
-					{ agent: "reviewer", task: "Second" },
-				],
-				[makeAgent("scout"), makeAgent("reviewer")],
-				{ budget: 50, intercomEvents },
-			),
-		);
+		const result = await executeChain!(makeChainParams(
+			[
+				{ agent: "scout", task: "First" },
+				{ agent: "reviewer", task: "Second" },
+			],
+			[makeAgent("scout"), makeAgent("reviewer")],
+			{ budget: 50, intercomEvents },
+		));
 
 		assert.equal(result.isError, undefined);
 		assert.equal(mockPi.callCount(), 1);
@@ -356,10 +275,7 @@ describe("chain execution — sequential", {
 		assert.equal(result.details.results[0]?.agent, "scout");
 		assert.equal(result.details.results[1]?.agent, "reviewer");
 		assert.equal(result.details.results[1]?.exitCode, -1);
-		assert.match(
-			result.details.results[1]?.finalOutput ?? "",
-			/budget-exhausted/,
-		);
+		assert.match(result.details.results[1]?.finalOutput ?? "", /budget-exhausted/);
 		assert.equal(result.details.budget?.limit, 50);
 		assert.equal(result.details.budget?.exhausted, true);
 		assert.equal(exhaustedEvent?.budget.limit, 50);
@@ -367,46 +283,32 @@ describe("chain execution — sequential", {
 		assert.equal(exhaustedEvent?.skippedFromStepIndex, 1);
 	});
 
-	it("shares one wall-clock deadline across a concurrency-limited parallel chain step", {
-		timeout: 10_000,
-	}, async () => {
+	it("shares one wall-clock deadline across a concurrency-limited parallel chain step", { timeout: 10_000 }, async () => {
 		mockPi.onCall({ delay: 2_500, output: "Too late" });
 
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{
-						parallel: [
-							{ agent: "slow", task: "First slow task" },
-							{ agent: "slow", task: "Queued slow task" },
-							{ agent: "slow", task: "Never-started slow task" },
-						],
-						concurrency: 1,
-					},
+		const result = await executeChain!(makeChainParams(
+			[{
+				parallel: [
+					{ agent: "slow", task: "First slow task" },
+					{ agent: "slow", task: "Queued slow task" },
+					{ agent: "slow", task: "Never-started slow task" },
 				],
-				[makeAgent("slow")],
-				{
-					controlConfig: {
-						...DEFAULT_CONTROL_CONFIG,
-						runWallClockTimeoutMs: 100,
-						stepInactivityTimeoutMs: 999_999,
-					},
+				concurrency: 1,
+			}],
+			[makeAgent("slow")],
+			{
+				controlConfig: {
+					...DEFAULT_CONTROL_CONFIG,
+					runWallClockTimeoutMs: 100,
+					stepInactivityTimeoutMs: 999_999,
 				},
-			),
-		);
+			},
+		));
 
-		assert.equal(
-			mockPi.callCount(),
-			1,
-			"queued chain tasks must not spawn after the shared deadline",
-		);
+		assert.equal(mockPi.callCount(), 1, "queued chain tasks must not spawn after the shared deadline");
 		assert.equal(result.details.results.length, 3);
-		assert.equal(
-			result.details.results.every((child) => child.exitCode === 1),
-			true,
-		);
-		for (const child of result.details.results)
-			assert.match(child.error ?? "", /wall-clock limit/);
+		assert.equal(result.details.results.every((child) => child.exitCode === 1), true);
+		for (const child of result.details.results) assert.match(child.error ?? "", /wall-clock limit/);
 	});
 
 	it("lets an already-launched parallel group finish before budget exhaustion skips later steps", async () => {
@@ -414,21 +316,19 @@ describe("chain execution — sequential", {
 		mockPi.onCall({ output: "Parallel two" });
 		mockPi.onCall({ output: "Final step should not run" });
 
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{
-						parallel: [
-							{ agent: "scout", task: "First parallel" },
-							{ agent: "reviewer", task: "Second parallel" },
-						],
-					},
-					{ agent: "reporter", task: "After parallel" },
-				],
-				[makeAgent("scout"), makeAgent("reviewer"), makeAgent("reporter")],
-				{ budget: 1 },
-			),
-		);
+		const result = await executeChain!(makeChainParams(
+			[
+				{
+					parallel: [
+						{ agent: "scout", task: "First parallel" },
+						{ agent: "reviewer", task: "Second parallel" },
+					],
+				},
+				{ agent: "reporter", task: "After parallel" },
+			],
+			[makeAgent("scout"), makeAgent("reviewer"), makeAgent("reporter")],
+			{ budget: 1 },
+		));
 
 		assert.equal(result.isError, undefined);
 		assert.equal(mockPi.callCount(), 2);
@@ -437,10 +337,7 @@ describe("chain execution — sequential", {
 		assert.equal(result.details.results[1]?.agent, "reviewer");
 		assert.equal(result.details.results[2]?.agent, "reporter");
 		assert.equal(result.details.results[2]?.exitCode, -1);
-		assert.match(
-			result.details.results[2]?.finalOutput ?? "",
-			/budget-exhausted/,
-		);
+		assert.match(result.details.results[2]?.finalOutput ?? "", /budget-exhausted/);
 	});
 
 	it("passes file-only saved-output references through {previous}", async () => {
@@ -450,12 +347,7 @@ describe("chain execution — sequential", {
 		const result = await executeChain(
 			makeChainParams(
 				[
-					{
-						agent: "analyst",
-						task: "Analyze",
-						output: "analysis.md",
-						outputMode: "file-only",
-					},
+					{ agent: "analyst", task: "Analyze", output: "analysis.md", outputMode: "file-only" },
 					{ agent: "reporter" },
 				],
 				agents,
@@ -463,18 +355,9 @@ describe("chain execution — sequential", {
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`chain should succeed: ${JSON.stringify(result.content)}`,
-		);
-		assert.match(
-			result.details.results[0]?.finalOutput ?? "",
-			/Output saved to:/,
-		);
-		assert.doesNotMatch(
-			result.details.results[0]?.finalOutput ?? "",
-			/full chain output/,
-		);
+		assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
+		assert.match(result.details.results[0]?.finalOutput ?? "", /Output saved to:/);
+		assert.doesNotMatch(result.details.results[0]?.finalOutput ?? "", /full chain output/);
 		const secondTaskArg = readCallArgs(1).at(-1) ?? "";
 		assert.match(secondTaskArg, /Output saved to:/);
 		assert.match(secondTaskArg, /2 lines/);
@@ -483,33 +366,22 @@ describe("chain execution — sequential", {
 
 	it("retries chain steps with fallback models on retryable provider failures", async () => {
 		mockPi.onCall({
-			jsonl: [
-				{
-					type: "message_end",
-					message: {
-						role: "assistant",
-						content: [{ type: "text", text: "primary failed" }],
-						model: "openai/gpt-5-mini",
-						errorMessage: "provider unavailable",
-						usage: {
-							input: 10,
-							output: 5,
-							cacheRead: 0,
-							cacheWrite: 0,
-							cost: { total: 0.01 },
-						},
-					},
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "primary failed" }],
+					model: "openai/gpt-5-mini",
+					errorMessage: "provider unavailable",
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
 				},
-			],
+			}],
 			exitCode: 1,
 		});
 		mockPi.onCall({ output: "Step 1 recovered" });
 		mockPi.onCall({ output: "Step 2 ran" });
 		const agents = [
-			makeAgent("step1", {
-				model: "openai/gpt-5-mini",
-				fallbackModels: ["anthropic/claude-sonnet-4"],
-			}),
+			makeAgent("step1", { model: "openai/gpt-5-mini", fallbackModels: ["anthropic/claude-sonnet-4"] }),
 			makeAgent("step2"),
 		];
 
@@ -520,25 +392,16 @@ describe("chain execution — sequential", {
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`chain should succeed: ${JSON.stringify(result.content)}`,
-		);
+		assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
 		assert.equal(result.details.results.length, 2);
-		assert.deepEqual(result.details.results[0].attemptedModels, [
-			"openai/gpt-5-mini",
-			"anthropic/claude-sonnet-4",
-		]);
+		assert.deepEqual(result.details.results[0].attemptedModels, ["openai/gpt-5-mini", "anthropic/claude-sonnet-4"]);
 		assert.equal(mockPi.callCount(), 3);
 	});
 
 	it("prefers the parent session provider for ambiguous bare chain step models", async () => {
 		mockPi.onCall({ output: "Step 1 ran" });
 		mockPi.onCall({ output: "Step 2 ran" });
-		const agents = [
-			makeAgent("step1", { model: "gpt-5-mini" }),
-			makeAgent("step2"),
-		];
+		const agents = [makeAgent("step1", { model: "gpt-5-mini" }), makeAgent("step2")];
 
 		const result = await executeChain(
 			makeChainParams(
@@ -559,14 +422,9 @@ describe("chain execution — sequential", {
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`chain should succeed: ${JSON.stringify(result.content)}`,
-		);
+		assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
 		assert.equal(result.details.results[0].model, "github-copilot/gpt-5-mini");
-		assert.deepEqual(result.details.results[0].attemptedModels, [
-			"github-copilot/gpt-5-mini",
-		]);
+		assert.deepEqual(result.details.results[0].attemptedModels, ["github-copilot/gpt-5-mini"]);
 	});
 
 	it("suppresses progress for {task} chain templates when the top-level task is review-only", async () => {
@@ -574,9 +432,11 @@ describe("chain execution — sequential", {
 		const agents = [makeAgent("reviewer", { defaultProgress: true })];
 
 		await executeChain(
-			makeChainParams([{ agent: "reviewer" }], agents, {
-				task: "Review-only. Do not edit files. Return findings.",
-			}),
+			makeChainParams(
+				[{ agent: "reviewer" }],
+				agents,
+				{ task: "Review-only. Do not edit files. Return findings." },
+			),
 		);
 
 		const taskArg = readCallArgs(0).at(-1) ?? "";
@@ -636,14 +496,8 @@ describe("chain execution — sequential", {
 
 		assert.ok(!result.isError);
 		const summary = result.content[0].text;
-		assert.ok(
-			summary.includes("✅ Chain completed:"),
-			`missing completion marker: ${summary}`,
-		);
-		assert.ok(
-			summary.includes("📁 Artifacts:"),
-			`missing artifacts marker: ${summary}`,
-		);
+		assert.ok(summary.includes("✅ Chain completed:"), `missing completion marker: ${summary}`);
+		assert.ok(summary.includes("📁 Artifacts:"), `missing artifacts marker: ${summary}`);
 	});
 
 	it("stops chain on step failure", async () => {
@@ -658,21 +512,13 @@ describe("chain execution — sequential", {
 		);
 
 		assert.ok(result.isError, "chain should fail");
-		assert.equal(
-			result.details.results.length,
-			1,
-			"only step1 should have run",
-		);
+		assert.equal(result.details.results.length, 1, "only step1 should have run");
 		assert.equal(result.details.results[0].exitCode, 1);
 	});
 
 	it("runs a 3-step chain end-to-end", async () => {
 		mockPi.onCall({ output: "Step output" });
-		const agents = [
-			makeAgent("scout"),
-			makeAgent("planner"),
-			makeAgent("executor"),
-		];
+		const agents = [makeAgent("scout"), makeAgent("planner"), makeAgent("executor")];
 
 		const result = await executeChain(
 			makeChainParams(
@@ -719,10 +565,7 @@ describe("chain execution — sequential", {
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`chain should succeed: ${JSON.stringify(result.content)}`,
-		);
+		assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
 		assert.deepEqual(result.details.results[0]?.skills, ["chain-step-skill"]);
 	});
 
@@ -731,7 +574,10 @@ describe("chain execution — sequential", {
 		const agents = [makeAgent("a"), makeAgent("b")];
 
 		const result = await executeChain(
-			makeChainParams([{ agent: "a", task: "Start" }, { agent: "b" }], agents),
+			makeChainParams(
+				[{ agent: "a", task: "Start" }, { agent: "b" }],
+				agents,
+			),
 		);
 
 		assert.ok(!result.isError);
@@ -745,9 +591,11 @@ describe("chain execution — sequential", {
 		const customChainDir = path.join(tempDir, "my-chain");
 
 		const result = await executeChain(
-			makeChainParams([{ agent: "worker", task: "Use {chain_dir}" }], agents, {
-				chainDir: customChainDir,
-			}),
+			makeChainParams(
+				[{ agent: "worker", task: "Use {chain_dir}" }],
+				agents,
+				{ chainDir: customChainDir },
+			),
 		);
 
 		assert.ok(!result.isError);
@@ -760,589 +608,32 @@ describe("chain execution — sequential", {
 		delete process.env.PI_SUBAGENT_DEPTH;
 		delete process.env.PI_SUBAGENT_MAX_DEPTH;
 		try {
-			mockPi.onCall({
-				echoEnv: ["PI_SUBAGENT_DEPTH", "PI_SUBAGENT_MAX_DEPTH"],
-			});
+			mockPi.onCall({ echoEnv: ["PI_SUBAGENT_DEPTH", "PI_SUBAGENT_MAX_DEPTH"] });
 			const agents = [makeAgent("worker", { maxSubagentDepth: 1 })];
 
 			const result = await executeChain(
-				makeChainParams([{ agent: "worker", task: "Inspect env" }], agents, {
-					maxSubagentDepth: 3,
-				}),
+				makeChainParams(
+					[{ agent: "worker", task: "Inspect env" }],
+					agents,
+					{ maxSubagentDepth: 3 },
+				),
 			);
 
 			assert.ok(!result.isError);
-			assert.deepEqual(
-				JSON.parse(result.details.results[0].finalOutput ?? "{}"),
-				{
-					PI_SUBAGENT_DEPTH: "1",
-					PI_SUBAGENT_MAX_DEPTH: "1",
-				},
-			);
+			assert.deepEqual(JSON.parse(result.details.results[0].finalOutput ?? "{}"), {
+				PI_SUBAGENT_DEPTH: "1",
+				PI_SUBAGENT_MAX_DEPTH: "1",
+			});
 		} finally {
 			if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
 			else process.env.PI_SUBAGENT_DEPTH = originalDepth;
-			if (originalMaxDepth === undefined)
-				delete process.env.PI_SUBAGENT_MAX_DEPTH;
+			if (originalMaxDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH;
 			else process.env.PI_SUBAGENT_MAX_DEPTH = originalMaxDepth;
 		}
 	});
-
-	it("runs a report-only gate once, reports the diff, and leaves the real tree unchanged on PASS", async () => {
-		initGitRepo(tempDir);
-		const runId = "gate-pass-fixture";
-		const worktreeDir = path.join(
-			os.tmpdir(),
-			`pi-worktree-${runId}-gate-s0-0`,
-		);
-		const worktreeOutputPath = path.join(worktreeDir, "produced.txt");
-		const chainDirOutputPath = path.join(chainDir, "produced.txt");
-		const before = gitStatus(tempDir);
-		mockPi.onCall({
-			output: "producer output",
-			writeOutput: "changed by producer\n",
-		});
-		mockPi.onCall({
-			taskIncludes: "Score the producer",
-			structured: {
-				pass: true,
-				score: 1,
-				criteria: [
-					{
-						criterion: "The produced file exists",
-						met: true,
-						note: "Verified in the attempt worktree.",
-					},
-				],
-				feedback: "No further changes are needed.",
-			},
-			echoEnv: ["PI_SUBAGENT_GRADER_ALLOWED_ROOT"],
-		});
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{
-						agent: "worker",
-						task: "Produce the file",
-						output: "produced.txt",
-						gate: {
-							rubric: "The produced file exists",
-							grader: "custom-grader",
-							maxIterations: 4,
-							evidence: "report-only",
-						},
-					},
-				],
-				[
-					makeAgent("worker"),
-					makeAgent("custom-grader", {
-						tools: ["read", "bash", "write"],
-						extensions: ["/tmp/unsafe-grader-extension.ts"],
-						mcpDirectTools: ["unsafe"],
-					}),
-				],
-				{ runId, cwd: tempDir, chainDir, ctx: makeMinimalCtx(tempDir) },
-			),
-		);
-		const after = gitStatus(tempDir);
-		const text = result.content[0]?.text ?? "";
-		assert.equal(result.isError, undefined, text);
-		assert.equal(
-			before,
-			after,
-			"gated PASS must not change the real repository status",
-		);
-		assert.match(text, /Acceptance Gate: PASS/);
-		assert.match(text, /No further changes are needed/);
-		assert.match(text, /produced\.txt/);
-		assert.equal(mockPi.callCount(), 2);
-		const producerArgs = readCallArgs(0);
-		assert.ok(
-			(producerArgs.at(-1) ?? "").includes(`[Write to: ${worktreeOutputPath}]`),
-			`a gated step's output must resolve inside the attempt worktree: ${producerArgs.at(-1)}`,
-		);
-		const graderArgs = readCallArgs(1);
-		const toolsIndex = graderArgs.indexOf("--tools");
-		assert.notEqual(toolsIndex, -1);
-		assert.equal(
-			graderArgs[toolsIndex + 1],
-			"read,grep,find,ls,structured_output",
-		);
-		assert.ok(
-			graderArgs.includes("--no-extensions"),
-			"grader extensions must be disabled",
-		);
-		// Nothing the gated step produced may survive outside the discarded worktree,
-		// on any verdict — report-only v1 applies nothing automatically.
-		assert.equal(
-			fs.existsSync(chainDirOutputPath),
-			false,
-			"a gated step must not write its output into the chain dir",
-		);
-		assert.equal(
-			fs.existsSync(worktreeOutputPath),
-			false,
-			"the gated output file must be discarded with the worktree",
-		);
-		assert.equal(
-			fs.existsSync(worktreeDir),
-			false,
-			"gate worktree must be cleaned up",
-		);
-	});
-
-	it("routes gated producer sessions and artifacts away from configured repository paths", async () => {
-		initGitRepo(tempDir);
-		const runId = "gate-session-artifact-routing-fixture";
-		const requestedSessionDir = path.join(tempDir, "requested-sessions");
-		const requestedArtifactsDir = path.join(tempDir, "requested-artifacts");
-		const gateArtifactDir = path.join(CHAIN_RUNS_DIR, `${runId}-gate-s0`);
-		mockPi.onCall({ output: "producer output" });
-		mockPi.onCall({
-			taskIncludes: "Score the producer",
-			structured: {
-				pass: true,
-				score: 1,
-				criteria: [{ criterion: "The work is complete", met: true, note: "Verified." }],
-				feedback: "Complete.",
-			},
-		});
-
-		try {
-			const result = await executeChain!(
-				makeChainParams(
-					[
-						{
-							agent: "worker",
-							task: "Produce the file",
-							gate: { rubric: "The work is complete", grader: "grader" },
-						},
-					],
-					[makeAgent("worker"), makeAgent("grader")],
-					{
-						runId,
-						cwd: tempDir,
-						chainDir,
-						ctx: makeMinimalCtx(tempDir),
-						sessionDirForIndex: () => requestedSessionDir,
-						sessionFileForIndex: () => path.join(requestedSessionDir, "lineage.jsonl"),
-						artifactsDir: requestedArtifactsDir,
-						artifactConfig: {
-							enabled: true,
-							includeInput: true,
-							includeOutput: true,
-							includeJsonl: true,
-							includeMetadata: true,
-						},
-					},
-				),
-			);
-
-			assert.equal(result.isError, undefined, result.content[0]?.text ?? "");
-			assert.equal(fs.existsSync(requestedSessionDir), false);
-			assert.equal(fs.existsSync(requestedArtifactsDir), false);
-			assert.equal(gitStatus(tempDir), "");
-			const producerArgs = readCallArgs(0);
-			const sessionIndex = producerArgs.indexOf("--session");
-			assert.notEqual(sessionIndex, -1, "the gated producer should receive a safe session file");
-			const sessionFile = producerArgs[sessionIndex + 1] ?? "";
-			assert.equal(sessionFile.startsWith(`${tempDir}${path.sep}`), false);
-			assert.match(sessionFile, /gate-session-artifact-routing-fixture-gate-s0/);
-		} finally {
-			fs.rmSync(gateArtifactDir, { recursive: true, force: true });
-		}
-	});
-
-	it("throws when the report-only invariant detects a real-tree leak", async () => {
-		initGitRepo(tempDir);
-		const runId = "gate-invariant-leak-fixture";
-		const leakPath = path.join(tempDir, "tracked.txt");
-		const worktreeDir = path.join(os.tmpdir(), `pi-worktree-${runId}-gate-s0-0`);
-		let leaked = false;
-		let updateCount = 0;
-		mockPi.onCall({ output: "producer output" });
-		mockPi.onCall({
-			taskIncludes: "Score the producer",
-			structured: {
-				pass: true,
-				score: 1,
-				criteria: [{ criterion: "The work is complete", met: true, note: "Verified." }],
-				feedback: "Complete.",
-			},
-		});
-
-		await assert.rejects(
-			() =>
-				executeChain!(
-					makeChainParams(
-						[
-							{
-								agent: "worker",
-								task: "Produce the file",
-								gate: { rubric: "The work is complete", grader: "grader" },
-							},
-						],
-						[makeAgent("worker"), makeAgent("grader")],
-						{
-							runId,
-							cwd: tempDir,
-							chainDir,
-							ctx: makeMinimalCtx(tempDir),
-							onUpdate: () => {
-								updateCount++;
-								if (updateCount === 1 || leaked) return;
-								leaked = true;
-								fs.writeFileSync(leakPath, "intentional test leak\n", "utf8");
-							},
-						},
-					),
-				),
-			/report-only invariant violation[\s\S]*tracked.txt/i,
-		);
-		assert.equal(leaked, true);
-		assert.equal(fs.existsSync(leakPath), true);
-		assert.equal(fs.existsSync(worktreeDir), false, "invariant check runs after worktree cleanup");
-	});
-
-	it("never loads always-on extensions into a grader child", async () => {
-		initGitRepo(tempDir);
-		const runId = "gate-always-extension-fixture";
-		const guardPath = path.join(tempDir, "always-guard.ts");
-		fs.writeFileSync(guardPath, "// always-on guard extension\n", "utf-8");
-		fs.mkdirSync(path.join(tempDir, ".pi"), { recursive: true });
-		fs.writeFileSync(
-			path.join(tempDir, ".pi", "settings.json"),
-			JSON.stringify({ subagents: { childAlwaysExtensions: [guardPath] } }),
-			"utf-8",
-		);
-		runGit(tempDir, ["add", "-A"]);
-		runGit(tempDir, ["commit", "-m", "always-on extension settings"]);
-
-		mockPi.onCall({ output: "producer output" });
-		mockPi.onCall({
-			taskIncludes: "Score the producer",
-			structured: {
-				pass: true,
-				score: 1,
-				criteria: [{ criterion: "Work is done", met: true }],
-				feedback: "Fine.",
-			},
-		});
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{
-						agent: "worker",
-						task: "Do the work",
-						gate: { rubric: "Work is done", grader: "grader" },
-					},
-				],
-				[
-					makeAgent("worker", { extensions: [] }),
-					makeAgent("grader", { extensions: [] }),
-				],
-				{ runId, cwd: tempDir, chainDir, ctx: makeMinimalCtx(tempDir) },
-			),
-		);
-
-		assert.equal(result.isError, undefined, result.content[0]?.text ?? "");
-		assert.equal(mockPi.callCount(), 2);
-		const producerExtensions = readCallArgs(0).filter(
-			(arg, index, args) => args[index - 1] === "--extension",
-		);
-		const graderExtensions = readCallArgs(1).filter(
-			(arg, index, args) => args[index - 1] === "--extension",
-		);
-		// Positive control: the always-on extension really is configured and reaches an ordinary child.
-		assert.ok(
-			producerExtensions.includes(guardPath),
-			"precondition: always-on extensions reach a normal child",
-		);
-		assert.equal(
-			graderExtensions.includes(guardPath),
-			false,
-			"an always-on extension must never be loaded into a grader child",
-		);
-	});
-
-	it("reports a schema-invalid grader as FAIL and still discards the worktree", async () => {
-		initGitRepo(tempDir);
-		const runId = "gate-fail-fixture";
-		const worktreeDir = path.join(
-			os.tmpdir(),
-			`pi-worktree-${runId}-gate-s0-0`,
-		);
-		const worktreeOutputPath = path.join(worktreeDir, "produced.txt");
-		const chainDirOutputPath = path.join(chainDir, "produced.txt");
-		const before = gitStatus(tempDir);
-		mockPi.onCall({
-			output: "producer output",
-			writeOutput: "changed by producer\n",
-		});
-		mockPi.onCall({
-			taskIncludes: "Score the producer",
-			structured: { pass: true },
-		});
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{
-						agent: "worker",
-						task: "Produce the file",
-						output: "produced.txt",
-						gate: { rubric: "The produced file exists", grader: "grader" },
-					},
-				],
-				[makeAgent("worker"), makeAgent("grader")],
-				{ runId, cwd: tempDir, chainDir, ctx: makeMinimalCtx(tempDir) },
-			),
-		);
-		const after = gitStatus(tempDir);
-		const text = result.content[0]?.text ?? "";
-		assert.equal(result.isError, true);
-		assert.equal(
-			before,
-			after,
-			"gated FAIL must not change the real repository status",
-		);
-		assert.match(text, /Acceptance Gate: FAIL/);
-		assert.match(
-			text,
-			/Structured output validation failed|Grader verdict error/i,
-		);
-		assert.match(text, /produced\.txt/);
-		assert.equal(mockPi.callCount(), 2);
-		assert.equal(
-			fs.existsSync(chainDirOutputPath),
-			false,
-			"a failed gate must not leave its output file outside the worktree",
-		);
-		assert.equal(
-			fs.existsSync(worktreeOutputPath),
-			false,
-			"the failed attempt's output file must be discarded with the worktree",
-		);
-		assert.equal(
-			fs.existsSync(worktreeDir),
-			false,
-			"failed gate worktree must be cleaned up",
-		);
-	});
-
-	it("keeps gate artifacts out of a chainDir configured inside the gated repo", async () => {
-		initGitRepo(tempDir);
-		const runId = "gate-chain-dir-inside-repo-fixture";
-		// The public `chainDir` setting can point anywhere, including the repo under grading.
-		const repoChainDir = path.join(tempDir, ".chain-artifacts");
-		const worktreeDir = path.join(
-			os.tmpdir(),
-			`pi-worktree-${runId}-gate-s0-0`,
-		);
-		mockPi.onCall({
-			output: "producer output",
-			writeOutput: "changed by producer\n",
-		});
-		mockPi.onCall({
-			taskIncludes: "Score the producer",
-			structured: { pass: true },
-		});
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{
-						agent: "worker",
-						task: "Produce the file",
-						output: "produced.txt",
-						progress: true,
-						gate: { rubric: "The produced file exists", grader: "grader" },
-					},
-				],
-				[makeAgent("worker"), makeAgent("grader")],
-				{
-					runId,
-					cwd: tempDir,
-					chainDir: repoChainDir,
-					ctx: makeMinimalCtx(tempDir),
-				},
-			),
-		);
-		const text = result.content[0]?.text ?? "";
-		assert.equal(result.isError, true);
-		assert.match(text, /Acceptance Gate: FAIL/);
-		assert.equal(
-			gitStatus(tempDir),
-			"",
-			"a failed gated run must leave no artifact in the gated repository",
-		);
-		const producerTask = readCallArgs(0).at(-1) ?? "";
-		const progressMatch = producerTask.match(/progress at: (\S+)/);
-		assert.ok(progressMatch, `expected a progress instruction: ${producerTask}`);
-		assert.equal(
-			(progressMatch[1] ?? "").startsWith(tempDir),
-			false,
-			`a gated step's progress file must not live inside the gated repo: ${progressMatch[1]}`,
-		);
-		// The artifacts still exist — they were routed to the extension temp root, not suppressed.
-		const gateArtifactDir = path.join(CHAIN_RUNS_DIR, `${runId}-gate-s0`);
-		assert.equal(
-			fs.existsSync(
-				path.join(gateArtifactDir, "worktree-diffs", "step-0", "task-0-worker.patch"),
-			),
-			true,
-			"gate diff artifacts must be written outside the gated repo",
-		);
-		fs.rmSync(gateArtifactDir, { recursive: true, force: true });
-		assert.equal(
-			fs.existsSync(worktreeDir),
-			false,
-			"failed gate worktree must be cleaned up",
-		);
-	});
-
-	it("refuses a gated step whose output escapes the attempt worktree", async () => {
-		initGitRepo(tempDir);
-		const escapePath = path.join(tempDir, "escaped-output.md");
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{
-						agent: "worker",
-						task: "Must not run",
-						output: escapePath,
-						gate: { rubric: "No child runs", grader: "grader" },
-					},
-				],
-				[makeAgent("worker"), makeAgent("grader")],
-				{
-					runId: "gate-output-escape-fixture",
-					cwd: tempDir,
-					chainDir,
-					ctx: makeMinimalCtx(tempDir),
-				},
-			),
-		);
-		assert.equal(result.isError, true);
-		assert.match(
-			result.content[0]?.text ?? "",
-			/must resolve inside the attempt worktree/i,
-		);
-		assert.equal(mockPi.callCount(), 0);
-		assert.equal(fs.existsSync(escapePath), false);
-		assert.equal(
-			fs.existsSync(
-				path.join(os.tmpdir(), "pi-worktree-gate-output-escape-fixture-gate-s0-0"),
-			),
-			false,
-			"the refused step's worktree must be cleaned up",
-		);
-	});
-
-	it("refuses a gated step on a dirty repository before launching any child", async () => {
-		initGitRepo(tempDir);
-		fs.writeFileSync(path.join(tempDir, "tracked.txt"), "dirty\n", "utf8");
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{ agent: "worker", task: "Ungated step must not run either" },
-					{
-						agent: "worker",
-						task: "Must not run",
-						gate: { rubric: "No child runs", grader: "grader" },
-					},
-				],
-				[makeAgent("worker"), makeAgent("grader")],
-				{
-					runId: "gate-dirty-fixture",
-					cwd: tempDir,
-					chainDir,
-					ctx: makeMinimalCtx(tempDir),
-				},
-			),
-		);
-		assert.equal(result.isError, true);
-		assert.match(
-			result.content[0]?.text ?? "",
-			/clean git working tree|dirty/i,
-		);
-		assert.equal(
-			mockPi.callCount(),
-			0,
-			"the ungated first step must not run ahead of a gate refusal",
-		);
-	});
-
-	it("refuses a gated step when git config hides an untracked file", async () => {
-		initGitRepo(tempDir);
-		runGit(tempDir, ["config", "status.showUntrackedFiles", "no"]);
-		fs.writeFileSync(path.join(tempDir, "scratch.txt"), "untracked\n", "utf8");
-		assert.equal(
-			gitStatus(tempDir),
-			"",
-			"precondition: the repo's own config hides the untracked file",
-		);
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{
-						agent: "worker",
-						task: "Must not run",
-						gate: { rubric: "No child runs", grader: "grader" },
-					},
-				],
-				[makeAgent("worker"), makeAgent("grader")],
-				{
-					runId: "gate-hidden-untracked-fixture",
-					cwd: tempDir,
-					chainDir,
-					ctx: makeMinimalCtx(tempDir),
-				},
-			),
-		);
-		assert.equal(result.isError, true);
-		assert.match(
-			result.content[0]?.text ?? "",
-			/clean git working tree/i,
-		);
-		assert.equal(mockPi.callCount(), 0);
-	});
-
-	it("refuses an unknown gate grader before launching any child", async () => {
-		initGitRepo(tempDir);
-		const result = await executeChain!(
-			makeChainParams(
-				[
-					{ agent: "worker", task: "Ungated step must not run either" },
-					{
-						agent: "worker",
-						task: "Must not run",
-						gate: { rubric: "No child runs", grader: "missing-grader" },
-					},
-				],
-				[makeAgent("worker")],
-				{
-					runId: "gate-unknown-grader-fixture",
-					cwd: tempDir,
-					chainDir,
-					ctx: makeMinimalCtx(tempDir),
-				},
-			),
-		);
-		assert.equal(result.isError, true);
-		assert.match(
-			result.content[0]?.text ?? "",
-			/grader agent 'missing-grader' is not configured/i,
-		);
-		assert.equal(
-			mockPi.callCount(),
-			0,
-			"the ungated first step must not run ahead of a gate refusal",
-		);
-	});
 });
 
-describe("chain execution — parallel steps", {
-	skip: !available ? "pi packages not available" : undefined,
-}, () => {
+describe("chain execution — parallel steps", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
 	let mockPi: MockPi;
 
@@ -1384,15 +675,12 @@ describe("chain execution — parallel steps", {
 	}
 
 	function readCallArgs(index: number): string[] {
-		const callFiles = fs
-			.readdirSync(mockPi.dir)
+		const callFiles = fs.readdirSync(mockPi.dir)
 			.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
 			.sort();
 		const callFile = callFiles[index];
 		assert.ok(callFile, `expected call ${index}`);
-		const args = JSON.parse(
-			fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8"),
-		).args as string[];
+		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
 		// Fresh-context dispatches (the default here) now append --no-context-files after the
 		// task arg; strip it so task-text assertions via .at(-1) keep working unmodified.
 		return args.filter((arg) => arg !== "--no-context-files");
@@ -1416,10 +704,7 @@ describe("chain execution — parallel steps", {
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`should succeed: ${JSON.stringify(result.content)}`,
-		);
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
 		assert.equal(result.details.results.length, 2);
 	});
 
@@ -1432,31 +717,21 @@ describe("chain execution — parallel steps", {
 			makeChainParams(
 				[
 					{ agent: "producer", task: "Produce literal output", as: "producer" },
-					{
-						parallel: [
-							{ agent: "reviewer", task: "Consume {outputs.producer}" },
-						],
-					},
+					{ parallel: [{ agent: "reviewer", task: "Consume {outputs.producer}" }] },
 				],
 				agents,
 				{ task: "EXPANDED_TASK" },
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`should succeed: ${JSON.stringify(result.content)}`,
-		);
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
 		const parallelTask = readCallArgs(1).at(-1) ?? "";
 		assert.match(parallelTask, /literal \{task\}/);
 		assert.doesNotMatch(parallelTask, /literal EXPANDED_TASK/);
 	});
 
 	it("does not re-expand author tokens injected by named output in a dynamic fanout task", async () => {
-		mockPi.onCall({
-			structured: { files: ["a.ts"], note: "literal {task}" },
-			output: "listed files",
-		});
+		mockPi.onCall({ structured: { files: ["a.ts"], note: "literal {task}" }, output: "listed files" });
 		mockPi.onCall({ output: "review done" });
 		const agents = [makeAgent("producer"), makeAgent("reviewer")];
 		const filesSchema = {
@@ -1472,22 +747,10 @@ describe("chain execution — parallel steps", {
 		const result = await executeChain(
 			makeChainParams(
 				[
+					{ agent: "producer", task: "List files", as: "files", outputSchema: filesSchema },
 					{
-						agent: "producer",
-						task: "List files",
-						as: "files",
-						outputSchema: filesSchema,
-					},
-					{
-						expand: {
-							from: { output: "files", path: "/files" },
-							item: "file",
-							maxItems: 1,
-						},
-						parallel: {
-							agent: "reviewer",
-							task: "Review {file} with {outputs.files}",
-						},
+						expand: { from: { output: "files", path: "/files" }, item: "file", maxItems: 1 },
+						parallel: { agent: "reviewer", task: "Review {file} with {outputs.files}" },
 						collect: { as: "reviews" },
 					},
 				],
@@ -1496,20 +759,14 @@ describe("chain execution — parallel steps", {
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`should succeed: ${JSON.stringify(result.content)}`,
-		);
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
 		const dynamicTask = readCallArgs(1).at(-1) ?? "";
 		assert.match(dynamicTask, /literal \{task\}/);
 		assert.doesNotMatch(dynamicTask, /literal EXPANDED_TASK/);
 	});
 
 	it("does not re-expand author tokens injected by a dynamic item", async () => {
-		mockPi.onCall({
-			structured: { files: ["literal {task}"] },
-			output: "listed files",
-		});
+		mockPi.onCall({ structured: { files: ["literal {task}"] }, output: "listed files" });
 		mockPi.onCall({ output: "review done" });
 		const agents = [makeAgent("producer"), makeAgent("reviewer")];
 		const filesSchema = {
@@ -1524,18 +781,9 @@ describe("chain execution — parallel steps", {
 		const result = await executeChain(
 			makeChainParams(
 				[
+					{ agent: "producer", task: "List files", as: "files", outputSchema: filesSchema },
 					{
-						agent: "producer",
-						task: "List files",
-						as: "files",
-						outputSchema: filesSchema,
-					},
-					{
-						expand: {
-							from: { output: "files", path: "/files" },
-							item: "file",
-							maxItems: 1,
-						},
+						expand: { from: { output: "files", path: "/files" }, item: "file", maxItems: 1 },
 						parallel: { agent: "reviewer", task: "Review {file}" },
 						collect: { as: "reviews" },
 					},
@@ -1545,10 +793,7 @@ describe("chain execution — parallel steps", {
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`should succeed: ${JSON.stringify(result.content)}`,
-		);
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
 		const dynamicTask = readCallArgs(1).at(-1) ?? "";
 		assert.match(dynamicTask, /Review literal \{task\}/);
 		assert.doesNotMatch(dynamicTask, /Review literal EXPANDED_TASK/);
@@ -1556,11 +801,7 @@ describe("chain execution — parallel steps", {
 
 	it("aggregates parallel outputs for next sequential step", async () => {
 		mockPi.onCall({ output: "Review findings here" });
-		const agents = [
-			makeAgent("reviewer-a"),
-			makeAgent("reviewer-b"),
-			makeAgent("synthesizer"),
-		];
+		const agents = [makeAgent("reviewer-a"), makeAgent("reviewer-b"), makeAgent("synthesizer")];
 
 		const result = await executeChain(
 			makeChainParams(
@@ -1592,29 +833,15 @@ describe("chain execution — parallel steps", {
 
 	it("aggregates file-only parallel outputs as file references for the next step", async () => {
 		mockPi.onCall({ output: "full parallel chain output\nwith details" });
-		const agents = [
-			makeAgent("reviewer-a"),
-			makeAgent("reviewer-b"),
-			makeAgent("synthesizer"),
-		];
+		const agents = [makeAgent("reviewer-a"), makeAgent("reviewer-b"), makeAgent("synthesizer")];
 
 		const result = await executeChain(
 			makeChainParams(
 				[
 					{
 						parallel: [
-							{
-								agent: "reviewer-a",
-								task: "Review A",
-								output: "a.md",
-								outputMode: "file-only",
-							},
-							{
-								agent: "reviewer-b",
-								task: "Review B",
-								output: "b.md",
-								outputMode: "file-only",
-							},
+							{ agent: "reviewer-a", task: "Review A", output: "a.md", outputMode: "file-only" },
+							{ agent: "reviewer-b", task: "Review B", output: "b.md", outputMode: "file-only" },
 						],
 					},
 					{ agent: "synthesizer" },
@@ -1624,18 +851,9 @@ describe("chain execution — parallel steps", {
 			),
 		);
 
-		assert.ok(
-			!result.isError,
-			`should succeed: ${JSON.stringify(result.content)}`,
-		);
-		assert.doesNotMatch(
-			result.details.results[0]?.finalOutput ?? "",
-			/full parallel chain output/,
-		);
-		assert.doesNotMatch(
-			result.details.results[1]?.finalOutput ?? "",
-			/full parallel chain output/,
-		);
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
+		assert.doesNotMatch(result.details.results[0]?.finalOutput ?? "", /full parallel chain output/);
+		assert.doesNotMatch(result.details.results[1]?.finalOutput ?? "", /full parallel chain output/);
 		const synthTaskArg = readCallArgs(2).at(-1) ?? "";
 		assert.match(synthTaskArg, /Output saved to:/);
 		assert.match(synthTaskArg, /2 lines/);
@@ -1647,18 +865,12 @@ describe("chain execution — parallel steps", {
 
 		const result = await executeChain(
 			makeChainParams(
-				[
-					{
-						parallel: [
-							{
-								agent: "reviewer-a",
-								task: "Review A",
-								outputMode: "file-only",
-							},
-							{ agent: "reviewer-b", task: "Review B", output: "b.md" },
-						],
-					},
-				],
+				[{
+					parallel: [
+						{ agent: "reviewer-a", task: "Review A", outputMode: "file-only" },
+						{ agent: "reviewer-b", task: "Review B", output: "b.md" },
+					],
+				}],
 				agents,
 				{ chainDir: tempDir },
 			),
@@ -1672,14 +884,7 @@ describe("chain execution — parallel steps", {
 	it("detaches parallel chain children cleanly on intercom handoff", async () => {
 		mockPi.onCall({
 			steps: [
-				{
-					jsonl: [
-						events.toolStart("intercom", {
-							action: "send",
-							to: "orchestrator",
-						}),
-					],
-				},
+				{ jsonl: [events.toolStart("intercom", { action: "send", to: "orchestrator" })] },
 				{ delay: 1000, jsonl: [events.assistantMessage("after handoff")] },
 			],
 		});
@@ -1704,51 +909,27 @@ describe("chain execution — parallel steps", {
 				agents,
 				{
 					intercomEvents,
-					onUpdate(update: {
-						details?: { progress?: Array<{ currentTool?: string }> };
-					}) {
+					onUpdate(update: { details?: { progress?: Array<{ currentTool?: string }> } }) {
 						if (detachEmitted) return;
-						if (
-							!update.details?.progress?.some(
-								(entry) => entry.currentTool === "intercom",
-							)
-						)
-							return;
+						if (!update.details?.progress?.some((entry) => entry.currentTool === "intercom")) return;
 						detachEmitted = true;
-						intercomEvents.emit(INTERCOM_DETACH_REQUEST_EVENT, {
-							requestId: "chain-parallel-detach",
-						});
+						intercomEvents.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "chain-parallel-detach" });
 					},
 				},
 			),
 		);
 
 		assert.equal(result.isError, undefined);
-		assert.match(
-			result.content[0]?.text ?? "",
-			/Chain detached for intercom coordination/,
-		);
+		assert.match(result.content[0]?.text ?? "", /Chain detached for intercom coordination/);
 		assert.doesNotMatch(result.content[0]?.text ?? "", /resume/);
 		assert.equal(detachEmitted, true);
-		assert.equal(
-			result.details.results.some(
-				(entry) => entry.detached === true && entry.exitCode === 0,
-			),
-			true,
-		);
+		assert.equal(result.details.results.some((entry) => entry.detached === true && entry.exitCode === 0), true);
 	});
 
 	it("stops a sequential chain when a child detaches for intercom coordination", async () => {
 		mockPi.onCall({
 			steps: [
-				{
-					jsonl: [
-						events.toolStart("contact_supervisor", {
-							reason: "need_decision",
-							message: "Need a decision",
-						}),
-					],
-				},
+				{ jsonl: [events.toolStart("contact_supervisor", { reason: "need_decision", message: "Need a decision" })] },
 				{ delay: 1000, jsonl: [events.assistantMessage("after reply")] },
 			],
 		});
@@ -1768,30 +949,18 @@ describe("chain execution — parallel steps", {
 				agents,
 				{
 					intercomEvents,
-					onUpdate(update: {
-						details?: { progress?: Array<{ currentTool?: string }> };
-					}) {
+					onUpdate(update: { details?: { progress?: Array<{ currentTool?: string }> } }) {
 						if (detachEmitted) return;
-						if (
-							!update.details?.progress?.some(
-								(entry) => entry.currentTool === "contact_supervisor",
-							)
-						)
-							return;
+						if (!update.details?.progress?.some((entry) => entry.currentTool === "contact_supervisor")) return;
 						detachEmitted = true;
-						intercomEvents.emit(INTERCOM_DETACH_REQUEST_EVENT, {
-							requestId: "chain-sequential-detach",
-						});
+						intercomEvents.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "chain-sequential-detach" });
 					},
 				},
 			),
 		);
 
 		assert.equal(result.isError, undefined);
-		assert.match(
-			result.content[0]?.text ?? "",
-			/Chain detached for intercom coordination/,
-		);
+		assert.match(result.content[0]?.text ?? "", /Chain detached for intercom coordination/);
 		assert.doesNotMatch(result.content[0]?.text ?? "", /resume/);
 		assert.equal(detachEmitted, true);
 		assert.equal(mockPi.callCount(), 1);
@@ -1835,25 +1004,14 @@ describe("chain execution — parallel steps", {
 			),
 		);
 
-		assert.ok(
-			result.isError,
-			"chain should reject conflicting task cwd under worktree",
-		);
-		assert.match(
-			result.content[0]?.text ?? "",
-			/worktree isolation uses the shared cwd/i,
-		);
+		assert.ok(result.isError, "chain should reject conflicting task cwd under worktree");
+		assert.match(result.content[0]?.text ?? "", /worktree isolation uses the shared cwd/i);
 		assert.match(result.content[0]?.text ?? "", /task 2 \(b\) sets cwd/i);
 	});
 
 	it("sequential → parallel → sequential (mixed chain)", async () => {
 		mockPi.onCall({ output: "Step complete" });
-		const agents = [
-			makeAgent("scout"),
-			makeAgent("rev-a"),
-			makeAgent("rev-b"),
-			makeAgent("writer"),
-		];
+		const agents = [makeAgent("scout"), makeAgent("rev-a"), makeAgent("rev-b"), makeAgent("writer")];
 
 		const result = await executeChain(
 			makeChainParams(

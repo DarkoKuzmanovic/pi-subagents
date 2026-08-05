@@ -27,7 +27,6 @@ interface WorktreeDiff {
 	insertions: number;
 	deletions: number;
 	patchPath: string;
-	changedFiles: string[];
 }
 
 interface WorktreeTaskCwdConflict {
@@ -44,8 +43,6 @@ interface WorktreeSetupHookConfig {
 interface CreateWorktreesOptions {
 	agents?: string[];
 	setupHook?: WorktreeSetupHookConfig;
-	/** Acceptance-gate preflight only; see `resolveRepoState`. */
-	strictDirtyCheck?: boolean;
 }
 
 interface ResolvedWorktreeSetupHook {
@@ -102,71 +99,17 @@ function runGitChecked(cwd: string, args: string[]): string {
 	return result.stdout;
 }
 
-export interface RepoSnapshot {
-	status: string;
-	head: string;
-}
-
-/** Capture the real repository state that a report-only gate promises not to change. */
-export function captureRepoSnapshot(repoRoot: string): RepoSnapshot {
-	return {
-		status: runGitChecked(repoRoot, ["status", "--porcelain", "--untracked-files=all"]),
-		head: runGitChecked(repoRoot, ["rev-parse", "HEAD"]),
-	};
-}
-
-export function formatRepoSnapshotDiff(before: RepoSnapshot, after: RepoSnapshot): string {
-	const sections: string[] = [];
-	if (before.status !== after.status) {
-		sections.push(
-			"git status --porcelain --untracked-files=all:\n" +
-				`--- before ---\n${before.status || "(empty)\n"}` +
-				`+++ after +++\n${after.status || "(empty)\n"}`,
-		);
-	}
-	if (before.head !== after.head) {
-		sections.push(`git rev-parse HEAD:\n--- before ---\n${before.head.trim()}\n+++ after +++\n${after.head.trim()}`);
-	}
-	return sections.join("\n");
-}
-
-function resolveRepoState(cwd: string, strictDirtyCheck = false): RepoState {
+function resolveRepoState(cwd: string): RepoState {
 	const cwdRelative = resolveRepoCwdRelative(cwd);
 	const toplevel = runGitChecked(cwd, ["rev-parse", "--show-toplevel"]).trim();
 
-	// Acceptance gates need cleanliness that does not depend on the user's or repo's git config:
-	// `status.showUntrackedFiles` can hide real untracked files and submodule ignore settings can
-	// hide dirty submodules, so both are forced on the command line for that check. Ordinary
-	// worktree callers keep plain `git status --porcelain` and stay bound by those settings, which
-	// are legitimate configuration outside the gate's no-trace requirement.
-	const statusArgs = ["status", "--porcelain"];
-	if (strictDirtyCheck) {
-		statusArgs.push("--untracked-files=all", "--ignore-submodules=none");
-	}
-	const status = runGitChecked(toplevel, statusArgs);
+	const status = runGitChecked(toplevel, ["status", "--porcelain"]);
 	if (status.trim().length > 0) {
 		throw new Error("worktree isolation requires a clean git working tree. Commit or stash changes first.");
 	}
 
 	const baseCommit = runGitChecked(toplevel, ["rev-parse", "HEAD"]).trim();
 	return { toplevel, cwdRelative, baseCommit };
-}
-
-/**
- * Report why `cwd` cannot host an isolated worktree run, or `undefined` when it can.
- * Lets callers validate worktree preconditions before any child launches.
- * `strictDirtyCheck` is for acceptance-gate preflight only; see `resolveRepoState`.
- */
-export function findWorktreeRepoBlocker(
-	cwd: string,
-	options?: { strictDirtyCheck?: boolean },
-): string | undefined {
-	try {
-		resolveRepoState(cwd, options?.strictDirtyCheck === true);
-		return undefined;
-	} catch (error) {
-		return error instanceof Error ? error.message : String(error);
-	}
 }
 
 function normalizeComparableCwd(cwd: string): string {
@@ -472,7 +415,6 @@ function emptyDiff(index: number, agent: string, branch: string, patchPath: stri
 		insertions: 0,
 		deletions: 0,
 		patchPath,
-		changedFiles: [],
 	};
 }
 
@@ -507,7 +449,6 @@ function captureWorktreeDiff(
 	const diffStat = runGitChecked(worktree.path, ["diff", "--cached", "--stat", setup.baseCommit]).trim();
 	const patch = runGitChecked(worktree.path, ["diff", "--cached", setup.baseCommit]);
 	const numstat = runGitChecked(worktree.path, ["diff", "--cached", "--numstat", setup.baseCommit]);
-	const changedFiles = runGitChecked(worktree.path, ["diff", "--cached", "--name-only", "-z", setup.baseCommit]).split("\0").filter(Boolean);
 	fs.writeFileSync(patchPath, patch, "utf-8");
 
 	if (!patch.trim()) {
@@ -524,7 +465,6 @@ function captureWorktreeDiff(
 		insertions: parsed.insertions,
 		deletions: parsed.deletions,
 		patchPath,
-		changedFiles,
 	};
 }
 
@@ -550,7 +490,7 @@ function hasWorktreeChanges(diff: WorktreeDiff): boolean {
 }
 
 export function createWorktrees(cwd: string, runId: string, count: number, options?: CreateWorktreesOptions): WorktreeSetup {
-	const repo = resolveRepoState(cwd, options?.strictDirtyCheck === true);
+	const repo = resolveRepoState(cwd);
 	const setupHook = resolveWorktreeSetupHook(repo.toplevel, options?.setupHook);
 	const worktrees: WorktreeInfo[] = [];
 

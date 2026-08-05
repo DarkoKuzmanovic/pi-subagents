@@ -5,13 +5,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import {
-	captureRepoSnapshot,
 	cleanupWorktrees,
 	createWorktrees,
 	diffWorktrees,
-	findWorktreeRepoBlocker,
 	findWorktreeTaskCwdConflict,
-	formatRepoSnapshotDiff,
 	formatWorktreeDiffSummary,
 	resolveExpectedWorktreeAgentCwd,
 	sweepOrphanedWorktrees,
@@ -122,88 +119,6 @@ describe("worktree", () => {
 				() => createWorktrees(repoDir, "dirty", 1),
 				/worktree isolation requires a clean git working tree/i,
 			);
-		} finally {
-			cleanupRepo(repoDir);
-		}
-	});
-
-	it("detects untracked files hidden by git config when the strict dirty check is requested", () => {
-		const repoDir = createRepo("pi-worktree-hidden-untracked-");
-		try {
-			// A repo-local config that hides untracked files must not make a dirty tree look clean.
-			git(repoDir, ["config", "status.showUntrackedFiles", "no"]);
-			fs.writeFileSync(path.join(repoDir, "scratch.txt"), "untracked\n", "utf-8");
-			assert.equal(
-				git(repoDir, ["status", "--porcelain"]),
-				"",
-				"precondition: the repo's own config hides the untracked file",
-			);
-
-			assert.match(
-				findWorktreeRepoBlocker(repoDir, { strictDirtyCheck: true }) ?? "",
-				/worktree isolation requires a clean git working tree/i,
-			);
-			assert.throws(
-				() => createWorktrees(repoDir, "hidden-untracked", 1, { strictDirtyCheck: true }),
-				/worktree isolation requires a clean git working tree/i,
-			);
-			// The strict check belongs to gate preflight only; ordinary callers keep plain status.
-			assert.equal(findWorktreeRepoBlocker(repoDir), undefined);
-		} finally {
-			cleanupRepo(repoDir);
-		}
-	});
-
-	it("captures the real repository status and HEAD for invariant checks", () => {
-		const repoDir = createRepo("pi-worktree-snapshot-");
-		try {
-			const before = captureRepoSnapshot(repoDir);
-			fs.writeFileSync(path.join(repoDir, "leaked.txt"), "leaked\n", "utf-8");
-			const after = captureRepoSnapshot(repoDir);
-
-			assert.notEqual(before.status, after.status);
-			assert.equal(before.head, after.head);
-			assert.match(formatRepoSnapshotDiff(before, after), /leaked\.txt/);
-		} finally {
-			cleanupRepo(repoDir);
-		}
-	});
-
-	it("keeps non-gate worktree calls bound to the repo's submodule ignore setting", () => {
-		const parentDir = createRepo("pi-worktree-submodule-parent-");
-		const subOriginDir = createRepo("pi-worktree-submodule-origin-");
-		let setup: WorktreeSetup | undefined;
-		try {
-			git(parentDir, ["-c", "protocol.file.allow=always", "submodule", "add", subOriginDir, "sub"]);
-			git(parentDir, ["commit", "-m", "add submodule"]);
-			git(parentDir, ["config", "submodule.sub.ignore", "dirty"]);
-			fs.writeFileSync(path.join(parentDir, "sub", "tracked.txt"), "dirty submodule\n", "utf-8");
-			assert.equal(
-				git(parentDir, ["status", "--porcelain"]),
-				"",
-				"precondition: submodule.<name>.ignore=dirty hides the dirty submodule",
-			);
-
-			assert.equal(findWorktreeRepoBlocker(parentDir), undefined);
-			setup = createWorktrees(parentDir, "submodule-ignore", 1);
-			assert.equal(setup.worktrees.length, 1);
-
-			// Gate preflight opts in and still sees what the repo config hides.
-			assert.match(
-				findWorktreeRepoBlocker(parentDir, { strictDirtyCheck: true }) ?? "",
-				/worktree isolation requires a clean git working tree/i,
-			);
-		} finally {
-			if (setup) cleanupWorktrees(setup);
-			cleanupRepo(parentDir);
-			cleanupRepo(subOriginDir);
-		}
-	});
-
-	it("findWorktreeRepoBlocker reports no blocker for a clean repository", () => {
-		const repoDir = createRepo("pi-worktree-clean-check-");
-		try {
-			assert.equal(findWorktreeRepoBlocker(repoDir), undefined);
 		} finally {
 			cleanupRepo(repoDir);
 		}

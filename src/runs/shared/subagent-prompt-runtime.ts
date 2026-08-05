@@ -6,7 +6,6 @@ import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV, validateSt
 import { createLiveControlOwnerListener, type LiveControlOwnerListener } from "./live-control-owner.ts";
 import { isSafeNestedId, resolveInheritedNestedRouteFromEnv } from "./nested-events.ts";
 import { SUBAGENT_CHILD_INDEX_ENV } from "./pi-args.ts";
-import registerGraderReadBoundary from "./grader-boundary.ts";
 
 const SUBAGENT_INHERIT_PROJECT_CONTEXT_ENV = "PI_SUBAGENT_INHERIT_PROJECT_CONTEXT";
 const SUBAGENT_INHERIT_SKILLS_ENV = "PI_SUBAGENT_INHERIT_SKILLS";
@@ -139,7 +138,6 @@ export function stripParentOnlySubagentMessages(messages: unknown[]): unknown[] 
 }
 
 export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
-	registerGraderReadBoundary(pi);
 	let liveControlListener: LiveControlOwnerListener | undefined;
 	let liveControlTimer: NodeJS.Timeout | undefined;
 
