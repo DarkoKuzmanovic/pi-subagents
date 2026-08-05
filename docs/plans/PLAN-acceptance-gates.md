@@ -24,8 +24,10 @@ grader agent**, and **re-runs the producing step with feedback** until it passes
 A gate reuses machinery already shipped, so this is largely orchestration, not new plumbing:
 
 1. **Grader = a structured-output child.** The grader is an ordinary subagent given the
-   producing step's output + the rubric, required to finish by calling `structured_output`
-   with a `GateVerdict` (v0.39.0 structured output — no new capture mechanism).
+   producing step's output + rubric and, by default, read-only access to the produced files
+   in the attempt **worktree** (never the real working tree). `evidence: "report-only"` is
+   the explicit opt-down for steps whose prose output is sufficient. It must finish by
+   calling `structured_output` with a `GateVerdict` (v0.39.0 structured output — no new capture mechanism).
 2. **Loop = the chain executor re-dispatching a step.** On a failing verdict, re-run the
    producing step with the grader's feedback injected into its task, reusing the step's context
    mode. Bounded by `maxIterations`.
@@ -50,7 +52,8 @@ Per-step `gate` on a `SequentialStep` (and, later, a parallel task):
       grader: "reviewer",            // optional; default builtin `grader` role
       maxIterations: 3,              // total producer attempts (>=1)
       threshold: 1.0,               // fraction of criteria that must pass (default 1.0 = all)
-      onExhausted: "fail",          // fail | accept-last | accept-best
+      onExhausted: "fail",          // fail | accept-last
+      evidence: "worktree",          // worktree (default) | report-only
     },
   },
   { agent: "reviewer", task: "Summarize the shipped change" },
@@ -60,11 +63,15 @@ Per-step `gate` on a `SequentialStep` (and, later, a parallel task):
 - `rubric`: a checklist (array of criteria) or a single prose contract string.
 - `grader`: agent name; defaults to a new read-only builtin `grader` role (fresh context,
   no edit tools) whose prompt is a strict rubric-scoring contract.
-- `maxIterations`: total producer attempts (not retries-on-top); `1` disables looping (grade-once).
-- `threshold`: pass when `passedCriteria / totalCriteria >= threshold`. Checklist gate =
-  threshold `1.0`; score gate = a lower threshold.
+- `maxIterations`: total producer attempts (not retries-on-top); `1` disables looping (grade-once);
+  default is `2`.
+- `threshold`: pass when `passedCriteria / totalCriteria >= threshold` (default `1.0`). Checklist
+  gate = threshold `1.0`; score gate = a lower threshold.
 - `onExhausted`: `fail` aborts the chain (default); `accept-last` continues with the final
-  attempt; `accept-best` continues with the highest-scoring attempt.
+  attempt. The highest-scoring-attempt exhaustion mode was deliberately dropped because
+  attempts share one cumulative worktree, so an earlier attempt is not a separately applicable candidate.
+- `evidence`: `worktree` gives the grader read-only access to the changed files in the attempt
+  worktree (default); `report-only` explicitly omits file evidence and supplies only the producer's output.
 
 ## Grader contract (`GateVerdict`)
 
@@ -79,6 +86,8 @@ Fixed schema the grader must satisfy (validated exactly like any `outputSchema`)
 }
 ```
 
+When `evidence` is `worktree`, the grader reads the listed produced files in the attempt worktree before scoring; it never reads the real working tree, whose state may be stale. `report-only` is the explicit opt-down that omits file evidence.
+
 On a failing verdict the next producer attempt gets an injected preface:
 `"A prior attempt was rejected by the acceptance gate. Unmet criteria: <list>. Reviewer
 feedback: <feedback>. Address these specifically."` — mirroring the existing `{previous}`/read
@@ -91,7 +100,7 @@ attempt = 1
 loop:
   run producing step (attempt 1: normal task; attempt >1: task + injected feedback)
   if budget exhausted -> apply onExhausted, stop
-  run grader child (step output + rubric) -> GateVerdict (structured)
+  run grader child (step output + rubric + attempt-worktree files by default) -> GateVerdict (structured)
   if verdict.pass (score >= threshold) -> publish step output under `as`, continue chain
   if attempt == maxIterations -> apply onExhausted, stop
   attempt += 1
@@ -99,8 +108,7 @@ loop:
 
 - The **graded** step output is what publishes under `as` / feeds `{previous}` — a rejected
   attempt never leaks downstream (same success-gating as `isStorableStepResult`).
-- `accept-best` requires retaining each attempt's output + score; `accept-last` retains only
-  the final; `fail` aborts with a summary of the last verdict.
+- `accept-last` retains only the final attempt; `fail` aborts with a summary of the last verdict.
 
 ## Phases
 
@@ -141,8 +149,8 @@ loop:
 - **Token blow-up** is the headline risk; mitigated by `maxIterations`, the budget ceiling, and
   loud per-attempt cost logging. Never loop unbounded.
 - **Grader flakiness / grade drift**: a lenient grader passes bad output; a strict one never
-  converges. Mitigate with a crisp `grader` contract prompt, `threshold`, and `onExhausted:
-  accept-best` as an escape hatch.
+  converges. Mitigate with a crisp `grader` contract prompt, `threshold`, and the bounded
+  `onExhausted: "accept-last"` behavior.
 - **Async index bookkeeping**: gate re-runs reuse one flat slot (unlike fanout's runtime
   splicing), so the async lift is lower-risk than v0.40.0 — attempts overwrite the same status
   step with an incrementing `attempt` field.

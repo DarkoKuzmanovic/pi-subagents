@@ -73,14 +73,14 @@ Plan work
 		assert.equal(planner?.defaultContext, "lineage");
 	});
 
-	it("loads packaged planner, worker, and worker-heavy with fresh defaultContext and oracle with fork", () => {
+	it("loads packaged planner, worker, grader, and worker-heavy with fresh defaultContext and oracle with fork", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-default-context-"));
 		tempDirs.push(dir);
 		const agents = discoverAgentsAll(dir).builtin;
 
 		const oracle = agents.find((candidate) => candidate.name === "oracle" && candidate.source === "builtin");
 		assert.equal(oracle?.defaultContext, "fork", "oracle should default to fork context");
-		for (const name of ["worker", "worker-heavy"]) {
+		for (const name of ["worker", "grader", "worker-heavy"]) {
 			const agent = agents.find((candidate) => candidate.name === name && candidate.source === "builtin");
 			assert.equal(agent?.defaultContext, "fresh", `${name} should default to fresh context`);
 		}
@@ -389,6 +389,12 @@ Do work
 			const testWriter = agents.find((candidate) => candidate.name === "test-writer");
 			assert.ok(testWriter, "test-writer builtin should be discovered");
 			assert.deepEqual(testWriter?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);
+			const grader = agents.find((candidate) => candidate.name === "grader");
+			assert.ok(grader, "grader builtin should be discovered");
+			assert.deepEqual(grader?.tools, ["read", "grep", "find", "ls"]);
+			assert.equal(grader?.defaultContext, "fresh");
+			assert.equal(grader?.inheritSkills, false);
+			assert.equal(grader?.inheritProjectContext, false);
 		} finally {
 			if (previousHome === undefined) delete process.env.HOME;
 			else process.env.HOME = previousHome;

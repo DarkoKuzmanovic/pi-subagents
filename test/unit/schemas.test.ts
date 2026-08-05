@@ -430,6 +430,8 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ chain: [{ agent: "reviewer", skill: false }] },
 			{ chain: [{ parallel: [{ agent: "reviewer", reads: false, skill: false }] }] },
 			{ chain: [{ parallel: [{ agent: "reviewer", output: "review.md", reads: ["input.md"], skill: "review" }] }] },
+			{ chain: [{ agent: "worker", gate: { rubric: ["Adds the feature", "Tests the feature"], maxIterations: 2, threshold: 1, onExhausted: "fail", evidence: "worktree" } }] },
+			{ chain: [{ agent: "worker", gate: { rubric: "The producer report is complete" } }] },
 			{ config: { name: "reviewer", description: "Review things" } },
 			{ config: JSON.stringify({ name: "reviewer", description: "Review things" }) },
 		];
@@ -441,6 +443,14 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ chain: [{ parallel: [{ agent: "reviewer", output: 123 }] }] },
 			{ chain: [{ parallel: [{ agent: "reviewer", reads: "input.md" }] }] },
 			{ chain: [{ parallel: [{ agent: "reviewer", skill: 123 }] }] },
+			{ chain: [{ agent: "worker", gate: { rubric: [] } }] },
+			{ chain: [{ agent: "worker", gate: { rubric: [""] } }] },
+			{ chain: [{ agent: "worker", gate: { rubric: "criterion", maxIterations: 0 } }] },
+			{ chain: [{ agent: "worker", gate: { rubric: "criterion", threshold: 1.1 } }] },
+			{ chain: [{ agent: "worker", gate: { rubric: "criterion", threshold: -0.1 } }] },
+			{ chain: [{ agent: "worker", gate: { rubric: "criterion", onExhausted: "stop" } }] },
+			{ chain: [{ agent: "worker", gate: { rubric: "criterion", evidence: "tree" } }] },
+			{ chain: [{ agent: "worker", gate: { rubric: "criterion", extra: true } }] },
 			{ config: [] },
 			{ config: null },
 		];

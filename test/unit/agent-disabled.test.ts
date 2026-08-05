@@ -212,8 +212,8 @@ describe("builtin agent disabling", () => {
 	});
 });
 
-describe("M1 six-role builtin roster", () => {
-	const DURABLE_SIX = ["janitor", "oracle", "planner", "recon", "reviewer", "worker"];
+describe("builtin role roster", () => {
+	const DURABLE_ROLES = ["grader", "janitor", "oracle", "planner", "recon", "reviewer", "worker"];
 	const DISABLED_COMPAT = ["deslopper", "oracle-fresh", "researcher", "scout", "synthesizer", "test-writer", "worker-heavy", "worker-light"];
 
 	beforeEach(() => {
@@ -232,10 +232,10 @@ describe("M1 six-role builtin roster", () => {
 		fs.rmSync(tempProject, { recursive: true, force: true });
 	});
 
-	it("exposes exactly the six durable roles in discoverAgents default (no settings)", () => {
+	it("exposes exactly the durable roles in discoverAgents default (no settings)", () => {
 		const { agents } = discoverAgents(tempProject, "both");
 		const builtinNames = agents.filter((a) => a.source === "builtin").map((a) => a.name).sort();
-		assert.deepEqual(builtinNames, DURABLE_SIX);
+		assert.deepEqual(builtinNames, DURABLE_ROLES);
 	});
 
 	it("hides all eight compat agents from discoverAgents by default", () => {
@@ -252,13 +252,13 @@ describe("M1 six-role builtin roster", () => {
 		assert.deepEqual(disabledNames, DISABLED_COMPAT.slice().sort());
 	});
 
-	it("reports only the six durable roles as executable in list output", () => {
+	it("reports only the durable roles as executable in list output", () => {
 		const result = handleList(
 			{},
 			{ cwd: tempProject, modelRegistry: { getAvailable: () => [] } },
 		);
 		const text = result.content[0]?.text ?? "";
-		for (const name of DURABLE_SIX) {
+		for (const name of DURABLE_ROLES) {
 			assert.match(text, new RegExp(`- ${name} \\(builtin`), `${name} should appear in list`);
 		}
 		for (const name of DISABLED_COMPAT) {
