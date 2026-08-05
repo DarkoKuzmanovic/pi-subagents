@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.45.1] - 2026-08-05
+
 ### Fixed
 
 - **Fresh-context children now actually get `--no-context-files`, matching what the README always claimed.** `skipContextFiles` was only ever set from `inlineReads === true` in chain paths, and nothing in the codebase set `inlineReads`, so fresh workers silently inherited the parent's `AGENTS.md`/`CLAUDE.md` (verified empirically: fresh children quoted global context verbatim). `shouldSkipContextFiles()` (`src/shared/fork-context.ts`) now derives the flag from the resolved `fresh`/`fork`/`lineage` context and is wired through single, parallel, and chain (sequential + parallel-step) dispatch paths; forked and lineage children keep inheriting context normally since they continue a real parent session. Async/background dispatch is unaffected by this fix (tracked separately). Regression coverage added at the `shouldSkipContextFiles` boundary, the `buildPiArgs` CLI-arg boundary, and via updated integration fixtures.
