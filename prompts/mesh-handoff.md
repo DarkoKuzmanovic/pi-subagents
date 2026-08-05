@@ -13,7 +13,7 @@ Use `context: "fresh"` unless I explicitly ask for forked context. First read or
 Use the `subagent` tool in chain mode:
 
 1. First step: a parallel group.
-   - `researcher`, when the request includes external references, APIs, libraries, docs, current best practices, or prompt-guidance research.
+   - `recon` with a web-research prompt, when the request includes external references, APIs, libraries, docs, current best practices, or prompt-guidance research.
    - `recon` for local codebase context.
    - Add a second `recon` only when the scope is large enough to benefit from a separate implementation-strategy pass.
 
@@ -29,7 +29,7 @@ Do not write these artifacts into the repository unless I explicitly ask for per
 
 Role guidance:
 
-External reference researcher:
+External-reference recon:
 - Study linked projects, docs, issues, examples, source code, or prompt guidance.
 - Identify the behavior, API, implementation files, constraints, and transferable ideas.
 - Conduct web research if needed. Use `web_search` if it is available; otherwise use whatever equivalent research capability is available.

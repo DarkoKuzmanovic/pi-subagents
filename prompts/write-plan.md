@@ -4,15 +4,15 @@ description: Author an implementation plan an executor can pick up
 
 Author an implementation plan from a spec, approved design, or clear intent. The plan must be concrete enough that a worker subagent (or a future me) can execute it without asking new design questions.
 
-Use the `writing-plans` skill. Do not start implementation from this command unless I explicitly ask for it.
+Do not start implementation from this command unless I explicitly ask for it.
 
 Workflow:
 
 1. Read the source material directly. If the invocation names a spec file, design doc, issue link, PR, or local path, read or fetch it before drafting. Do not plan against a paraphrase.
 
 2. Decide whether you need a context pass before planning. Launch only what is justified:
-   - `scout` with `context: "fresh"` when local file structure, existing patterns, or tests need to be mapped before the plan can name concrete files and contracts.
-   - `researcher` with `context: "fresh"` when external API shape or library behavior must be confirmed before sequencing.
+   - `recon` with `context: "fresh"` when local file structure, existing patterns, or tests need to be mapped before the plan can name concrete files and contracts.
+   - `recon` with `context: "fresh"` and a web-research prompt when external API shape or library behavior must be confirmed before sequencing.
    - Skip both when the spec already names everything.
 
 3. Draft the plan. Use this structure unless the request asks for something different:
@@ -45,7 +45,7 @@ Reply with [1], [2], [3], or further instructions:
 [3] Pause — I want to review before any handoff.
 ```
 
-Hard gate: do not dispatch `worker`, `worker-light`, `worker-heavy`, `test-writer`, or any implementation chain until I pick `[1]` or explicitly approve handoff.
+Hard gate: do not dispatch `worker`, `test-writer`, or any implementation chain until I pick `[1]` or explicitly approve handoff.
 
 Plan target, scope, or spec reference:
 
