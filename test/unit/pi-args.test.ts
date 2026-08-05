@@ -89,6 +89,44 @@ afterEach(() => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+describe("buildPiArgs context-file wiring", () => {
+	// Regression: roadmap debt item "README–code drift: --no-context-files for fresh children
+	// is documented but unwired". Locks in the CLI-arg side of the fix at the boundary the
+	// README documents directly.
+	it("pushes --no-context-files when skipContextFiles is set", () => {
+		const { args } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			skipContextFiles: true,
+		});
+		assert.ok(args.includes("--no-context-files"));
+	});
+
+	it("omits --no-context-files when skipContextFiles is falsy or unset", () => {
+		const { args: withoutFlag } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+		});
+		assert.ok(!withoutFlag.includes("--no-context-files"));
+
+		const { args: explicitFalse } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			skipContextFiles: false,
+		});
+		assert.ok(!explicitFalse.includes("--no-context-files"));
+	});
+});
+
 describe("buildPiArgs session wiring", () => {
 	it("uses --session when sessionFile is provided", () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-args-session-"));

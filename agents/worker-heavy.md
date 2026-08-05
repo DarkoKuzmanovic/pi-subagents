@@ -6,7 +6,7 @@ description: High-complexity implementation agent for difficult, broad, or high-
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
-tools: read, grep, find, ls, bash, edit, write, context_mode_ctx_execute, context_mode_ctx_execute_file, context_mode_ctx_batch_execute, contact_supervisor
+tools: read, grep, find, ls, bash, edit, write, contact_supervisor
 thinking: high
 defaultContext: fresh
 defaultReads: context.md, plan.md

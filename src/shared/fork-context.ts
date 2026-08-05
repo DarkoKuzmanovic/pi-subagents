@@ -27,6 +27,16 @@ export function resolveSubagentContext(value: unknown): SubagentExecutionContext
 	return value === "fork" || value === "lineage" ? value : "fresh";
 }
 
+/**
+ * True when a child should spawn with `--no-context-files` (AGENTS.md/CLAUDE.md
+ * excluded from its system prompt). Only genuinely fresh-context children get this:
+ * forked and lineage children continue a real parent session and are expected to
+ * inherit context the same way the parent did.
+ */
+export function shouldSkipContextFiles(value: unknown): boolean {
+	return resolveSubagentContext(value) === "fresh";
+}
+
 export function createSubagentContextResolver(
 	sessionManager: SubagentSessionManager,
 	requestedContext: unknown,

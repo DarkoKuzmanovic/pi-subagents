@@ -46,6 +46,20 @@ that surfaced it, so a future reader does not mistake it for an oversight.
   shim's `wrapTextWithAnsi` chunks by width instead of word-wrapping, and `Text` accepts but ignores the
   padding arguments.
 
+- ~~**README–code drift: `--no-context-files` for fresh children is documented but unwired**~~ —
+  **resolved 2026-08-05.** `skipContextFiles` was only ever set from `inlineReads === true` in chain paths,
+  which nothing set. Decision (user-selected): wire the flag rather than bless the drift in docs.
+  `shouldSkipContextFiles()` (`src/shared/fork-context.ts`) now derives the flag from resolved
+  `fresh`/`fork`/`lineage` context and is wired through single, parallel, and chain dispatch (both step
+  types); async/background dispatch does not go through this path and is unaffected — tracked separately
+  if it turns out to need the same treatment. Regression coverage: `shouldSkipContextFiles` unit tests,
+  a `buildPiArgs` CLI-arg test, and updated integration fixtures across chain/parallel/fork-context suites.
+- ~~**No-edits guard false-positives on read-only diagnostic dispatches**~~ — **resolved 2026-08-05.**
+  `EXPLICIT_NO_EDIT_PATTERNS` only recognized "do not edit"-style wording; phrasing like the observed
+  "edit nothing, quote a sentence from your context" matched nothing and fell through to the
+  implementation-mutation default. `src/runs/shared/completion-guard.ts` now also recognizes "edit
+  nothing", "make/making no edits", "without editing/making edits/making changes", and "no edits
+  needed/required/necessary". Regression test reproduces the exact repro phrasing plus the new variants.
 ## Deferred decisions
 
 Settled by explicit user decision, not oversight. Revisit only if usage argues otherwise.

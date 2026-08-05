@@ -11,8 +11,8 @@ Workflow:
 1. Restate what you understood from the request in one or two sentences. If anything is ambiguous, do not guess.
 
 2. Decide whether you need outside context before discussing. Launch only what is justified:
-   - `scout` with `context: "fresh"` when local files, existing patterns, or constraints would shape the choice.
-   - `researcher` with `context: "fresh"` when external docs, ecosystem norms, or primary sources would meaningfully change the recommendation.
+   - `recon` with `context: "fresh"` when local files, existing patterns, or constraints would shape the choice.
+   - `recon` with `context: "fresh"` and a web-research prompt when external docs, ecosystem norms, or primary sources would meaningfully change the recommendation.
    - Skip both when the question is small enough to discuss directly.
 
    Do not run more than two parallel agents for brainstorming. This is design conversation, not a context-gathering chain.

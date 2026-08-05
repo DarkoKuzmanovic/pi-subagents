@@ -5,7 +5,7 @@ description: Implementation agent for normal tasks and approved oracle handoffs
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
-tools: read, grep, find, ls, bash, edit, write, context_mode_ctx_execute, context_mode_ctx_execute_file, context_mode_ctx_batch_execute, contact_supervisor
+tools: read, grep, find, ls, bash, edit, write, contact_supervisor
 defaultContext: fresh
 defaultReads: context.md, plan.md
 defaultProgress: true

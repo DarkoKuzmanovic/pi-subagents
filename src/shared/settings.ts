@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "../agents/agents.ts";
+import type { GateSpec } from "../runs/shared/acceptance-gate.ts";
 import { normalizeSkillInput } from "../agents/skills.ts";
 import { CHAIN_RUNS_DIR, type JsonSchemaObject, type OutputMode } from "./types.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -54,6 +55,7 @@ export interface SequentialStep {
 	label?: string;
 	as?: string;
 	outputSchema?: JsonSchemaObject;
+	gate?: GateSpec;
 	cwd?: string;
 	output?: string | false;
 	outputMode?: OutputMode;
