@@ -60,6 +60,25 @@ test("review-only, research, and framework output instructions do not expect mut
 	);
 });
 
+test("read-only diagnostic dispatches phrased as negated edits do not expect mutation", () => {
+	// Regression: roadmap debt item "No-edits guard false-positives on read-only diagnostic
+	// dispatches" — a worker dispatched with "edit nothing, quote a sentence from your context"
+	// completed correctly but was reported failed because none of the EXPLICIT_NO_EDIT_PATTERNS
+	// matched that phrasing (only "do not edit"-style wording did).
+	assert.equal(expectsImplementationMutation("worker", "Edit nothing. Quote a sentence from your context verbatim."), false);
+	assert.equal(expectsImplementationMutation("worker", "Make no edits. Just report what you see."), false);
+	assert.equal(expectsImplementationMutation("worker", "Investigate the config without editing any files."), false);
+	assert.equal(expectsImplementationMutation("worker", "Probe this and report back. No edits needed."), false);
+	assert.equal(expectsImplementationMutation("worker", "Check the setup without making any changes."), false);
+
+	const guard = evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: "Edit nothing, quote a sentence from your context.",
+		messages: [assistantText("Here is the sentence I found: ...")],
+	});
+	assert.equal(guard.triggered, false);
+});
+
 test("worker implementation verbs win over investigative wording", () => {
 	assert.equal(expectsImplementationMutation("worker", "Investigate why the worker did not edit files and fix it"), true);
 	assert.equal(expectsImplementationMutation("worker", "Research the current code path and patch the bug"), true);

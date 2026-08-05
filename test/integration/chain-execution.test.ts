@@ -150,7 +150,10 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 			.sort();
 		const callFile = callFiles[index];
 		assert.ok(callFile, `expected call ${index}`);
-		return JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+		// Fresh-context dispatches (the default here) now append --no-context-files after the
+		// task arg; strip it so task-text assertions via .at(-1) keep working unmodified.
+		return args.filter((arg) => arg !== "--no-context-files");
 	}
 
 	function writePackageSkill(packageRoot: string, skillName: string): void {
@@ -677,7 +680,10 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 			.sort();
 		const callFile = callFiles[index];
 		assert.ok(callFile, `expected call ${index}`);
-		return JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+		// Fresh-context dispatches (the default here) now append --no-context-files after the
+		// task arg; strip it so task-text assertions via .at(-1) keep working unmodified.
+		return args.filter((arg) => arg !== "--no-context-files");
 	}
 
 	it("runs parallel tasks within a chain step", async () => {

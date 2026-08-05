@@ -181,7 +181,9 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			.sort()
 			.at(-1);
 		assert.ok(callFile, "expected a recorded mock pi call");
-		return readRecordedArgs(callFile);
+		// Fresh-context dispatches (the default here) now append --no-context-files after the
+		// task arg; strip it so task-text assertions via .at(-1) keep working unmodified.
+		return readRecordedArgs(callFile).filter((arg) => arg !== "--no-context-files");
 	}
 
 	function readAllCallArgs(): string[][] {

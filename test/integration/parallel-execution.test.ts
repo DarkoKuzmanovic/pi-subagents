@@ -146,7 +146,10 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 	function readLastCallArgs(): string[] {
 		const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
 		assert.ok(callFile, "expected a recorded mock pi call");
-		return JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+		// Fresh-context dispatches (the default here) now append --no-context-files after the
+		// task arg; strip it so task-text assertions via .at(-1) keep working unmodified.
+		return args.filter((arg) => arg !== "--no-context-files");
 	}
 
 
