@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import {
@@ -10,6 +11,7 @@ import {
 	getAsyncConfigPath,
 	resolveTempScopeId,
 } from "../../src/shared/types.ts";
+import { createGateArtifactDir } from "../../src/shared/settings.ts";
 
 describe("resolveTempScopeId", () => {
 	it("prefers uid when available", () => {
@@ -68,5 +70,30 @@ describe("shared temp paths", () => {
 	it("writes async config files under the same scoped temp root", () => {
 		assert.equal(path.dirname(getAsyncConfigPath("abc123")), TEMP_ROOT_DIR);
 		assert.equal(path.basename(getAsyncConfigPath("abc123")), "async-cfg-abc123.json");
+	});
+
+	it("rejects gate artifact roots inside, above, or equal to the gated repository", () => {
+		fs.mkdirSync(CHAIN_RUNS_DIR, { recursive: true });
+		assert.throws(
+			() => createGateArtifactDir("inside-root", 0, CHAIN_RUNS_DIR),
+			/outside the gated repository/i,
+		);
+
+		const runId = `ancestor-root-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+		const gateDir = path.join(CHAIN_RUNS_DIR, `${runId}-gate-s0`);
+		const repoRoot = path.join(gateDir, "repo");
+		fs.mkdirSync(repoRoot, { recursive: true });
+		try {
+			assert.throws(
+				() => createGateArtifactDir(runId, 0, repoRoot),
+				/outside the gated repository/i,
+			);
+			assert.throws(
+				() => createGateArtifactDir(runId, 0, gateDir),
+				/outside the gated repository/i,
+			);
+		} finally {
+			fs.rmSync(gateDir, { recursive: true, force: true });
+		}
 	});
 });

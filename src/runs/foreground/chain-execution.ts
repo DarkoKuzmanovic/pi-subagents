@@ -96,13 +96,16 @@ import {
 } from "../shared/grader-boundary.ts";
 import { recordRun } from "../shared/run-history.ts";
 import {
+	captureRepoSnapshot,
 	cleanupWorktrees,
 	createWorktrees,
 	diffWorktrees,
 	findWorktreeRepoBlocker,
 	findWorktreeTaskCwdConflict,
+	formatRepoSnapshotDiff,
 	formatWorktreeDiffSummary,
 	formatWorktreeTaskCwdConflict,
+	type RepoSnapshot,
 	type WorktreeSetup,
 } from "../shared/worktree.ts";
 import {
@@ -314,6 +317,22 @@ function formatGateReport(input: {
 		"The attempt worktree was discarded. Apply the reported changes manually if accepted.",
 	);
 	return lines.join("\n");
+}
+
+function verifyGatedRepoUnchanged(repoRoot: string, before: RepoSnapshot, stepIndex: number): void {
+	let after: RepoSnapshot;
+	try {
+		after = captureRepoSnapshot(repoRoot);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`Acceptance gate report-only invariant violation at step ${stepIndex + 1}: unable to snapshot the real repository after cleanup: ${detail}`,
+		);
+	}
+	if (before.status === after.status && before.head === after.head) return;
+	throw new Error(
+		`Acceptance gate report-only invariant violation at step ${stepIndex + 1}: the real repository changed while the gated step ran.\n${formatRepoSnapshotDiff(before, after)}`,
+	);
 }
 
 /**
@@ -905,6 +924,7 @@ export async function executeChain(
 	let progressCreated = false;
 	const tokenBudget = createSessionTokenBudget(runId, params.budget);
 	const currentBudgetSummary = () => budgetSummary(tokenBudget);
+	const gateRepoSnapshots = new Map<number, RepoSnapshot>();
 
 	// Whole-chain gate preflight: every gated step's preconditions (known grader, clean repo)
 	// are validated before ANY step runs, so an ungated earlier step cannot execute ahead of a
@@ -934,14 +954,22 @@ export async function executeChain(
 		}
 		// Only the gate preflight uses the strict dirty check: a gate must leave no trace in the
 		// real tree, so config-hidden untracked files and dirty submodules have to surface here.
-		const repoBlocker = findWorktreeRepoBlocker(
-			resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd),
-			{ strictDirtyCheck: true },
-		);
+		const gateCwd = resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd);
+		const repoBlocker = findWorktreeRepoBlocker(gateCwd, { strictDirtyCheck: true });
 		if (repoBlocker) {
 			removeChainDir(chainDir);
 			return buildChainExecutionErrorResult(
 				`Acceptance gate step ${stepIndex + 1} refused before child dispatch: ${repoBlocker}`,
+				detailsInput,
+			);
+		}
+		try {
+			gateRepoSnapshots.set(stepIndex, captureRepoSnapshot(gateCwd));
+		} catch (error) {
+			removeChainDir(chainDir);
+			const detail = error instanceof Error ? error.message : String(error);
+			return buildChainExecutionErrorResult(
+				`Acceptance gate step ${stepIndex + 1} could not snapshot the real repository before dispatch: ${detail}`,
 				detailsInput,
 			);
 		}
@@ -1640,8 +1668,10 @@ export async function executeChain(
 			);
 
 			let gateSetup: WorktreeSetup | undefined;
+			const gateRepoSnapshot = gateSpec ? gateRepoSnapshots.get(stepIndex) : undefined;
 			const failGatedStep = (message: string) => {
 				if (gateSetup) cleanupWorktrees(gateSetup);
+				if (gateRepoSnapshot && gateSetup) verifyGatedRepoUnchanged(gateSetup.cwd, gateRepoSnapshot, stepIndex);
 				return buildChainExecutionErrorResult(message, {
 					results,
 					includeProgress,
@@ -1724,9 +1754,20 @@ export async function executeChain(
 			// `chainDir` is user-settable and may point inside the repo being gated, so a gated step's
 			// own artifacts (progress file, gate diffs) go to the extension's temp root instead. Ungated
 			// steps keep writing under `chainDir` exactly as before.
-			const stepArtifactDir = gateSpec
-				? createGateArtifactDir(runId, stepIndex)
-				: chainDir;
+			let stepArtifactDir = chainDir;
+			if (gateSpec) {
+				if (!gateSetup) throw new Error(`Acceptance gate step ${stepIndex + 1}: worktree setup is missing.`);
+				try {
+					stepArtifactDir = createGateArtifactDir(runId, stepIndex, gateSetup.cwd);
+				} catch (error) {
+					cleanupWorktrees(gateSetup);
+					if (gateRepoSnapshot) verifyGatedRepoUnchanged(gateSetup.cwd, gateRepoSnapshot, stepIndex);
+					throw error;
+				}
+			}
+			const gatedSessionFile = gateSpec
+				? path.join(stepArtifactDir, "sessions", `task-${globalTaskIndex}.jsonl`)
+				: undefined;
 
 			const isFirstProgress = behavior.progress && !progressCreated;
 			if (isFirstProgress) {
@@ -1800,10 +1841,14 @@ export async function executeChain(
 					runId,
 					runStartedAt,
 					index: globalTaskIndex,
-					sessionDir: sessionDirForIndex(globalTaskIndex),
-					sessionFile: sessionFileForIndex?.(globalTaskIndex),
+					sessionDir: gatedSessionFile ? undefined : sessionDirForIndex(globalTaskIndex),
+					sessionFile: gatedSessionFile ?? sessionFileForIndex?.(globalTaskIndex),
 					share: shareEnabled,
-					artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
+					artifactsDir: artifactConfig.enabled
+						? gateSpec
+							? stepArtifactDir
+							: artifactsDir
+						: undefined,
 					artifactConfig,
 					outputPath,
 					outputMode: behavior.outputMode,
@@ -2115,6 +2160,9 @@ export async function executeChain(
 				prev = stripStaleAgentBlocks(getSingleResultOutput(r));
 			} finally {
 				if (gateSetup) cleanupWorktrees(gateSetup);
+				if (gateRepoSnapshot && gateSetup) {
+					verifyGatedRepoUnchanged(gateSetup.cwd, gateRepoSnapshot, stepIndex);
+				}
 			}
 		}
 	}

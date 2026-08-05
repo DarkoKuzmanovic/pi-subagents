@@ -58,7 +58,7 @@ function realpathWithMissingSuffix(candidate: string): string {
 		try {
 			const stat = fs.lstatSync(current);
 			if (stat.isSymbolicLink()) {
-				return fs.realpathSync(current);
+				return path.resolve(fs.realpathSync(current), ...missingSuffix);
 			}
 			// `missingSuffix` is already root-to-leaf: the walk moves leafward-to-rootward and
 			// unshifts each basename, so reversing it here would invert nested missing segments.

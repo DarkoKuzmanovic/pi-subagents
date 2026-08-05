@@ -64,6 +64,28 @@ describe("grader read boundary", () => {
 		}
 	});
 
+	it("preserves missing suffix after resolving an internal symlink", {
+		skip:
+			process.platform === "win32"
+				? "Symlink behavior differs on Windows CI."
+				: undefined,
+	}, () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "grader-boundary-internal-link-"));
+		tempRoots.push(root);
+		const target = path.join(root, "target");
+		fs.mkdirSync(target);
+		fs.symlinkSync(target, path.join(root, "link"), "dir");
+
+		const result = checkGraderPath(root, root, "link/a/b/c.txt");
+		assert.equal(result.status, "allowed");
+		if (result.status === "allowed") {
+			assert.equal(
+				result.resolvedPath,
+				path.join(fs.realpathSync(target), "a", "b", "c.txt"),
+			);
+		}
+	});
+
 	it("rejects symlinks that escape the worktree", {
 		skip:
 			process.platform === "win32"

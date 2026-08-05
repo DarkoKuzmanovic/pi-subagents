@@ -891,6 +891,119 @@ describe("chain execution — sequential", {
 		);
 	});
 
+	it("routes gated producer sessions and artifacts away from configured repository paths", async () => {
+		initGitRepo(tempDir);
+		const runId = "gate-session-artifact-routing-fixture";
+		const requestedSessionDir = path.join(tempDir, "requested-sessions");
+		const requestedArtifactsDir = path.join(tempDir, "requested-artifacts");
+		const gateArtifactDir = path.join(CHAIN_RUNS_DIR, `${runId}-gate-s0`);
+		mockPi.onCall({ output: "producer output" });
+		mockPi.onCall({
+			taskIncludes: "Score the producer",
+			structured: {
+				pass: true,
+				score: 1,
+				criteria: [{ criterion: "The work is complete", met: true, note: "Verified." }],
+				feedback: "Complete.",
+			},
+		});
+
+		try {
+			const result = await executeChain!(
+				makeChainParams(
+					[
+						{
+							agent: "worker",
+							task: "Produce the file",
+							gate: { rubric: "The work is complete", grader: "grader" },
+						},
+					],
+					[makeAgent("worker"), makeAgent("grader")],
+					{
+						runId,
+						cwd: tempDir,
+						chainDir,
+						ctx: makeMinimalCtx(tempDir),
+						sessionDirForIndex: () => requestedSessionDir,
+						sessionFileForIndex: () => path.join(requestedSessionDir, "lineage.jsonl"),
+						artifactsDir: requestedArtifactsDir,
+						artifactConfig: {
+							enabled: true,
+							includeInput: true,
+							includeOutput: true,
+							includeJsonl: true,
+							includeMetadata: true,
+						},
+					},
+				),
+			);
+
+			assert.equal(result.isError, undefined, result.content[0]?.text ?? "");
+			assert.equal(fs.existsSync(requestedSessionDir), false);
+			assert.equal(fs.existsSync(requestedArtifactsDir), false);
+			assert.equal(gitStatus(tempDir), "");
+			const producerArgs = readCallArgs(0);
+			const sessionIndex = producerArgs.indexOf("--session");
+			assert.notEqual(sessionIndex, -1, "the gated producer should receive a safe session file");
+			const sessionFile = producerArgs[sessionIndex + 1] ?? "";
+			assert.equal(sessionFile.startsWith(`${tempDir}${path.sep}`), false);
+			assert.match(sessionFile, /gate-session-artifact-routing-fixture-gate-s0/);
+		} finally {
+			fs.rmSync(gateArtifactDir, { recursive: true, force: true });
+		}
+	});
+
+	it("throws when the report-only invariant detects a real-tree leak", async () => {
+		initGitRepo(tempDir);
+		const runId = "gate-invariant-leak-fixture";
+		const leakPath = path.join(tempDir, "tracked.txt");
+		const worktreeDir = path.join(os.tmpdir(), `pi-worktree-${runId}-gate-s0-0`);
+		let leaked = false;
+		let updateCount = 0;
+		mockPi.onCall({ output: "producer output" });
+		mockPi.onCall({
+			taskIncludes: "Score the producer",
+			structured: {
+				pass: true,
+				score: 1,
+				criteria: [{ criterion: "The work is complete", met: true, note: "Verified." }],
+				feedback: "Complete.",
+			},
+		});
+
+		await assert.rejects(
+			() =>
+				executeChain!(
+					makeChainParams(
+						[
+							{
+								agent: "worker",
+								task: "Produce the file",
+								gate: { rubric: "The work is complete", grader: "grader" },
+							},
+						],
+						[makeAgent("worker"), makeAgent("grader")],
+						{
+							runId,
+							cwd: tempDir,
+							chainDir,
+							ctx: makeMinimalCtx(tempDir),
+							onUpdate: () => {
+								updateCount++;
+								if (updateCount === 1 || leaked) return;
+								leaked = true;
+								fs.writeFileSync(leakPath, "intentional test leak\n", "utf8");
+							},
+						},
+					),
+				),
+			/report-only invariant violation[\s\S]*tracked.txt/i,
+		);
+		assert.equal(leaked, true);
+		assert.equal(fs.existsSync(leakPath), true);
+		assert.equal(fs.existsSync(worktreeDir), false, "invariant check runs after worktree cleanup");
+	});
+
 	it("never loads always-on extensions into a grader child", async () => {
 		initGitRepo(tempDir);
 		const runId = "gate-always-extension-fixture";

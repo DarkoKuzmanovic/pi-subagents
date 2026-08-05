@@ -2859,6 +2859,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const nestedRoute = inheritedNestedRoute ?? createNestedRoute(runId);
 		const shareEnabled = effectiveParams.share === true;
 		const hasChain = (effectiveParams.chain?.length ?? 0) > 0;
+		const hasGatedChain = hasChain && findGatedStepIndex(effectiveParams.chain as ChainStep[]) !== -1;
 		const hasTasks = (effectiveParams.tasks?.length ?? 0) > 0;
 		const hasSingle = !hasChain && !hasTasks && Boolean(effectiveParams.agent);
 		const allowClarifyTaskPrompt = hasChain
@@ -2903,14 +2904,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				: deps.getSubagentSessionRoot(parentSessionFile);
 			sessionRoot = path.join(baseSessionRoot, runId);
 		}
-		try {
-			fs.mkdirSync(sessionRoot, { recursive: true });
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			return toExecutionErrorResult(
-				effectiveParams,
-				new Error(`Failed to create session directory '${sessionRoot}': ${message}`),
-			);
+		if (!hasGatedChain) {
+			try {
+				fs.mkdirSync(sessionRoot, { recursive: true });
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return toExecutionErrorResult(
+					effectiveParams,
+					new Error(`Failed to create session directory '${sessionRoot}': ${message}`),
+				);
+			}
 		}
 		const sessionDirForIndex = (idx?: number) =>
 			path.join(sessionRoot, `run-${idx ?? 0}`);

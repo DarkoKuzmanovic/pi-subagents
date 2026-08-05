@@ -102,6 +102,34 @@ function runGitChecked(cwd: string, args: string[]): string {
 	return result.stdout;
 }
 
+export interface RepoSnapshot {
+	status: string;
+	head: string;
+}
+
+/** Capture the real repository state that a report-only gate promises not to change. */
+export function captureRepoSnapshot(repoRoot: string): RepoSnapshot {
+	return {
+		status: runGitChecked(repoRoot, ["status", "--porcelain", "--untracked-files=all"]),
+		head: runGitChecked(repoRoot, ["rev-parse", "HEAD"]),
+	};
+}
+
+export function formatRepoSnapshotDiff(before: RepoSnapshot, after: RepoSnapshot): string {
+	const sections: string[] = [];
+	if (before.status !== after.status) {
+		sections.push(
+			"git status --porcelain --untracked-files=all:\n" +
+				`--- before ---\n${before.status || "(empty)\n"}` +
+				`+++ after +++\n${after.status || "(empty)\n"}`,
+		);
+	}
+	if (before.head !== after.head) {
+		sections.push(`git rev-parse HEAD:\n--- before ---\n${before.head.trim()}\n+++ after +++\n${after.head.trim()}`);
+	}
+	return sections.join("\n");
+}
+
 function resolveRepoState(cwd: string, strictDirtyCheck = false): RepoState {
 	const cwdRelative = resolveRepoCwdRelative(cwd);
 	const toplevel = runGitChecked(cwd, ["rev-parse", "--show-toplevel"]).trim();

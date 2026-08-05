@@ -160,15 +160,48 @@ export function createChainDir(runId: string, baseDir?: string): string {
 	return chainDir;
 }
 
+/** Resolve a path through existing symlinks while preserving missing suffix segments. */
+function realpathWithMissingSuffix(candidate: string): string {
+	let current = path.resolve(candidate);
+	const missingSuffix: string[] = [];
+
+	while (true) {
+		try {
+			return path.resolve(fs.realpathSync(current), ...missingSuffix);
+		} catch {
+			const parent = path.dirname(current);
+			if (parent === current) throw new Error(`cannot resolve path '${candidate}'`);
+			missingSuffix.unshift(path.basename(current));
+			current = parent;
+		}
+	}
+}
+
+function isPathWithinOrEqual(root: string, candidate: string): boolean {
+	const relative = path.relative(root, candidate);
+	return relative === "" ||
+		(relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 /**
  * Artifact directory for an acceptance-gated chain step.
  *
  * `chainDir` is user-configurable and may point inside the repository a gate is grading, so a
- * gated step's own artifacts (progress file, worktree diffs) never go there: they always land
- * under the extension's temp root, which cannot be steered into the gated tree.
+ * gated step's own artifacts (progress file, worktree diffs) never go there. The temp root is
+ * checked structurally against the real repository root before anything is written.
  */
-export function createGateArtifactDir(runId: string, stepIndex: number): string {
+export function createGateArtifactDir(runId: string, stepIndex: number, gatedRepoRoot: string): string {
 	const gateDir = path.join(CHAIN_RUNS_DIR, `${runId}-gate-s${stepIndex}`);
+	const resolvedRepoRoot = fs.realpathSync(path.resolve(gatedRepoRoot));
+	const resolvedGateDir = realpathWithMissingSuffix(gateDir);
+	if (
+		isPathWithinOrEqual(resolvedRepoRoot, resolvedGateDir) ||
+		isPathWithinOrEqual(resolvedGateDir, resolvedRepoRoot)
+	) {
+		throw new Error(
+			`acceptance gate artifacts must be outside the gated repository (repo: ${resolvedRepoRoot}, artifacts: ${resolvedGateDir})`,
+		);
+	}
 	fs.mkdirSync(gateDir, { recursive: true });
 	return gateDir;
 }

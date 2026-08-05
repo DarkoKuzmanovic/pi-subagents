@@ -5,11 +5,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import {
+	captureRepoSnapshot,
 	cleanupWorktrees,
 	createWorktrees,
 	diffWorktrees,
 	findWorktreeRepoBlocker,
 	findWorktreeTaskCwdConflict,
+	formatRepoSnapshotDiff,
 	formatWorktreeDiffSummary,
 	resolveExpectedWorktreeAgentCwd,
 	sweepOrphanedWorktrees,
@@ -147,6 +149,21 @@ describe("worktree", () => {
 			);
 			// The strict check belongs to gate preflight only; ordinary callers keep plain status.
 			assert.equal(findWorktreeRepoBlocker(repoDir), undefined);
+		} finally {
+			cleanupRepo(repoDir);
+		}
+	});
+
+	it("captures the real repository status and HEAD for invariant checks", () => {
+		const repoDir = createRepo("pi-worktree-snapshot-");
+		try {
+			const before = captureRepoSnapshot(repoDir);
+			fs.writeFileSync(path.join(repoDir, "leaked.txt"), "leaked\n", "utf-8");
+			const after = captureRepoSnapshot(repoDir);
+
+			assert.notEqual(before.status, after.status);
+			assert.equal(before.head, after.head);
+			assert.match(formatRepoSnapshotDiff(before, after), /leaked\.txt/);
 		} finally {
 			cleanupRepo(repoDir);
 		}
