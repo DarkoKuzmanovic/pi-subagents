@@ -8,6 +8,7 @@ import {
 	cleanupWorktrees,
 	createWorktrees,
 	diffWorktrees,
+	findWorktreeRepoBlocker,
 	findWorktreeTaskCwdConflict,
 	formatWorktreeDiffSummary,
 	resolveExpectedWorktreeAgentCwd,
@@ -119,6 +120,40 @@ describe("worktree", () => {
 				() => createWorktrees(repoDir, "dirty", 1),
 				/worktree isolation requires a clean git working tree/i,
 			);
+		} finally {
+			cleanupRepo(repoDir);
+		}
+	});
+
+	it("detects untracked files even when git config hides them from status", () => {
+		const repoDir = createRepo("pi-worktree-hidden-untracked-");
+		try {
+			// A repo-local config that hides untracked files must not make a dirty tree look clean.
+			git(repoDir, ["config", "status.showUntrackedFiles", "no"]);
+			fs.writeFileSync(path.join(repoDir, "scratch.txt"), "untracked\n", "utf-8");
+			assert.equal(
+				git(repoDir, ["status", "--porcelain"]),
+				"",
+				"precondition: the repo's own config hides the untracked file",
+			);
+
+			assert.match(
+				findWorktreeRepoBlocker(repoDir) ?? "",
+				/worktree isolation requires a clean git working tree/i,
+			);
+			assert.throws(
+				() => createWorktrees(repoDir, "hidden-untracked", 1),
+				/worktree isolation requires a clean git working tree/i,
+			);
+		} finally {
+			cleanupRepo(repoDir);
+		}
+	});
+
+	it("findWorktreeRepoBlocker reports no blocker for a clean repository", () => {
+		const repoDir = createRepo("pi-worktree-clean-check-");
+		try {
+			assert.equal(findWorktreeRepoBlocker(repoDir), undefined);
 		} finally {
 			cleanupRepo(repoDir);
 		}

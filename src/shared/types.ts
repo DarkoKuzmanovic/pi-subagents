@@ -632,6 +632,8 @@ export interface RunSyncOptions {
 	outputSchema?: JsonSchemaObject;
 	/** Restrict grader read/search/list tools to this attempt worktree root. */
 	graderAllowedRoot?: string;
+	/** Override the child's always-on extension list; pass [] to suppress user/project always-on extensions entirely. */
+	childAlwaysExtensions?: string[];
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";

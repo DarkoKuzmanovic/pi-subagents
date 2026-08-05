@@ -614,6 +614,39 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
 	});
 
+	it("refuses an explicitly backgrounded gated chain before launching any child", { skip: !createSubagentExecutor ? "executor not available" : undefined }, async () => {
+		const executor = createSubagentExecutor!({
+			pi: { events: createEventBus(), getSessionName: () => undefined },
+			state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
+			config: {},
+			asyncByDefault: false,
+			tempArtifactsDir: tempDir,
+			getSubagentSessionRoot: () => tempDir,
+			expandTilde: (p: string) => p,
+			discoverAgents: () => ({ agents: [makeAgent("worker"), makeAgent("grader")] }),
+		});
+
+		const result = await executor.execute(
+			"async-gated-chain-refusal",
+			{
+				chain: [
+					{ agent: "worker", task: "Ungated first step" },
+					{ agent: "worker", task: "Gated step", gate: { rubric: "No child runs", grader: "grader" } },
+				],
+				async: true,
+				clarify: false,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /foreground-only/i);
+		assert.equal(result.details?.asyncId, undefined, "a gated chain must not be handed to the async runner");
+		assert.equal(mockPi.callCount(), 0, "no child may launch for a refused gated chain");
+	});
+
 	it("top-level async worktree parallel resolves reads and output against the worktree cwd", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		const repoDir = createRepo("pi-subagent-async-worktree-");
 		try {

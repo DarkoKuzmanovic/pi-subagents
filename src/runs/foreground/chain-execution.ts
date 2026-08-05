@@ -88,12 +88,17 @@ import {
 	type GateVerdict,
 	type NormalizedGateSpec,
 } from "../shared/acceptance-gate.ts";
-import { GRADER_READ_ONLY_TOOLS } from "../shared/grader-boundary.ts";
+import {
+	checkGraderPath,
+	GRADER_READ_ONLY_TOOLS,
+	type GraderPathBoundaryResult,
+} from "../shared/grader-boundary.ts";
 import { recordRun } from "../shared/run-history.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
 	diffWorktrees,
+	findWorktreeRepoBlocker,
 	findWorktreeTaskCwdConflict,
 	formatWorktreeDiffSummary,
 	formatWorktreeTaskCwdConflict,
@@ -308,6 +313,48 @@ function formatGateReport(input: {
 		"The attempt worktree was discarded. Apply the reported changes manually if accepted.",
 	);
 	return lines.join("\n");
+}
+
+/**
+ * Acceptance gates are foreground-only in report-only v1: every background route
+ * (Clarify's "run in background" choice and an explicit async dispatch) must refuse
+ * a gated chain through this one check rather than duplicating the condition.
+ */
+export const GATE_FOREGROUND_ONLY_MESSAGE =
+	"Acceptance gates are foreground-only in report-only v1; do not request background execution for a gated chain.";
+
+export function findGatedStepIndex(chain: readonly ChainStep[]): number {
+	return chain.findIndex(
+		(step) =>
+			!isParallelStep(step) &&
+			!isDynamicParallelStep(step) &&
+			Boolean((step as SequentialStep).gate),
+	);
+}
+
+/**
+ * Resolve a gated step's configured output file inside its attempt worktree.
+ *
+ * Report-only v1 must leave nothing outside the worktree on any verdict, so relative paths
+ * resolve against the worktree cwd and any path escaping the worktree root is refused with
+ * the same boundary check the read-only grader uses.
+ */
+function resolveGatedOutputPath(
+	worktree: { path: string; agentCwd: string },
+	output: string,
+): GraderPathBoundaryResult {
+	try {
+		return checkGraderPath(
+			fs.realpathSync(worktree.path),
+			fs.realpathSync(worktree.agentCwd),
+			output,
+		);
+	} catch (error) {
+		return {
+			status: "blocked",
+			message: error instanceof Error ? error.message : String(error),
+		};
+	}
 }
 
 async function runParallelChainTasks(
@@ -803,23 +850,10 @@ export async function executeChain(
 			};
 		}
 
-		if (
-			result.runInBackground &&
-			chainSteps.some(
-				(step) =>
-					!isParallelStep(step) &&
-					!isDynamicParallelStep(step) &&
-					Boolean((step as SequentialStep).gate),
-			)
-		) {
+		if (result.runInBackground && findGatedStepIndex(chainSteps) !== -1) {
 			removeChainDir(chainDir);
 			return {
-				content: [
-					{
-						type: "text",
-						text: "Acceptance gates are foreground-only in report-only v1; do not request background execution for a gated chain.",
-					},
-				],
+				content: [{ type: "text", text: GATE_FOREGROUND_ONLY_MESSAGE }],
 				isError: true,
 				details: { mode: "chain" as const, results: [] },
 			};
@@ -871,6 +905,43 @@ export async function executeChain(
 	const tokenBudget = createSessionTokenBudget(runId, params.budget);
 	const currentBudgetSummary = () => budgetSummary(tokenBudget);
 
+	// Whole-chain gate preflight: every gated step's preconditions (known grader, clean repo)
+	// are validated before ANY step runs, so an ungated earlier step cannot execute ahead of a
+	// refusal that was always going to fire.
+	for (let stepIndex = 0; stepIndex < chainSteps.length; stepIndex++) {
+		const step = chainSteps[stepIndex]!;
+		if (isParallelStep(step) || isDynamicParallelStep(step)) continue;
+		const seqStep = step as SequentialStep;
+		if (!seqStep.gate) continue;
+		const gateSpec = normalizeGateSpec(seqStep.gate);
+		const detailsInput: ChainExecutionDetailsInput = {
+			results,
+			includeProgress,
+			allProgress,
+			allArtifactPaths,
+			artifactsDir,
+			chainAgents,
+			totalSteps,
+			currentStepIndex: stepIndex,
+		};
+		if (!agents.some((agent) => agent.name === gateSpec.grader)) {
+			removeChainDir(chainDir);
+			return buildChainExecutionErrorResult(
+				`Acceptance gate step ${stepIndex + 1}: grader agent '${gateSpec.grader}' is not configured; no child was launched.`,
+				detailsInput,
+			);
+		}
+		const repoBlocker = findWorktreeRepoBlocker(
+			resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd),
+		);
+		if (repoBlocker) {
+			removeChainDir(chainDir);
+			return buildChainExecutionErrorResult(
+				`Acceptance gate step ${stepIndex + 1} refused before child dispatch: ${repoBlocker}`,
+				detailsInput,
+			);
+		}
+	}
 	if (onUpdate) {
 		const stepNames = chainSteps
 			.map((s) =>
@@ -1558,11 +1629,92 @@ export async function executeChain(
 						? tuiOverride.skills
 						: normalizeSkillInput(seqStep.skill),
 			};
-			const behavior = suppressProgressForReadOnlyTask(
+			const baseBehavior = suppressProgressForReadOnlyTask(
 				resolveStepBehavior(agentConfig, stepOverride, chainSkills),
 				stepTemplate,
 				originalTask,
 			);
+
+			let gateSetup: WorktreeSetup | undefined;
+			const failGatedStep = (message: string) => {
+				if (gateSetup) cleanupWorktrees(gateSetup);
+				return buildChainExecutionErrorResult(message, {
+					results,
+					includeProgress,
+					allProgress,
+					allArtifactPaths,
+					artifactsDir,
+					chainAgents,
+					totalSteps,
+					currentStepIndex: stepIndex,
+				});
+			};
+			if (gateSpec) {
+				const gateCwd = resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd);
+				try {
+					gateSetup = createWorktrees(
+						gateCwd,
+						`${runId}-gate-s${stepIndex}`,
+						1,
+						{
+							agents: [seqStep.agent],
+							setupHook: params.worktreeSetupHook
+								? {
+										hookPath: params.worktreeSetupHook,
+										timeoutMs: params.worktreeSetupHookTimeoutMs,
+									}
+								: undefined,
+						},
+					);
+				} catch (error) {
+					const message =
+						error instanceof Error ? error.message : String(error);
+					return failGatedStep(
+						`Acceptance gate step ${stepIndex + 1} refused before child dispatch: ${message}`,
+					);
+				}
+			}
+			const gateWorktree = gateSetup?.worktrees[0];
+			if (gateSetup && !gateWorktree) {
+				return failGatedStep(
+					`Acceptance gate step ${stepIndex + 1}: worktree setup returned no worktree.`,
+				);
+			}
+
+			// A gated step must leave no trace outside its attempt worktree on any verdict, so its
+			// output file is resolved inside that worktree — both for the write instruction the child
+			// receives and for the captured output path — and is discarded with the worktree.
+			let outputPath: string | undefined;
+			if (typeof baseBehavior.output === "string") {
+				if (gateWorktree) {
+					const bounded = resolveGatedOutputPath(
+						gateWorktree,
+						baseBehavior.output,
+					);
+					if (bounded.status === "blocked") {
+						return failGatedStep(
+							`Acceptance gate step ${stepIndex + 1} refused before child dispatch: output '${baseBehavior.output}' must resolve inside the attempt worktree (${bounded.message}).`,
+						);
+					}
+					outputPath = bounded.resolvedPath;
+				} else {
+					outputPath = path.isAbsolute(baseBehavior.output)
+						? baseBehavior.output
+						: path.join(chainDir, baseBehavior.output);
+				}
+			}
+			const validationError = validateFileOnlyOutputMode(
+				baseBehavior.outputMode,
+				outputPath,
+				`Chain step ${stepIndex + 1} (${seqStep.agent})`,
+			);
+			if (validationError) {
+				return failGatedStep(validationError);
+			}
+			const behavior: ResolvedStepBehavior =
+				gateWorktree && outputPath
+					? { ...baseBehavior, output: outputPath }
+					: baseBehavior;
 
 			const isFirstProgress = behavior.progress && !progressCreated;
 			if (isFirstProgress) {
@@ -1602,67 +1754,6 @@ export async function executeChain(
 					ctx.model?.provider,
 				) ??
 				(behavior.thinking ? currentModelFullId(ctx.model) : undefined);
-
-			const outputPath =
-				typeof behavior.output === "string"
-					? path.isAbsolute(behavior.output)
-						? behavior.output
-						: path.join(chainDir, behavior.output)
-					: undefined;
-			const validationError = validateFileOnlyOutputMode(
-				behavior.outputMode,
-				outputPath,
-				`Chain step ${stepIndex + 1} (${seqStep.agent})`,
-			);
-			if (validationError) {
-				return buildChainExecutionErrorResult(validationError, {
-					results,
-					includeProgress,
-					allProgress,
-					allArtifactPaths,
-					artifactsDir,
-					chainAgents,
-					totalSteps,
-					currentStepIndex: stepIndex,
-				});
-			}
-
-			let gateSetup: WorktreeSetup | undefined;
-			if (gateSpec) {
-				const gateCwd = resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd);
-				try {
-					gateSetup = createWorktrees(
-						gateCwd,
-						`${runId}-gate-s${stepIndex}`,
-						1,
-						{
-							agents: [seqStep.agent],
-							setupHook: params.worktreeSetupHook
-								? {
-										hookPath: params.worktreeSetupHook,
-										timeoutMs: params.worktreeSetupHookTimeoutMs,
-									}
-								: undefined,
-						},
-					);
-				} catch (error) {
-					const message =
-						error instanceof Error ? error.message : String(error);
-					return buildChainExecutionErrorResult(
-						`Acceptance gate step ${stepIndex + 1} refused before child dispatch: ${message}`,
-						{
-							results,
-							includeProgress,
-							allProgress,
-							allArtifactPaths,
-							artifactsDir,
-							chainAgents,
-							totalSteps,
-							currentStepIndex: stepIndex,
-						},
-					);
-				}
-			}
 
 			try {
 				const maxSubagentDepth = resolveChildMaxSubagentDepth(
@@ -1781,12 +1872,7 @@ export async function executeChain(
 				if (r.progress) allProgress.push(r.progress);
 				if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
 
-				if (gateSpec && gateSetup && graderConfig) {
-					const gateWorktree = gateSetup.worktrees[0];
-					if (!gateWorktree)
-						throw new Error(
-							`Acceptance gate step ${stepIndex + 1}: worktree setup returned no worktree.`,
-						);
+				if (gateSpec && gateSetup && gateWorktree && graderConfig) {
 					const diffsDir = path.join(
 						chainDir,
 						"worktree-diffs",
@@ -1803,8 +1889,7 @@ export async function executeChain(
 						threshold: gateSpec.threshold,
 						producerOutput: getSingleResultOutput(r),
 						changedFiles,
-						// Both public evidence values are worktree-scoped in report-only v1.
-						evidence: "worktree",
+						evidence: gateSpec.evidence,
 					});
 					const graderAgent: AgentConfig = {
 						...graderConfig,
@@ -1831,6 +1916,10 @@ export async function executeChain(
 							skipContextFiles: true,
 							outputSchema: GATE_VERDICT_SCHEMA,
 							graderAllowedRoot: gateWorktree.path,
+							// The grader launches with zero extensions and zero MCP direct tools:
+							// user/project always-on extensions would otherwise be reloaded after
+							// --no-extensions and could mutate a tool call past the read boundary.
+							childAlwaysExtensions: [],
 							availableModels,
 							preferredModelProvider: ctx.model?.provider,
 							controlConfig,
@@ -1857,12 +1946,15 @@ export async function executeChain(
 					} else {
 						const semanticValidation = validateGateVerdictSemantics(
 							graderResult.structuredOutput,
-							gateSpec.rubric.length,
+							gateSpec.rubric,
+							gateSpec.threshold,
 						);
 						if (semanticValidation.status === "invalid") {
 							verdictError = `invalid GateVerdict: ${semanticValidation.message}`;
 						} else {
-							verdict = graderResult.structuredOutput as GateVerdict;
+							// The honored verdict, not the grader's raw claim: `pass` is already
+							// reconciled against the configured rubric and threshold.
+							verdict = semanticValidation.verdict;
 						}
 					}
 

@@ -790,11 +790,12 @@ describe("chain execution — sequential", {
 	it("runs a report-only gate once, reports the diff, and leaves the real tree unchanged on PASS", async () => {
 		initGitRepo(tempDir);
 		const runId = "gate-pass-fixture";
-		const producerPath = path.join(
+		const worktreeDir = path.join(
 			os.tmpdir(),
 			`pi-worktree-${runId}-gate-s0-0`,
-			"produced.txt",
 		);
+		const worktreeOutputPath = path.join(worktreeDir, "produced.txt");
+		const chainDirOutputPath = path.join(chainDir, "produced.txt");
 		const before = gitStatus(tempDir);
 		mockPi.onCall({
 			output: "producer output",
@@ -822,7 +823,7 @@ describe("chain execution — sequential", {
 					{
 						agent: "worker",
 						task: "Produce the file",
-						output: producerPath,
+						output: "produced.txt",
 						gate: {
 							rubric: "The produced file exists",
 							grader: "custom-grader",
@@ -854,6 +855,11 @@ describe("chain execution — sequential", {
 		assert.match(text, /No further changes are needed/);
 		assert.match(text, /produced\.txt/);
 		assert.equal(mockPi.callCount(), 2);
+		const producerArgs = readCallArgs(0);
+		assert.ok(
+			(producerArgs.at(-1) ?? "").includes(`[Write to: ${worktreeOutputPath}]`),
+			`a gated step's output must resolve inside the attempt worktree: ${producerArgs.at(-1)}`,
+		);
 		const graderArgs = readCallArgs(1);
 		const toolsIndex = graderArgs.indexOf("--tools");
 		assert.notEqual(toolsIndex, -1);
@@ -865,21 +871,95 @@ describe("chain execution — sequential", {
 			graderArgs.includes("--no-extensions"),
 			"grader extensions must be disabled",
 		);
+		// Nothing the gated step produced may survive outside the discarded worktree,
+		// on any verdict — report-only v1 applies nothing automatically.
 		assert.equal(
-			fs.existsSync(path.dirname(producerPath)),
+			fs.existsSync(chainDirOutputPath),
+			false,
+			"a gated step must not write its output into the chain dir",
+		);
+		assert.equal(
+			fs.existsSync(worktreeOutputPath),
+			false,
+			"the gated output file must be discarded with the worktree",
+		);
+		assert.equal(
+			fs.existsSync(worktreeDir),
 			false,
 			"gate worktree must be cleaned up",
+		);
+	});
+
+	it("never loads always-on extensions into a grader child", async () => {
+		initGitRepo(tempDir);
+		const runId = "gate-always-extension-fixture";
+		const guardPath = path.join(tempDir, "always-guard.ts");
+		fs.writeFileSync(guardPath, "// always-on guard extension\n", "utf-8");
+		fs.mkdirSync(path.join(tempDir, ".pi"), { recursive: true });
+		fs.writeFileSync(
+			path.join(tempDir, ".pi", "settings.json"),
+			JSON.stringify({ subagents: { childAlwaysExtensions: [guardPath] } }),
+			"utf-8",
+		);
+		runGit(tempDir, ["add", "-A"]);
+		runGit(tempDir, ["commit", "-m", "always-on extension settings"]);
+
+		mockPi.onCall({ output: "producer output" });
+		mockPi.onCall({
+			taskIncludes: "Score the producer",
+			structured: {
+				pass: true,
+				score: 1,
+				criteria: [{ criterion: "Work is done", met: true }],
+				feedback: "Fine.",
+			},
+		});
+		const result = await executeChain!(
+			makeChainParams(
+				[
+					{
+						agent: "worker",
+						task: "Do the work",
+						gate: { rubric: "Work is done", grader: "grader" },
+					},
+				],
+				[
+					makeAgent("worker", { extensions: [] }),
+					makeAgent("grader", { extensions: [] }),
+				],
+				{ runId, cwd: tempDir, chainDir, ctx: makeMinimalCtx(tempDir) },
+			),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "");
+		assert.equal(mockPi.callCount(), 2);
+		const producerExtensions = readCallArgs(0).filter(
+			(arg, index, args) => args[index - 1] === "--extension",
+		);
+		const graderExtensions = readCallArgs(1).filter(
+			(arg, index, args) => args[index - 1] === "--extension",
+		);
+		// Positive control: the always-on extension really is configured and reaches an ordinary child.
+		assert.ok(
+			producerExtensions.includes(guardPath),
+			"precondition: always-on extensions reach a normal child",
+		);
+		assert.equal(
+			graderExtensions.includes(guardPath),
+			false,
+			"an always-on extension must never be loaded into a grader child",
 		);
 	});
 
 	it("reports a schema-invalid grader as FAIL and still discards the worktree", async () => {
 		initGitRepo(tempDir);
 		const runId = "gate-fail-fixture";
-		const producerPath = path.join(
+		const worktreeDir = path.join(
 			os.tmpdir(),
 			`pi-worktree-${runId}-gate-s0-0`,
-			"produced.txt",
 		);
+		const worktreeOutputPath = path.join(worktreeDir, "produced.txt");
+		const chainDirOutputPath = path.join(chainDir, "produced.txt");
 		const before = gitStatus(tempDir);
 		mockPi.onCall({
 			output: "producer output",
@@ -895,7 +975,7 @@ describe("chain execution — sequential", {
 					{
 						agent: "worker",
 						task: "Produce the file",
-						output: producerPath,
+						output: "produced.txt",
 						gate: { rubric: "The produced file exists", grader: "grader" },
 					},
 				],
@@ -919,9 +999,57 @@ describe("chain execution — sequential", {
 		assert.match(text, /produced\.txt/);
 		assert.equal(mockPi.callCount(), 2);
 		assert.equal(
-			fs.existsSync(path.dirname(producerPath)),
+			fs.existsSync(chainDirOutputPath),
+			false,
+			"a failed gate must not leave its output file outside the worktree",
+		);
+		assert.equal(
+			fs.existsSync(worktreeOutputPath),
+			false,
+			"the failed attempt's output file must be discarded with the worktree",
+		);
+		assert.equal(
+			fs.existsSync(worktreeDir),
 			false,
 			"failed gate worktree must be cleaned up",
+		);
+	});
+
+	it("refuses a gated step whose output escapes the attempt worktree", async () => {
+		initGitRepo(tempDir);
+		const escapePath = path.join(tempDir, "escaped-output.md");
+		const result = await executeChain!(
+			makeChainParams(
+				[
+					{
+						agent: "worker",
+						task: "Must not run",
+						output: escapePath,
+						gate: { rubric: "No child runs", grader: "grader" },
+					},
+				],
+				[makeAgent("worker"), makeAgent("grader")],
+				{
+					runId: "gate-output-escape-fixture",
+					cwd: tempDir,
+					chainDir,
+					ctx: makeMinimalCtx(tempDir),
+				},
+			),
+		);
+		assert.equal(result.isError, true);
+		assert.match(
+			result.content[0]?.text ?? "",
+			/must resolve inside the attempt worktree/i,
+		);
+		assert.equal(mockPi.callCount(), 0);
+		assert.equal(fs.existsSync(escapePath), false);
+		assert.equal(
+			fs.existsSync(
+				path.join(os.tmpdir(), "pi-worktree-gate-output-escape-fixture-gate-s0-0"),
+			),
+			false,
+			"the refused step's worktree must be cleaned up",
 		);
 	});
 
@@ -931,6 +1059,7 @@ describe("chain execution — sequential", {
 		const result = await executeChain!(
 			makeChainParams(
 				[
+					{ agent: "worker", task: "Ungated step must not run either" },
 					{
 						agent: "worker",
 						task: "Must not run",
@@ -951,7 +1080,11 @@ describe("chain execution — sequential", {
 			result.content[0]?.text ?? "",
 			/clean git working tree|dirty/i,
 		);
-		assert.equal(mockPi.callCount(), 0);
+		assert.equal(
+			mockPi.callCount(),
+			0,
+			"the ungated first step must not run ahead of a gate refusal",
+		);
 	});
 
 	it("refuses an unknown gate grader before launching any child", async () => {
@@ -959,6 +1092,7 @@ describe("chain execution — sequential", {
 		const result = await executeChain!(
 			makeChainParams(
 				[
+					{ agent: "worker", task: "Ungated step must not run either" },
 					{
 						agent: "worker",
 						task: "Must not run",
@@ -979,7 +1113,11 @@ describe("chain execution — sequential", {
 			result.content[0]?.text ?? "",
 			/grader agent 'missing-grader' is not configured/i,
 		);
-		assert.equal(mockPi.callCount(), 0);
+		assert.equal(
+			mockPi.callCount(),
+			0,
+			"the ungated first step must not run ahead of a gate refusal",
+		);
 	});
 });
 

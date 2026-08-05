@@ -104,13 +104,34 @@ function resolveRepoState(cwd: string): RepoState {
 	const cwdRelative = resolveRepoCwdRelative(cwd);
 	const toplevel = runGitChecked(cwd, ["rev-parse", "--show-toplevel"]).trim();
 
-	const status = runGitChecked(toplevel, ["status", "--porcelain"]);
+	// Cleanliness must not depend on the user's or repo's git config: `status.showUntrackedFiles`
+	// can hide real untracked files and submodule ignore settings can hide dirty submodules, so
+	// both are forced on the command line instead of being read from config.
+	const status = runGitChecked(toplevel, [
+		"status",
+		"--porcelain",
+		"--untracked-files=all",
+		"--ignore-submodules=none",
+	]);
 	if (status.trim().length > 0) {
 		throw new Error("worktree isolation requires a clean git working tree. Commit or stash changes first.");
 	}
 
 	const baseCommit = runGitChecked(toplevel, ["rev-parse", "HEAD"]).trim();
 	return { toplevel, cwdRelative, baseCommit };
+}
+
+/**
+ * Report why `cwd` cannot host an isolated worktree run, or `undefined` when it can.
+ * Lets callers validate worktree preconditions before any child launches.
+ */
+export function findWorktreeRepoBlocker(cwd: string): string | undefined {
+	try {
+		resolveRepoState(cwd);
+		return undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
 }
 
 function normalizeComparableCwd(cwd: string): string {

@@ -9,7 +9,7 @@ import { resolveModelLaneOverrides } from "../../agents/model-lanes.ts";
 import { getArtifactsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
 import { currentModelFullId, toModelInfo, type ModelInfo, type ThinkingLevel } from "../../shared/model-info.ts";
-import { executeChain } from "./chain-execution.ts";
+import { executeChain, findGatedStepIndex, GATE_FOREGROUND_ONLY_MESSAGE } from "./chain-execution.ts";
 import { resolveExecutionAgentScope } from "../../agents/agent-scope.ts";
 import { handleManagementAction } from "../../agents/agent-management.ts";
 import { buildDoctorReport } from "../../extension/doctor.ts";
@@ -1342,6 +1342,16 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	if (!effectiveAsync) return null;
 
 	if (hasChain && params.chain) {
+		// Acceptance gates are foreground-only in report-only v1; refuse an explicitly
+		// backgrounded gated chain here, before any child launches, because the async
+		// runner never evaluates gates.
+		if (findGatedStepIndex(params.chain as ChainStep[]) !== -1) {
+			return {
+				content: [{ type: "text", text: GATE_FOREGROUND_ONLY_MESSAGE }],
+				isError: true,
+				details: { mode: "chain" as const, results: [] },
+			};
+		}
 		const chainWorktreeTaskCwdError = buildChainWorktreeTaskCwdError(params.chain as ChainStep[], effectiveCwd);
 		if (chainWorktreeTaskCwdError) {
 			return {
