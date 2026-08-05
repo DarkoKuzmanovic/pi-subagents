@@ -26,6 +26,7 @@ import {
 	events,
 } from "../support/helpers.ts";
 import {
+	CHAIN_RUNS_DIR,
 	INTERCOM_DETACH_REQUEST_EVENT,
 	SUBAGENT_BUDGET_EXHAUSTED_EVENT,
 	type BudgetExhaustedEvent,
@@ -1015,6 +1016,76 @@ describe("chain execution — sequential", {
 		);
 	});
 
+	it("keeps gate artifacts out of a chainDir configured inside the gated repo", async () => {
+		initGitRepo(tempDir);
+		const runId = "gate-chain-dir-inside-repo-fixture";
+		// The public `chainDir` setting can point anywhere, including the repo under grading.
+		const repoChainDir = path.join(tempDir, ".chain-artifacts");
+		const worktreeDir = path.join(
+			os.tmpdir(),
+			`pi-worktree-${runId}-gate-s0-0`,
+		);
+		mockPi.onCall({
+			output: "producer output",
+			writeOutput: "changed by producer\n",
+		});
+		mockPi.onCall({
+			taskIncludes: "Score the producer",
+			structured: { pass: true },
+		});
+		const result = await executeChain!(
+			makeChainParams(
+				[
+					{
+						agent: "worker",
+						task: "Produce the file",
+						output: "produced.txt",
+						progress: true,
+						gate: { rubric: "The produced file exists", grader: "grader" },
+					},
+				],
+				[makeAgent("worker"), makeAgent("grader")],
+				{
+					runId,
+					cwd: tempDir,
+					chainDir: repoChainDir,
+					ctx: makeMinimalCtx(tempDir),
+				},
+			),
+		);
+		const text = result.content[0]?.text ?? "";
+		assert.equal(result.isError, true);
+		assert.match(text, /Acceptance Gate: FAIL/);
+		assert.equal(
+			gitStatus(tempDir),
+			"",
+			"a failed gated run must leave no artifact in the gated repository",
+		);
+		const producerTask = readCallArgs(0).at(-1) ?? "";
+		const progressMatch = producerTask.match(/progress at: (\S+)/);
+		assert.ok(progressMatch, `expected a progress instruction: ${producerTask}`);
+		assert.equal(
+			(progressMatch[1] ?? "").startsWith(tempDir),
+			false,
+			`a gated step's progress file must not live inside the gated repo: ${progressMatch[1]}`,
+		);
+		// The artifacts still exist — they were routed to the extension temp root, not suppressed.
+		const gateArtifactDir = path.join(CHAIN_RUNS_DIR, `${runId}-gate-s0`);
+		assert.equal(
+			fs.existsSync(
+				path.join(gateArtifactDir, "worktree-diffs", "step-0", "task-0-worker.patch"),
+			),
+			true,
+			"gate diff artifacts must be written outside the gated repo",
+		);
+		fs.rmSync(gateArtifactDir, { recursive: true, force: true });
+		assert.equal(
+			fs.existsSync(worktreeDir),
+			false,
+			"failed gate worktree must be cleaned up",
+		);
+	});
+
 	it("refuses a gated step whose output escapes the attempt worktree", async () => {
 		initGitRepo(tempDir);
 		const escapePath = path.join(tempDir, "escaped-output.md");
@@ -1085,6 +1156,41 @@ describe("chain execution — sequential", {
 			0,
 			"the ungated first step must not run ahead of a gate refusal",
 		);
+	});
+
+	it("refuses a gated step when git config hides an untracked file", async () => {
+		initGitRepo(tempDir);
+		runGit(tempDir, ["config", "status.showUntrackedFiles", "no"]);
+		fs.writeFileSync(path.join(tempDir, "scratch.txt"), "untracked\n", "utf8");
+		assert.equal(
+			gitStatus(tempDir),
+			"",
+			"precondition: the repo's own config hides the untracked file",
+		);
+		const result = await executeChain!(
+			makeChainParams(
+				[
+					{
+						agent: "worker",
+						task: "Must not run",
+						gate: { rubric: "No child runs", grader: "grader" },
+					},
+				],
+				[makeAgent("worker"), makeAgent("grader")],
+				{
+					runId: "gate-hidden-untracked-fixture",
+					cwd: tempDir,
+					chainDir,
+					ctx: makeMinimalCtx(tempDir),
+				},
+			),
+		);
+		assert.equal(result.isError, true);
+		assert.match(
+			result.content[0]?.text ?? "",
+			/clean git working tree/i,
+		);
+		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("refuses an unknown gate grader before launching any child", async () => {

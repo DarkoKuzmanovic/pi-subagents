@@ -44,6 +44,8 @@ interface WorktreeSetupHookConfig {
 interface CreateWorktreesOptions {
 	agents?: string[];
 	setupHook?: WorktreeSetupHookConfig;
+	/** Acceptance-gate preflight only; see `resolveRepoState`. */
+	strictDirtyCheck?: boolean;
 }
 
 interface ResolvedWorktreeSetupHook {
@@ -100,19 +102,20 @@ function runGitChecked(cwd: string, args: string[]): string {
 	return result.stdout;
 }
 
-function resolveRepoState(cwd: string): RepoState {
+function resolveRepoState(cwd: string, strictDirtyCheck = false): RepoState {
 	const cwdRelative = resolveRepoCwdRelative(cwd);
 	const toplevel = runGitChecked(cwd, ["rev-parse", "--show-toplevel"]).trim();
 
-	// Cleanliness must not depend on the user's or repo's git config: `status.showUntrackedFiles`
-	// can hide real untracked files and submodule ignore settings can hide dirty submodules, so
-	// both are forced on the command line instead of being read from config.
-	const status = runGitChecked(toplevel, [
-		"status",
-		"--porcelain",
-		"--untracked-files=all",
-		"--ignore-submodules=none",
-	]);
+	// Acceptance gates need cleanliness that does not depend on the user's or repo's git config:
+	// `status.showUntrackedFiles` can hide real untracked files and submodule ignore settings can
+	// hide dirty submodules, so both are forced on the command line for that check. Ordinary
+	// worktree callers keep plain `git status --porcelain` and stay bound by those settings, which
+	// are legitimate configuration outside the gate's no-trace requirement.
+	const statusArgs = ["status", "--porcelain"];
+	if (strictDirtyCheck) {
+		statusArgs.push("--untracked-files=all", "--ignore-submodules=none");
+	}
+	const status = runGitChecked(toplevel, statusArgs);
 	if (status.trim().length > 0) {
 		throw new Error("worktree isolation requires a clean git working tree. Commit or stash changes first.");
 	}
@@ -124,10 +127,14 @@ function resolveRepoState(cwd: string): RepoState {
 /**
  * Report why `cwd` cannot host an isolated worktree run, or `undefined` when it can.
  * Lets callers validate worktree preconditions before any child launches.
+ * `strictDirtyCheck` is for acceptance-gate preflight only; see `resolveRepoState`.
  */
-export function findWorktreeRepoBlocker(cwd: string): string | undefined {
+export function findWorktreeRepoBlocker(
+	cwd: string,
+	options?: { strictDirtyCheck?: boolean },
+): string | undefined {
 	try {
-		resolveRepoState(cwd);
+		resolveRepoState(cwd, options?.strictDirtyCheck === true);
 		return undefined;
 	} catch (error) {
 		return error instanceof Error ? error.message : String(error);
@@ -515,7 +522,7 @@ function hasWorktreeChanges(diff: WorktreeDiff): boolean {
 }
 
 export function createWorktrees(cwd: string, runId: string, count: number, options?: CreateWorktreesOptions): WorktreeSetup {
-	const repo = resolveRepoState(cwd);
+	const repo = resolveRepoState(cwd, options?.strictDirtyCheck === true);
 	const setupHook = resolveWorktreeSetupHook(repo.toplevel, options?.setupHook);
 	const worktrees: WorktreeInfo[] = [];
 

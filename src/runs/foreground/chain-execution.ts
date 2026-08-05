@@ -21,6 +21,7 @@ import {
 import {
 	resolveChainTemplates,
 	createChainDir,
+	createGateArtifactDir,
 	removeChainDir,
 	resolveStepBehavior,
 	resolveParallelBehaviors,
@@ -931,8 +932,11 @@ export async function executeChain(
 				detailsInput,
 			);
 		}
+		// Only the gate preflight uses the strict dirty check: a gate must leave no trace in the
+		// real tree, so config-hidden untracked files and dirty submodules have to surface here.
 		const repoBlocker = findWorktreeRepoBlocker(
 			resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd),
+			{ strictDirtyCheck: true },
 		);
 		if (repoBlocker) {
 			removeChainDir(chainDir);
@@ -1664,6 +1668,7 @@ export async function executeChain(
 										timeoutMs: params.worktreeSetupHookTimeoutMs,
 									}
 								: undefined,
+							strictDirtyCheck: true,
 						},
 					);
 				} catch (error) {
@@ -1716,6 +1721,13 @@ export async function executeChain(
 					? { ...baseBehavior, output: outputPath }
 					: baseBehavior;
 
+			// `chainDir` is user-settable and may point inside the repo being gated, so a gated step's
+			// own artifacts (progress file, gate diffs) go to the extension's temp root instead. Ungated
+			// steps keep writing under `chainDir` exactly as before.
+			const stepArtifactDir = gateSpec
+				? createGateArtifactDir(runId, stepIndex)
+				: chainDir;
+
 			const isFirstProgress = behavior.progress && !progressCreated;
 			if (isFirstProgress) {
 				progressCreated = true;
@@ -1728,6 +1740,7 @@ export async function executeChain(
 				isFirstProgress,
 				templateHasPrevious ? undefined : prev,
 				params.inlineReads,
+				stepArtifactDir,
 			);
 			// Single-pass render: resolve {outputs.X} and {task}/{previous}/{chain_dir} in ONE scan so
 			// neither an output's text nor a {previous} value can inject the other's tokens (H6).
@@ -1874,7 +1887,7 @@ export async function executeChain(
 
 				if (gateSpec && gateSetup && gateWorktree && graderConfig) {
 					const diffsDir = path.join(
-						chainDir,
+						stepArtifactDir,
 						"worktree-diffs",
 						`step-${stepIndex}`,
 					);

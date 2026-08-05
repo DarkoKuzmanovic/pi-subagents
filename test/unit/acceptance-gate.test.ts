@@ -151,6 +151,26 @@ describe("acceptance gate contract", () => {
 		if (graderSaysFail.status === "valid") assert.equal(graderSaysFail.verdict.pass, false);
 	});
 
+	it("fails a score that sits just below the configured threshold", () => {
+		const rubric = ["Adds the feature", "Covers the feature with a test"];
+		const halfMet = {
+			pass: true,
+			score: 0.5,
+			criteria: [
+				{ criterion: rubric[0], met: true },
+				{ criterion: rubric[1], met: false },
+			],
+			feedback: "Claiming success anyway.",
+		};
+
+		// A hair below threshold is still below threshold: no epsilon may buy a pass.
+		const justBelow = validateGateVerdictSemantics(halfMet, rubric, 0.5000005);
+		assert.equal(justBelow.status, "valid");
+		if (justBelow.status === "valid") {
+			assert.equal(justBelow.verdict.pass, false, "0.5 must not pass a 0.5000005 threshold");
+		}
+	});
+
 	it("requires changed files to be read in worktree evidence mode", () => {
 		const task = buildGraderTask({
 			rubric: ["Adds the feature", "Tests the feature"],

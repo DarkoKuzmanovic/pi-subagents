@@ -49,6 +49,21 @@ describe("grader read boundary", () => {
 			assert.match(absolute.message, /outside/i);
 	});
 
+	it("resolves a nested not-yet-existing path in its configured order", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "grader-boundary-nested-"));
+		tempRoots.push(root);
+
+		const result = checkGraderPath(root, root, "reports/nested/result.md");
+		assert.equal(result.status, "allowed");
+		if (result.status === "allowed") {
+			assert.equal(
+				result.resolvedPath,
+				path.join(fs.realpathSync(root), "reports", "nested", "result.md"),
+				"multi-segment missing paths must keep root-to-leaf order",
+			);
+		}
+	});
+
 	it("rejects symlinks that escape the worktree", {
 		skip:
 			process.platform === "win32"

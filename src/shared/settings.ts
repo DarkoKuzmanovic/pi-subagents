@@ -160,6 +160,19 @@ export function createChainDir(runId: string, baseDir?: string): string {
 	return chainDir;
 }
 
+/**
+ * Artifact directory for an acceptance-gated chain step.
+ *
+ * `chainDir` is user-configurable and may point inside the repository a gate is grading, so a
+ * gated step's own artifacts (progress file, worktree diffs) never go there: they always land
+ * under the extension's temp root, which cannot be steered into the gated tree.
+ */
+export function createGateArtifactDir(runId: string, stepIndex: number): string {
+	const gateDir = path.join(CHAIN_RUNS_DIR, `${runId}-gate-s${stepIndex}`);
+	fs.mkdirSync(gateDir, { recursive: true });
+	return gateDir;
+}
+
 export function removeChainDir(chainDir: string): void {
 	try {
 		fs.rmSync(chainDir, { recursive: true });
@@ -521,6 +534,8 @@ export function buildChainInstructions(
 	isFirstProgressAgent: boolean,
 	previousSummary?: string,
 	inlineReads?: boolean,
+	/** Where the progress file lives when it must not be written under `chainDir` (gated steps). */
+	progressDir?: string,
 ): { prefix: string; suffix: string } {
 	const prefixParts: string[] = [];
 	const suffixParts: string[] = [];
@@ -571,7 +586,7 @@ export function buildChainInstructions(
 
 	// Progress instructions in suffix (less critical)
 	if (behavior.progress) {
-		const progressPath = path.join(chainDir, "progress.md");
+		const progressPath = path.join(progressDir ?? chainDir, "progress.md");
 		if (isFirstProgressAgent) {
 			suffixParts.push(`Create and maintain progress at: ${progressPath}`);
 		} else {

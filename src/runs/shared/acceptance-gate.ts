@@ -170,8 +170,9 @@ export function validateGateVerdictSemantics(
 	}
 
 	// `pass` is never taken on the grader's word: a claimed pass below the configured
-	// threshold is honored as a fail.
-	const meetsThreshold = threshold === undefined || recomputedScore + SCORE_EPSILON >= threshold;
+	// threshold is honored as a fail. The comparison is exact — no epsilon slack — because a
+	// score below the threshold must never pass, however small the margin.
+	const meetsThreshold = threshold === undefined || recomputedScore >= threshold;
 	return {
 		status: "valid",
 		verdict: {
