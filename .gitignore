@@ -9,3 +9,6 @@ node_modules/
 .claude/
 context.md
 .pi/*
+
+# M13.1 evidence: rejected T2 worktree-transaction patch (keep, never commit)
+.m13-artifacts/
