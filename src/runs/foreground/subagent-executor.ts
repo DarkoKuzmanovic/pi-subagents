@@ -37,7 +37,7 @@ import { executeAsyncChain, executeAsyncSingle, formatAsyncStartedMessage, isAsy
 import { buildLaunchManifest, type StaticAsyncChildDescriptor } from "../background/async-launch-binding.ts";
 import { staticParallelOmChildKey, staticSequentialOmChildKey } from "../shared/om-logical-keys.ts";
 import type { AsyncOmLaunchManifestV1 } from "../../shared/types.ts";
-import { createSubagentContextResolver } from "../../shared/fork-context.ts";
+import { createSubagentContextResolver, shouldSkipContextFiles, type SubagentExecutionContext } from "../../shared/fork-context.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "../../intercom/intercom-bridge.ts";
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "../shared/subagent-control.ts";
@@ -1548,6 +1548,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
 	const chainResult = await executeChain({
 		chain,
+		context: params.context,
 		task: params.task,
 		agents,
 		ctx,
@@ -1668,6 +1669,7 @@ interface ForegroundParallelRunInput {
 	modelOverrides: (string | undefined)[];
 	behaviors: Array<ReturnType<typeof resolveStepBehavior>>;
 	firstProgressIndex: number;
+	context?: SubagentExecutionContext;
 	controlConfig: ResolvedControlConfig;
 	onControlEvent?: (event: ControlEvent) => void;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
@@ -1822,6 +1824,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 		const agentConfig = input.agents.find((agent) => agent.name === task.agent);
 		return runSync(input.ctx.cwd, input.agents, task.agent, taskText, {
 			cwd: taskCwd,
+			skipContextFiles: shouldSkipContextFiles(input.context),
 			signal: input.signal,
 			interruptSignal: interruptController.signal,
 			allowIntercomDetach: agentConfig?.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,
@@ -2136,6 +2139,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			artifactsDir,
 			maxOutput: params.maxOutput,
 			paramsCwd: effectiveCwd,
+			context: params.context,
 			availableModels,
 			modelOverrides,
 			behaviors,
@@ -2416,6 +2420,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 
 	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
 		cwd: effectiveCwd,
+		skipContextFiles: shouldSkipContextFiles(params.context),
 		signal,
 		interruptSignal: interruptController.signal,
 		allowIntercomDetach: agentConfig.systemPrompt?.includes(INTERCOM_BRIDGE_MARKER) === true,

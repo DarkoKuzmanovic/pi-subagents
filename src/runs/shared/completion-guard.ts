@@ -22,6 +22,11 @@ const EXPLICIT_NO_EDIT_PATTERNS = [
 	/\bdon't edit\b/i,
 	/\bdo not modify\b/i,
 	/\bdo not change files\b/i,
+	/\bedit nothing\b/i,
+	/\bmake no edits\b/i,
+	/\bmaking no edits\b/i,
+	/\bwithout (?:editing|making (?:any )?edits|making (?:any )?changes)\b/i,
+	/\bno edits? (?:needed|required|necessary)\b/i,
 ];
 
 // Tasks that are unambiguously analysis/read-only regardless of any embedded payload.

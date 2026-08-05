@@ -32,6 +32,7 @@ import {
 } from "../../shared/settings.ts";
 import { aggregateParallelOutputs, type ParallelTaskResult } from "../shared/parallel-utils.ts";
 import { discoverAvailableSkills, normalizeSkillInput } from "../../agents/skills.ts";
+import { shouldSkipContextFiles, type SubagentExecutionContext } from "../../shared/fork-context.ts";
 import { INTERCOM_BRIDGE_MARKER } from "../../intercom/intercom-bridge.ts";
 import { runSync } from "./execution.ts";
 import { buildChainSummary } from "../../shared/formatters.ts";
@@ -106,6 +107,7 @@ interface ParallelChainRunInput {
 	availableModels: ModelInfo[];
 	chainDir: string;
 	prev: string;
+	context?: SubagentExecutionContext;
 	outputs: ChainOutputMap;
 	originalTask: string;
 	ctx: ExtensionContext;
@@ -292,7 +294,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				outputPath,
 				outputMode: behavior.outputMode,
 				maxSubagentDepth,
-				skipContextFiles: input.inlineReads === true,
+				skipContextFiles: shouldSkipContextFiles(input.context),
 				controlConfig: input.controlConfig,
 				onControlEvent: input.onControlEvent,
 				intercomSessionName: input.childIntercomTarget?.(task.agent, input.globalTaskIndex + taskIndex),
@@ -391,6 +393,7 @@ interface ChainExecutionParams {
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	context?: SubagentExecutionContext;
 	inlineReads?: boolean;
 	nestedRoute?: NestedRouteInfo;
 	dynamicFanoutMaxItems?: number;
@@ -480,6 +483,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		intercomEvents,
 		chainSkills: chainSkillsParam,
 		chainDir: chainDirBase,
+		context,
 	} = params;
 	const chainSkills = chainSkillsParam ?? [];
 
@@ -730,6 +734,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 				const parallelResults = await runParallelChainTasks({
 					step,
+					context,
 					parallelTemplates,
 					parallelBehaviors,
 					agents,
@@ -926,6 +931,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 			const parallelResults = await runParallelChainTasks({
 				step: dynamicParallelStep,
+				context,
 				parallelTemplates: dynParallelTemplates,
 				rawParallelTemplates: materialized.parallel.map(() => step.parallel.task ?? "{previous}"),
 				parallelBehaviors: dynParallelBehaviors,
@@ -1134,7 +1140,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				outputPath,
 				outputMode: behavior.outputMode,
 				maxSubagentDepth,
-				skipContextFiles: params.inlineReads === true,
+				skipContextFiles: shouldSkipContextFiles(context),
 				outputSchema: seqStep.outputSchema,
 				controlConfig,
 				onControlEvent,

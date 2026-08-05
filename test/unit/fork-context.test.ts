@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createForkContextResolver, createSubagentContextResolver, resolveSubagentContext } from "../../src/shared/fork-context.ts";
+import { createForkContextResolver, createSubagentContextResolver, resolveSubagentContext, shouldSkipContextFiles } from "../../src/shared/fork-context.ts";
 
 describe("resolveSubagentContext", () => {
 	it("defaults to fresh", () => {
@@ -14,6 +14,23 @@ describe("resolveSubagentContext", () => {
 
 	it("accepts lineage", () => {
 		assert.equal(resolveSubagentContext("lineage"), "lineage");
+	});
+});
+
+describe("shouldSkipContextFiles", () => {
+	// Regression: roadmap debt item "README–code drift: --no-context-files for fresh children
+	// is documented but unwired" — fresh-context children must get --no-context-files so
+	// AGENTS.md/CLAUDE.md do not leak into their system prompt; forked/lineage children
+	// continue a real parent session and should keep inheriting context normally.
+	it("skips context files for fresh (default) context", () => {
+		assert.equal(shouldSkipContextFiles(undefined), true);
+		assert.equal(shouldSkipContextFiles("fresh"), true);
+		assert.equal(shouldSkipContextFiles("anything-unrecognized"), true);
+	});
+
+	it("keeps context files for fork and lineage", () => {
+		assert.equal(shouldSkipContextFiles("fork"), false);
+		assert.equal(shouldSkipContextFiles("lineage"), false);
 	});
 });
 
