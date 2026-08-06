@@ -4,7 +4,6 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -13,9 +12,10 @@ import type { AgentConfig } from "../../agents/agents.ts";
 import { formatUnknownAgentError } from "../../agents/agent-selection.ts";
 import { resolveModelLaneOverrides } from "../../agents/model-lanes.ts";
 import type { ThinkingLevel } from "../../shared/model-info.ts";
+import { shouldSkipContextFiles, type SubagentExecutionContext } from "../../shared/fork-context.ts";
 import { applyEffectiveThinkingSuffix } from "../shared/pi-args.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { buildChainInstructions, createParallelDirs, isDynamicParallelStep, isParallelStep, resolveParallelBehaviors, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type DynamicParallelStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import { buildChainInstructions, createChainDir, createParallelDirs, isDynamicParallelStep, isParallelStep, resolveParallelBehaviors, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type DynamicParallelStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerDynamicStep, RunnerStep } from "../shared/parallel-utils.ts";
 
 /**
@@ -29,8 +29,9 @@ import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, resolveModelCandidate, type AvailableModelInfo } from "../shared/model-fallback.ts";
-import { resolveExpectedWorktreeAgentCwd } from "../shared/worktree.ts";
+import { resolveExpectedWorktreeAgentCwd, resolveExpectedWorktreePath } from "../shared/worktree.ts";
 import { persistLaunchManifest } from "./async-launch-binding.ts";
+import { persistAsyncResumeLaunchTrust } from "./async-resume-trust.ts";
 import { staticParallelOmChildKey, staticSequentialOmChildKey } from "../shared/om-logical-keys.ts";
 import {
 	type ArtifactConfig,
@@ -73,24 +74,51 @@ export interface RequireLike {
 export interface JitiResolverDeps {
 	localRequire: RequireLike;
 	piRequire: RequireLike | undefined;
+	moduleRequire?: RequireLike;
+	moduleSearchStart?: string;
 	fileExists: (p: string) => boolean;
 }
 
 export function resolveJitiCliPath(deps: JitiResolverDeps): string | undefined {
-	const { localRequire, piRequire, fileExists } = deps;
-	const probes: Array<[RequireLike | undefined, string]> = [
-		[localRequire, "jiti"],
-		[localRequire, "@earendil-works/jiti"],
-		[piRequire, "@earendil-works/jiti"],
-		[piRequire, "jiti"],
+	const { localRequire, piRequire, moduleRequire, moduleSearchStart, fileExists } = deps;
+	const directProbes: Array<[RequireLike | undefined, string, string]> = [
+		[localRequire, "jiti", "lib/jiti-cli.mjs"],
+		[localRequire, "@earendil-works/jiti", "lib/jiti-cli.mjs"],
+		[moduleRequire, "jiti", "lib/jiti-cli.mjs"],
+		[moduleRequire, "@earendil-works/jiti", "lib/jiti-cli.mjs"],
+		[piRequire, "@earendil-works/jiti", "lib/jiti-cli.mjs"],
+		[piRequire, "jiti", "lib/jiti-cli.mjs"],
 	];
-	for (const [req, pkg] of probes) {
+	for (const [req, pkg, cliSubpath] of directProbes) {
 		if (!req) continue;
 		try {
-			const cliPath = path.join(path.dirname(req.resolve(`${pkg}/package.json`)), "lib/jiti-cli.mjs");
+			const cliPath = path.join(path.dirname(req.resolve(`${pkg}/package.json`)), cliSubpath);
 			if (fileExists(cliPath)) return cliPath;
 		} catch {
 			// Package not resolvable in this require context; continue probing.
+		}
+	}
+
+	// Pi's package exports deliberately hide its package.json and private dependencies. Under
+	// `node --test`, process.argv[1] also points at the test runner rather than the Pi CLI. Walk
+	// the finite node_modules ancestry from this module instead of relying on either mechanism.
+	if (moduleSearchStart !== undefined) {
+		let searchDir = path.resolve(moduleSearchStart);
+		while (true) {
+			const cliPath = path.join(
+				searchDir,
+				"node_modules",
+				"@earendil-works",
+				"pi-coding-agent",
+				"node_modules",
+				"jiti",
+				"lib",
+				"jiti-cli.mjs",
+			);
+			if (fileExists(cliPath)) return cliPath;
+			const parentDir = path.dirname(searchDir);
+			if (parentDir === searchDir) break;
+			searchDir = parentDir;
 		}
 	}
 	return undefined;
@@ -126,6 +154,8 @@ function getJitiCliPath(): string | undefined {
 	}
 	cachedJitiCliPath = resolveJitiCliPath({
 		localRequire: require,
+		moduleRequire: createRequire(import.meta.url),
+		moduleSearchStart: path.dirname(fileURLToPath(import.meta.url)),
 		piRequire: createPiRequire(),
 		fileExists: fs.existsSync,
 	});
@@ -142,6 +172,8 @@ interface AsyncExecutionContext {
 
 interface AsyncChainParams {
 	chain: ChainStep[];
+	chainDir?: string;
+	context?: SubagentExecutionContext;
 	task?: string;
 	resultMode?: SubagentRunMode;
 	agents: AgentConfig[];
@@ -172,6 +204,7 @@ interface AsyncSingleParams {
 	task?: string;
 	agentConfig: AgentConfig;
 	ctx: AsyncExecutionContext;
+	context?: SubagentExecutionContext;
 	cwd?: string;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
@@ -311,6 +344,16 @@ const UNAVAILABLE_SUBAGENT_SKILL_ERROR = "Skills not found: pi-subagents";
 class UnavailableSubagentSkillError extends Error {}
 class AsyncStartValidationError extends Error {}
 
+function assertAsyncWorktreePathAvailable(worktreePath: string): void {
+	try {
+		fs.lstatSync(worktreePath);
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") return;
+		throw error;
+	}
+	throw new AsyncStartValidationError(`Async worktree path already exists before launch: ${worktreePath}`);
+}
+
 /**
  * Execute a chain asynchronously
  */
@@ -320,6 +363,7 @@ export function executeAsyncChain(
 ): AsyncExecutionResult {
 	const {
 		chain,
+		chainDir: chainDirBase,
 		agents,
 		ctx,
 		cwd,
@@ -392,6 +436,13 @@ export function executeAsyncChain(
 			details: { mode: resultMode, results: [] },
 		};
 	}
+	let chainDir: string;
+	try {
+		chainDir = createChainDir(id, chainDirBase);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return formatAsyncStartError(resultMode, `Failed to create async chain directory for '${id}': ${message}`);
+	}
 
 	const omLaunchManifestPath = params.omLaunchManifest
 		? persistLaunchManifest(asyncDir, params.omLaunchManifest)
@@ -413,7 +464,16 @@ export function executeAsyncChain(
 			...(s.thinking ? { thinking: s.thinking } : {}),
 		};
 	};
-	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior, omLogicalChildKey?: string) => {
+	const buildSeqStep = (
+		s: SequentialStep,
+		sessionFile?: string,
+		behaviorCwd?: string,
+		progressPrecreated = false,
+		resolvedBehavior?: ResolvedStepBehavior,
+		omLogicalChildKey?: string,
+		outputCwd?: string,
+		worktreeOutputContainmentBase?: string,
+	) => {
 		const a = agents.find((x) => x.name === s.agent)!;
 		const stepCwd = resolveChildCwd(runnerCwd, s.cwd);
 		const instructionCwd = behaviorCwd ?? stepCwd;
@@ -431,8 +491,11 @@ export function executeAsyncChain(
 		const readInstructions = buildChainInstructions({ ...behavior, output: false, progress: false }, instructionCwd, false);
 		const isFirstProgressAgent = behavior.progress && !progressPrecreated && !progressInstructionCreated;
 		if (behavior.progress) progressInstructionCreated = true;
-		const progressInstructions = buildChainInstructions({ ...behavior, output: false, reads: false }, runnerCwd, isFirstProgressAgent);
-		const outputPath = resolveSingleOutputPath(behavior.output, ctx.cwd, instructionCwd);
+		const progressInstructions = buildChainInstructions({ ...behavior, output: false, reads: false }, chainDir, isFirstProgressAgent);
+		const outputPath = resolveSingleOutputPath(behavior.output, ctx.cwd, outputCwd ?? instructionCwd);
+		const relativeOutputContainmentBase = worktreeOutputContainmentBase && typeof behavior.output === "string" && !path.isAbsolute(behavior.output)
+			? worktreeOutputContainmentBase
+			: undefined;
 		const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Async step (${s.agent})`);
 		if (validationError) throw new AsyncStartValidationError(validationError);
 		const task = injectSingleOutputInstruction(`${readInstructions.prefix}${s.task ?? "{previous}"}${progressInstructions.suffix}`, outputPath);
@@ -453,10 +516,12 @@ export function executeAsyncChain(
 			systemPromptMode: a.systemPromptMode,
 			inheritProjectContext: a.inheritProjectContext,
 			inheritSkills: a.inheritSkills,
+			skipContextFiles: shouldSkipContextFiles(params.context),
 			modelPromptRole: a.modelPromptRole,
 			modelPromptRoleFallbackModel: ctx.currentModel,
 			skills: resolvedSkills.map((r) => r.name),
 			outputPath,
+			...(relativeOutputContainmentBase ? { relativeOutputContainmentBase } : {}),
 			outputMode: behavior.outputMode,
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
@@ -486,7 +551,8 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 		};
 		const behavior = suppressProgressForReadOnlyTask(resolveStepBehavior(a, stepOverride, chainSkills), DYNAMIC_ITEM_TASK_SENTINEL, originalTask);
 		const isFirstProgressAgent = behavior.progress && !progressInstructionCreated;
-		const progressSuffix = buildChainInstructions({ ...behavior, output: false, reads: false }, runnerCwd, isFirstProgressAgent).suffix;
+		if (isFirstProgressAgent) writeInitialProgressFile(chainDir);
+		const progressSuffix = buildChainInstructions({ ...behavior, output: false, reads: false }, chainDir, isFirstProgressAgent).suffix;
 
 		// Resolve parallel.lane to concrete model/thinking for the template, matching the static
 		// parallel path (applyResolvedLaneToChainStep in subagent-executor.ts).
@@ -497,11 +563,18 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 			thinking: s.parallel.thinking as ThinkingLevel | undefined,
 		});
 
+		// Keep output wrapping in the template without resolving the real relative path
+		// against the child CWD. The runner replaces this absolute sentinel after it
+		// materializes the item's namespaced chain directory.
+		const deferredOutputPath = typeof behavior.output === "string"
+			? path.join(chainDir, `.dynamic-output-${stepIndex}`)
+			: false;
+
 		const templateSource: SequentialStep = {
 			agent: s.parallel.agent,
 			task: DYNAMIC_ITEM_TASK_SENTINEL,
 			...(s.parallel.cwd !== undefined ? { cwd: s.parallel.cwd } : {}),
-			...(s.parallel.output !== undefined ? { output: s.parallel.output } : {}),
+			output: deferredOutputPath,
 			...(s.parallel.outputMode !== undefined ? { outputMode: s.parallel.outputMode } : {}),
 			...(s.parallel.reads !== undefined ? { reads: s.parallel.reads } : {}),
 			...(s.parallel.progress !== undefined ? { progress: s.parallel.progress } : {}),
@@ -535,22 +608,20 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 						.map((behavior, taskIndex) => suppressProgressForReadOnlyTask(behavior, s.parallel[taskIndex]?.task, originalTask));
 				const progressPrecreated = parallelBehaviors.some((behavior) => behavior.progress);
 				if (progressPrecreated) {
-					if (!s.worktree) writeInitialProgressFile(runnerCwd);
+					writeInitialProgressFile(chainDir);
 					progressInstructionCreated = true;
 				}
-				if (resultMode !== "parallel") {
-					const agentNames = s.parallel.map((task) => task.agent);
-					if (s.worktree) {
-						for (let taskIndex = 0; taskIndex < agentNames.length; taskIndex++) {
-							try {
-								const taskCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, taskIndex);
-								fs.mkdirSync(path.join(taskCwd, `parallel-${stepIndex}`, `${taskIndex}-${agentNames[taskIndex]}`), { recursive: true });
-							} catch (error) {
-								console.warn(`[pi-subagents] Unable to pre-create async worktree parallel output directory for run ${id} step ${stepIndex} task ${taskIndex}: ${error instanceof Error ? error.message : String(error)}`);
-							}
-						}
-					} else {
-						createParallelDirs(runnerCwd, stepIndex, s.parallel.length, agentNames);
+				const agentNames = s.parallel.map((task) => task.agent);
+				if (s.worktree) {
+					for (let taskIndex = 0; taskIndex < agentNames.length; taskIndex++) {
+						assertAsyncWorktreePathAvailable(resolveExpectedWorktreePath(`${id}-s${stepIndex}`, taskIndex));
+					}
+				} else if (resultMode !== "parallel") {
+					try {
+						createParallelDirs(chainDir, stepIndex, s.parallel.length, agentNames);
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						throw new AsyncStartValidationError(`Failed to prepare async parallel output namespace for step ${stepIndex + 1}: ${message}`);
 					}
 				}
 				return {
@@ -559,10 +630,16 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 						if (s.worktree) {
 							try {
 								behaviorCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, taskIndex);
-							} catch {
-								behaviorCwd = undefined;
+							} catch (error) {
+								const message = error instanceof Error ? error.message : String(error);
+								throw new AsyncStartValidationError(`Failed to resolve async worktree cwd for step ${stepIndex + 1}, task ${taskIndex + 1}: ${message}`);
 							}
 						}
+						const worktreeOutputContainmentBase = s.worktree && behaviorCwd
+							? resultMode === "parallel"
+								? behaviorCwd
+								: path.join(behaviorCwd, `parallel-${stepIndex}`, `${taskIndex}-${t.agent}`)
+							: undefined;
 						return buildSeqStep(
 							t,
 							nextSessionFile(),
@@ -570,6 +647,8 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 							progressPrecreated,
 							parallelBehaviors[taskIndex],
 							omLaunchManifestPath ? staticParallelOmChildKey(stepIndex, taskIndex) : undefined,
+							resultMode === "chain" && !s.worktree ? chainDir : undefined,
+							worktreeOutputContainmentBase,
 						);
 					}),
 					concurrency: s.concurrency,
@@ -577,7 +656,15 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 					worktree: s.worktree,
 				};
 			}
-			return buildSeqStep(s as SequentialStep, nextSessionFile(), undefined, false, undefined, omLaunchManifestPath ? staticSequentialOmChildKey(stepIndex) : undefined);
+			return buildSeqStep(
+				s as SequentialStep,
+				nextSessionFile(),
+				undefined,
+				false,
+				undefined,
+				omLaunchManifestPath ? staticSequentialOmChildKey(stepIndex) : undefined,
+				resultMode === "chain" ? chainDir : undefined,
+			);
 		});
 	} catch (error) {
 		if (error instanceof UnavailableSubagentSkillError || error instanceof AsyncStartValidationError) return formatAsyncStartError(resultMode, error.message);
@@ -592,6 +679,17 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 		return [childIntercomTarget(step.agent, childTargetIndex++)];
 	}) : undefined;
 
+	const asyncSessionDir = sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined;
+	try {
+		persistAsyncResumeLaunchTrust(asyncDir, {
+			trustedSessionRoots: asyncSessionDir ? [asyncSessionDir] : [],
+			trustedSessionFiles: sessionFilesByFlatIndex ?? [],
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return formatAsyncStartError(resultMode, `Failed to persist async resume trust for '${id}': ${message}`);
+	}
+
 	let spawnResult: { pid?: number; error?: string } = {};
 	try {
 		spawnResult = spawnRunner(
@@ -599,6 +697,7 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 				id,
 				steps,
 				resultPath: path.join(RESULTS_DIR, `${id}.json`),
+				chainDir,
 				cwd: runnerCwd,
 				placeholder: "{previous}",
 				maxOutput,
@@ -606,7 +705,7 @@ const buildDynamicStep = (s: DynamicParallelStep, stepIndex: number): RunnerDyna
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
 				share: shareEnabled,
-				sessionDir: sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined,
+				sessionDir: asyncSessionDir,
 				asyncDir,
 				sessionId: ctx.currentSessionId,
 				piPackageRoot,
@@ -716,6 +815,7 @@ export function executeAsyncSingle(
 
 	return executeAsyncChain(id, {
 		chain: [step],
+		context: params.context,
 		omLaunchManifest: params.omLaunchManifest,
 		task: params.task,
 		resultMode: "single",

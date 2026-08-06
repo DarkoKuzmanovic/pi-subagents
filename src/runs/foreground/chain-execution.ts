@@ -65,7 +65,7 @@ import {
 	resolveChildMaxSubagentDepth,
 } from "../../shared/types.ts";
 import { resolveModelCandidate } from "../shared/model-fallback.ts";
-import { validateFileOnlyOutputMode } from "../shared/single-output.ts";
+import { resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { emptyUsage } from "../shared/usage.ts";
 import { budgetSummary, createSessionTokenBudget, recordBudgetUsage, shouldDispatchWithBudget, type SessionTokenBudget } from "../shared/session-tokens.ts";
 
@@ -254,9 +254,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				})()
 				: resolveChildCwd(input.cwd ?? input.ctx.cwd, task.cwd);
 
-			const outputPath = typeof behavior.output === "string"
-				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(input.chainDir, behavior.output))
-				: undefined;
+			const outputPath = resolveSingleOutputPath(behavior.output, input.chainDir);
 			const interruptController = new AbortController();
 			if (input.foregroundControl) {
 				input.foregroundControl.currentAgent = task.agent;
@@ -714,9 +712,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					.map((behavior, taskIndex) => suppressProgressForReadOnlyTask(behavior, parallelTemplates[taskIndex] ?? step.parallel[taskIndex]?.task, originalTask));
 				for (let taskIndex = 0; taskIndex < step.parallel.length; taskIndex++) {
 					const behavior = parallelBehaviors[taskIndex]!;
-					const outputPath = typeof behavior.output === "string"
-						? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
-						: undefined;
+					const outputPath = resolveSingleOutputPath(behavior.output, chainDir);
 					const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Parallel chain step ${stepIndex + 1} task ${taskIndex + 1} (${step.parallel[taskIndex]?.agent ?? "<missing>"})`);
 					if (validationError) return buildChainExecutionErrorResult(validationError, {
 						results,
@@ -856,9 +852,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 				const taskResults: ParallelTaskResult[] = parallelResults.map((result, i) => {
 					const outputTarget = parallelBehaviors[i]?.output;
-					const outputTargetPath = typeof outputTarget === "string"
-						? (path.isAbsolute(outputTarget) ? outputTarget : path.join(chainDir, outputTarget))
-						: undefined;
+					const outputTargetPath = resolveSingleOutputPath(outputTarget, chainDir);
 					return {
 						agent: result.agent,
 						taskIndex: i,
@@ -917,9 +911,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 			for (let taskIndex = 0; taskIndex < dynamicParallelStep.parallel.length; taskIndex++) {
 				const behavior = dynParallelBehaviors[taskIndex]!;
-				const outputPath = typeof behavior.output === "string"
-					? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
-					: undefined;
+				const outputPath = resolveSingleOutputPath(behavior.output, chainDir);
 				const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Dynamic chain step ${stepIndex + 1} item ${taskIndex + 1} (${dynamicParallelStep.parallel[taskIndex]?.agent ?? "<missing>"})`);
 				if (validationError) return buildChainExecutionErrorResult(validationError, {
 					results, includeProgress, allProgress, allArtifactPaths, artifactsDir, chainAgents, totalSteps, currentStepIndex: stepIndex,
@@ -1091,9 +1083,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				?? resolveModelCandidate(agentConfig.model, availableModels, ctx.model?.provider)
 				?? (behavior.thinking ? currentModelFullId(ctx.model) : undefined);
 
-			const outputPath = typeof behavior.output === "string"
-				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
-				: undefined;
+			const outputPath = resolveSingleOutputPath(behavior.output, chainDir);
 			const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Chain step ${stepIndex + 1} (${seqStep.agent})`);
 			if (validationError) {
 				return buildChainExecutionErrorResult(validationError, {
@@ -1255,16 +1245,14 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 			if (behavior.output) {
 				try {
-					const expectedPath = path.isAbsolute(behavior.output)
-						? behavior.output
-						: path.join(chainDir, behavior.output);
+					const expectedPath = resolveSingleOutputPath(behavior.output, chainDir);
 					if (!fs.existsSync(expectedPath)) {
 						const dirFiles = fs.readdirSync(chainDir);
 						const mdFiles = dirFiles.filter((file) => file.endsWith(".md") && file !== "progress.md");
 						const warning = mdFiles.length > 0
 							? `Agent wrote to different file(s): ${mdFiles.join(", ")} instead of ${behavior.output}`
 							: `Agent did not create expected output file: ${behavior.output}`;
-						r.error = r.error ? `${r.error}\n${warning}` : warning;
+						r.outputSaveError = r.outputSaveError ? `${r.outputSaveError}\n${warning}` : warning;
 					}
 				} catch {
 					// Ignore validation errors; this diagnostic should not mask successful chain output.

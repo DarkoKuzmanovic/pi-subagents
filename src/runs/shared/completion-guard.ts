@@ -23,10 +23,12 @@ const EXPLICIT_NO_EDIT_PATTERNS = [
 	/\bdo not modify\b/i,
 	/\bdo not change files\b/i,
 	/\bedit nothing\b/i,
-	/\bmake no edits\b/i,
-	/\bmaking no edits\b/i,
-	/\bwithout (?:editing|making (?:any )?edits|making (?:any )?changes)\b/i,
-	/\bno edits? (?:needed|required|necessary)\b/i,
+	// Scoped-aware: "no edits needed to tests" / "without editing the parser" constrains
+	// only a target, so an implementation dispatch carrying such a phrase still mutates.
+	/\bmake no edits\b(?=\s*(?:[.!?;\n]|$))/i,
+	/\bmaking no edits\b(?=\s*(?:[.!?;\n]|$))/i,
+	/\bwithout (?:editing|making (?:any )?edits|making (?:any )?changes)\b(?=\s*(?:[.!?;\n]|$))/i,
+	/\bno edits? (?:needed|required|necessary)\b(?=\s*(?:[.!?;\n]|$))/i,
 ];
 
 // Tasks that are unambiguously analysis/read-only regardless of any embedded payload.

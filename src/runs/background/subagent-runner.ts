@@ -79,14 +79,15 @@ import {
 	formatWorktreeTaskCwdConflict,
 	type WorktreeSetup,
 } from "../shared/worktree.ts";
-import { resolveParallelItemOutputPath, suppressProgressForReadOnlyTask, writeInitialProgressFile } from "../../shared/settings.ts";
+import { resolveParallelItemOutputPath, suppressProgressForReadOnlyTask } from "../../shared/settings.ts";
+import { materializeDirectoryWithinRoot, revalidateResolvedRelativeOutputPath } from "../../shared/path-containment.ts";
 import { emptyUsage, tokenUsageFromAttempts } from "../shared/usage.ts";
 import { appendTokenFooter } from "../../shared/token-footer.ts";
-import { budgetSummary, createSessionTokenBudget, recordBudgetUsage, shouldDispatchWithBudget, type SessionTokenBudget } from "../shared/session-tokens.ts";
+import { budgetSummary, createSessionTokenBudget, recordBudgetUsage, shouldDispatchWithBudget } from "../shared/session-tokens.ts";
 import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
-import { getStderrTail } from "../shared/stderr-tail.ts";
+import { createBoundedStderrBuffer, getStderrTail } from "../shared/stderr-tail.ts";
 import { createRunEventAppender, createStreamWatchdog } from "../shared/stream-budget.ts";
 import { appendBudgetSkippedRunnerSteps } from "./budget-skip.ts";
 
@@ -104,6 +105,7 @@ interface SubagentRunConfig {
 	id: string;
 	steps: RunnerStep[];
 	resultPath: string;
+	chainDir: string;
 	omLaunchManifestPath?: string;
 	cwd: string;
 	placeholder: string;
@@ -212,6 +214,10 @@ interface RunPiStreamingResult {
 	observedMutationAttempt?: boolean;
 }
 
+function formatAsyncOutputStreamError(outputFile: string, error: unknown): string {
+	return `Failed to write async output log '${outputFile}': ${error instanceof Error ? error.message : String(error)}`;
+}
+
 function runPiStreaming(
 	args: string[],
 	cwd: string,
@@ -225,7 +231,20 @@ function runPiStreaming(
 	onChildEvent?: (event: ChildEvent) => void,
 ): Promise<RunPiStreamingResult> {
 	return new Promise((resolve) => {
-		const outputStream = fs.createWriteStream(outputFile, { flags: "w" });
+		let outputStream: ReturnType<typeof fs.createWriteStream>;
+		try {
+			outputStream = fs.createWriteStream(outputFile, { flags: "w" });
+		} catch (streamError) {
+			resolve({
+				stderr: "",
+				exitCode: 1,
+				messages: [],
+				usage: emptyUsage(),
+				error: formatAsyncOutputStreamError(outputFile, streamError),
+				finalOutput: "",
+			});
+			return;
+		}
 		const spawnEnv = { ...process.env, ...(env ?? {}), ...getSubagentDepthEnv(maxSubagentDepth) };
 		const spawnSpec = getPiSpawnCommand(args, {
 			...(piPackageRoot ? { piPackageRoot } : {}),
@@ -237,9 +256,10 @@ function runPiStreaming(
 			env: spawnEnv,
 			windowsHide: true,
 		});
-		let stderr = "";
+		const stderrBuffer = createBoundedStderrBuffer();
+		const stderrEventFragmentChars = 16 * 1024;
+		let stderrEventFragment = "";
 		let stdoutBuf = "";
-		let stderrBuf = "";
 		const messages: Message[] = [];
 		const usage = emptyUsage();
 		let model: string | undefined;
@@ -247,14 +267,22 @@ function runPiStreaming(
 		let errorFromChildMessage = false;
 		let interrupted = false;
 		let observedMutationAttempt = false;
+		let settled = false;
+		let outputStreamError: string | undefined;
+		let finishPendingOutputStream: (() => void) | undefined;
+		let handleOutputStreamError: (streamError: unknown) => void = () => {};
 		const rawStdoutLines: string[] = [];
 		// Runaway-stream watchdog: aborts children that flood stdout without any
 		// meaningful progress marker (thinking loops), or exceed the hard cap.
 		const streamWatchdog = createStreamWatchdog();
 
 		const writeOutputLine = (line: string) => {
-			if (!line.trim()) return;
-			outputStream.write(`${line}\n`);
+			if (!line.trim() || outputStreamError) return;
+			try {
+				outputStream.write(`${line}\n`);
+			} catch (streamError) {
+				handleOutputStreamError(streamError);
+			}
 		};
 
 		const writeOutputText = (text: string) => {
@@ -296,6 +324,35 @@ function runPiStreaming(
 					if (!settled) trySignalChild(child, "SIGKILL");
 				}, HARD_KILL_MS).unref?.();
 			}, 1000).unref?.();
+		};
+
+		handleOutputStreamError = (streamError: unknown): void => {
+			if (outputStreamError) return;
+			outputStreamError = formatAsyncOutputStreamError(outputFile, streamError);
+			handleRunawayError(outputStreamError);
+			finishPendingOutputStream?.();
+		};
+		outputStream.on("error", handleOutputStreamError);
+
+		const finishOutputStream = (done: () => void): void => {
+			if (outputStreamError) {
+				done();
+				return;
+			}
+			let finished = false;
+			const finish = (): void => {
+				if (finished) return;
+				finished = true;
+				finishPendingOutputStream = undefined;
+				done();
+			};
+			finishPendingOutputStream = finish;
+			try {
+				outputStream.end(finish);
+			} catch (streamError) {
+				handleOutputStreamError(streamError);
+				finish();
+			}
 		};
 
 		const lineProcessor = createLineProcessor({
@@ -362,16 +419,22 @@ function runPiStreaming(
 			lineProcessor.processLine(line);
 		};
 
-		const processStderrText = (text: string) => {
-			stderr += text;
-			stderrBuf += text;
-			outputStream.write(text);
-			if (!childEventContext) return;
-			const lines = stderrBuf.split("\n");
-			stderrBuf = lines.pop() || "";
+		const processStderrChunk = (chunk: Buffer) => {
+			const stderrError = stderrBuffer.append(chunk);
+			if (stderrError) handleRunawayError(stderrError);
+			if (stderrBuffer.tripped || !childEventContext) return;
+
+			stderrEventFragment += chunk.toString();
+			const lines = stderrEventFragment.split("\n");
+			stderrEventFragment = lines.pop() || "";
 			for (const line of lines) {
 				if (!line.trim()) continue;
 				appendChildLine("subagent.child.stderr", line);
+			}
+			while (stderrEventFragment.length > stderrEventFragmentChars) {
+				const fragment = stderrEventFragment.slice(0, stderrEventFragmentChars);
+				stderrEventFragment = stderrEventFragment.slice(stderrEventFragmentChars);
+				appendChildLine("subagent.child.stderr", `${fragment} [continued]`);
 			}
 		};
 
@@ -382,7 +445,6 @@ function runPiStreaming(
 		let cleanTerminalAssistantStopReceived = false;
 		let finalDrainTimer: NodeJS.Timeout | undefined;
 		let finalHardKillTimer: NodeJS.Timeout | undefined;
-		let settled = false;
 		const clearStdioGuard = attachPostExitStdioGuard(child, { idleMs: 2000, hardMs: 8000 });
 		child.stdout.on("data", (chunk: Buffer) => {
 			const runawayError = streamWatchdog.addBytes(chunk.length);
@@ -397,7 +459,7 @@ function runPiStreaming(
 		});
 
 		child.stderr.on("data", (chunk: Buffer) => {
-			processStderrText(chunk.toString());
+			processStderrChunk(chunk);
 		});
 		registerInterrupt?.(() => {
 			if (settled) return;
@@ -441,37 +503,42 @@ function runPiStreaming(
 			clearDrainTimers();
 		});
 		child.on("close", (exitCode, signal) => {
+			if (settled) return;
 			settled = true;
 			registerInterrupt?.(undefined);
 			clearDrainTimers();
 			clearStdioGuard();
 			if (!streamWatchdog.tripped && stdoutBuf.trim()) processStdoutLine(stdoutBuf);
-			if (stderrBuf.trim()) appendChildLine("subagent.child.stderr", stderrBuf);
-			outputStream.end();
-			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
-			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && cleanTerminalAssistantStopReceived && !error;
-			resolve({
-				stderr,
-				exitCode: interrupted || forcedDrainAfterFinalSuccess ? 0 : forcedTerminationSignal || signal ? (exitCode ?? 1) : exitCode,
-				messages,
-				usage,
-				model,
-				error: interrupted || forcedDrainAfterFinalSuccess ? undefined : error,
-				finalOutput,
-				interrupted,
-				observedMutationAttempt,
+			if (stderrEventFragment.trim()) appendChildLine("subagent.child.stderr", stderrEventFragment);
+			finishOutputStream(() => {
+				const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
+				const effectiveError = outputStreamError ?? error;
+				const forcedDrainAfterFinalSuccess = forcedTerminationSignal && cleanTerminalAssistantStopReceived && !effectiveError;
+				resolve({
+					stderr: stderrBuffer.text(),
+					exitCode: outputStreamError ? 1 : interrupted || forcedDrainAfterFinalSuccess ? 0 : forcedTerminationSignal || signal ? (exitCode ?? 1) : exitCode,
+					messages,
+					usage,
+					model,
+					error: outputStreamError ?? (interrupted || forcedDrainAfterFinalSuccess ? undefined : error),
+					finalOutput,
+					interrupted,
+					observedMutationAttempt,
+				});
 			});
 		});
 
 		child.on("error", (spawnError) => {
+			if (settled) return;
 			settled = true;
 			registerInterrupt?.(undefined);
 			clearDrainTimers();
 			clearStdioGuard();
-			outputStream.end();
-			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
-			const spawnErrorMessage = spawnError instanceof Error ? spawnError.message : String(spawnError);
-			resolve({ stderr, exitCode: 1, messages, usage, model, error: error ?? spawnErrorMessage, finalOutput, observedMutationAttempt });
+			finishOutputStream(() => {
+				const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
+				const spawnErrorMessage = spawnError instanceof Error ? spawnError.message : String(spawnError);
+				resolve({ stderr: stderrBuffer.text(), exitCode: 1, messages, usage, model, error: outputStreamError ?? error ?? spawnErrorMessage, finalOutput, observedMutationAttempt });
+			});
 		});
 	});
 }
@@ -689,6 +756,7 @@ async function runSingleStep(
 				model: candidate,
 				inheritProjectContext: step.inheritProjectContext,
 				inheritSkills: step.inheritSkills,
+				skipContextFiles: step.skipContextFiles,
 				tools: step.tools,
 				extensions: step.extensions,
 				systemPrompt: step.systemPrompt,
@@ -984,14 +1052,9 @@ function appendParallelWorktreeSummary(
 	return `${previousOutput}\n\n${diffSummary}`;
 }
 
-function ensureParallelProgressFile(cwd: string, group: Extract<RunnerStep, { parallel: SubagentStep[] }>): void {
-	const progressPath = path.join(cwd, "progress.md");
-	if (!group.parallel.some((task) => task.task.includes(`Update progress at: ${progressPath}`))) return;
-	writeInitialProgressFile(cwd);
-}
 
 async function runSubagent(config: SubagentRunConfig): Promise<void> {
-	const { id, steps, resultPath, cwd, placeholder, taskIndex, totalTasks, maxOutput, artifactsDir, artifactConfig } =
+	const { id, steps, resultPath, chainDir, cwd, placeholder, taskIndex, totalTasks, maxOutput, artifactsDir, artifactConfig } =
 		config;
 	let previousOutput = "";
 	const outputs: ChainOutputMap = {};
@@ -1615,7 +1678,27 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							? { hookPath: config.worktreeSetupHook, timeoutMs: config.worktreeSetupHookTimeoutMs }
 							: undefined,
 					});
+					for (let taskIndex = 0; taskIndex < group.parallel.length; taskIndex++) {
+						const worktree = worktreeSetup.worktrees[taskIndex];
+						const task = group.parallel[taskIndex];
+						if (!worktree || !task) {
+							throw new Error(`worktree dispatch: no worktree/task pair at index ${taskIndex} (have ${worktreeSetup.worktrees.length} worktrees)`);
+						}
+						if (config.resultMode !== "parallel") {
+							materializeDirectoryWithinRoot(
+								path.join(worktree.agentCwd, `parallel-${stepIndex}`, `${taskIndex}-${task.agent}`),
+								worktree.agentCwd,
+							);
+						}
+						if (task.outputPath && task.relativeOutputContainmentBase) {
+							revalidateResolvedRelativeOutputPath(task.outputPath, task.relativeOutputContainmentBase, worktree.agentCwd);
+						}
+					}
 				} catch (error) {
+					if (worktreeSetup) {
+						cleanupWorktrees(worktreeSetup);
+						worktreeSetup = undefined;
+					}
 					const setupError = error instanceof Error ? error.message : String(error);
 					const failedAt = Date.now();
 					markParallelGroupSetupFailure({
@@ -1637,7 +1720,6 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			try {
-				if (group.worktree) ensureParallelProgressFile(cwd, group);
 				const groupStartTime = Date.now();
 				markParallelGroupRunning({
 					statusPayload,
@@ -1726,9 +1808,6 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
 						}
-						if (task.as && isStorableStepResult(singleResult)) {
-							outputs[task.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
-						}
 
 						const taskEndTime = Date.now();
 						const taskDuration = taskEndTime - taskStartTime;
@@ -1740,6 +1819,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						// and interruptRunner's "paused" state when the run was interrupted. Without this,
 						// a timed-out/interrupted child returns exitCode 0 and overwrites status to "complete".
 						const wasTimedOut = statusPayload.steps[fi].activityState === "timed_out";
+						if (task.as && !wasTimedOut && isStorableStepResult(singleResult)) {
+							outputs[task.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
+						}
 						if (!wasTimedOut && !interrupted) {
 							statusPayload.steps[fi].status = singleResult.exitCode === 0 ? "complete" : "failed";
 							statusPayload.steps[fi].endedAt = taskEndTime;
@@ -1781,7 +1863,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							appendControlEvent(event);
 						}
 
-						if (singleResult.exitCode !== 0 && failFast) aborted = true;
+						if ((singleResult.exitCode !== 0 || wasTimedOut) && failFast) aborted = true;
 						return { ...singleResult, skipped: false };
 					},
 				);
@@ -1845,8 +1927,12 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				// step, aggregate the per-item results into outputs[collect.as] so downstream steps
 				// can reference {outputs.<as>}. Only on full success — a hard failure breaks below and
 				// downstream never runs, mirroring the foreground contract.
+				// A step killed by inactivity timeout resolves exitCode 0 through the interrupt path;
+				// treat it as the hard failure the durable killStep state records it as.
+				const stepTimedOut = (i: number): boolean => statusPayload.steps[groupStartFlatIndex + i]?.activityState === "timed_out";
+				const stepHardFailed = (r: { exitCode: number | null | undefined }, i: number): boolean => (r.exitCode !== 0 && r.exitCode !== -1) || stepTimedOut(i);
 				if (group.collect && group.dynamicStep && group.dynamicItems) {
-					const hardFailure = runTimedOut || parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1);
+					const hardFailure = runTimedOut || parallelResults.some(stepHardFailed);
 					if (!hardFailure) {
 						const collectAgent = group.dynamicAgent ?? group.dynamicStep.parallel.agent;
 						const collected = collectDynamicResults(group.dynamicStep, group.dynamicItems, parallelResults);
@@ -1869,10 +1955,10 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					ts: Date.now(),
 					runId: id,
 					stepIndex,
-					success: !runTimedOut && parallelResults.every((r) => r.exitCode === 0 || r.exitCode === -1),
+					success: !runTimedOut && parallelResults.every((r, i) => (r.exitCode === 0 || r.exitCode === -1) && !stepTimedOut(i)),
 				});
 
-				if (runTimedOut || parallelResults.some((r) => r.exitCode !== 0 && r.exitCode !== -1)) {
+				if (runTimedOut || parallelResults.some(stepHardFailed)) {
 					// For dynamic fanout, surface the per-item key of each failed item (mirrors the
 					// foreground "Item K (agent, key X)" diagnostics) so status.json/results identify
 					// which expanded items failed rather than just naming the agent.
@@ -1944,31 +2030,44 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			// Clone the pre-resolved template per item, swapping the sentinel for the item task.
 			// Recompute read-only progress suppression per item so async behavior matches the
 			// foreground path (which resolves against the real per-item task text).
-			const materializedSteps: SubagentStep[] = materialized.parallel.map((task, itemIndex) => {
-				const rawTask = dyn.step.parallel.task ?? "{previous}";
-				const itemBehavior = suppressProgressForReadOnlyTask(dyn.behavior, rawTask, dyn.originalTask);
-				let itemTask = dyn.template.task.split(dyn.sentinel).join(rawTask);
-				if (!itemBehavior.progress && dyn.progressSuffix) {
-					itemTask = itemTask.replace(dyn.progressSuffix, "");
-				}
-				const outputPath = resolveParallelItemOutputPath(dyn.behavior.output, cwd, dyn.stepIndex, itemIndex, dyn.template.agent);
-				if (outputPath) {
-					fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-					itemTask = itemTask.replace(/\*\*Output:\*\* Write your findings to: .+$/m, `**Output:** Write your findings to: ${outputPath}`);
-				}
-				const omSlot = omDynamicSlots?.slots[itemIndex];
-				const omSessionFile = omSlot ? path.join(asyncDir, "om-sessions", `${dynStepIndex}-${itemIndex}.jsonl`) : undefined;
-				if (omSessionFile) fs.mkdirSync(path.dirname(omSessionFile), { recursive: true });
-				return {
-					...task,
-					...dyn.template,
-					...(outputPath ? { outputPath } : {}),
-					task: itemTask,
-					dynamicItemName: dyn.step.expand.item ?? "item",
-					dynamicItem: materialized.items[itemIndex]?.item,
-					...(omSlot ? { omLogicalChildKey: omSlot.logicalChildKey, sessionFile: omSessionFile } : {}),
-				};
-			});
+			let materializedSteps: SubagentStep[];
+			try {
+				materializedSteps = materialized.parallel.map((task, itemIndex) => {
+					const rawTask = dyn.step.parallel.task ?? "{previous}";
+					const itemBehavior = suppressProgressForReadOnlyTask(dyn.behavior, rawTask, dyn.originalTask);
+					let itemTask = dyn.template.task.split(dyn.sentinel).join(rawTask);
+					if (!itemBehavior.progress && dyn.progressSuffix) {
+						itemTask = itemTask.replace(dyn.progressSuffix, "");
+					}
+					const outputPath = resolveParallelItemOutputPath(dyn.behavior.output, chainDir, dyn.stepIndex, itemIndex, dyn.template.agent);
+					if (outputPath) {
+						fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+						const materializedOutputPath = resolveParallelItemOutputPath(dyn.behavior.output, chainDir, dyn.stepIndex, itemIndex, dyn.template.agent);
+						if (!materializedOutputPath || materializedOutputPath !== outputPath) {
+							throw new Error(`Parallel output path changed during namespace materialization: ${outputPath}`);
+						}
+						itemTask = itemTask.replace(/\*\*Output:\*\* Write your findings to: .+$/m, `**Output:** Write your findings to: ${materializedOutputPath}`);
+					}
+					const omSlot = omDynamicSlots?.slots[itemIndex];
+					const omSessionFile = omSlot ? path.join(asyncDir, "om-sessions", `${dynStepIndex}-${itemIndex}.jsonl`) : undefined;
+					if (omSessionFile) fs.mkdirSync(path.dirname(omSessionFile), { recursive: true });
+					return {
+						...task,
+						...dyn.template,
+						...(outputPath ? { outputPath } : {}),
+						task: itemTask,
+						dynamicItemName: dyn.step.expand.item ?? "item",
+						dynamicItem: materialized.items[itemIndex]?.item,
+						...(omSlot ? { omLogicalChildKey: omSlot.logicalChildKey, sessionFile: omSessionFile } : {}),
+					};
+				});
+			} catch (error) {
+				const message = formatMaterializationError(error);
+				results.push({ agent: dyn.step.parallel.agent, output: message, error: message, success: false });
+				statusPayload.error = message;
+				appendRunEvent(eventsPath, { type: "subagent.step.failed", ts: Date.now(), runId: id, stepIndex: dynStepIndex, agent: dyn.step.parallel.agent, error: message });
+				break;
+			}
 			const count = materializedSteps.length;
 
 			// Splice runtime flat-index slots at flatIndex. Post-fanout steps have not run yet, so
@@ -2060,13 +2159,13 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			previousOutput = singleResult.output;
-			if (seqStep.as && isStorableStepResult(singleResult)) {
-				outputs[seqStep.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
-			}
 			// A run-timeout kill reuses the same interrupt path as a user pause, which always
 			// resolves the child with exitCode 0 and a suppressed error. Trust the durable
 			// killStep-recorded step state instead of the raw child result.
 			const wasTimedOut = statusPayload.steps[flatIndex].activityState === "timed_out";
+			if (seqStep.as && !wasTimedOut && isStorableStepResult(singleResult)) {
+				outputs[seqStep.as] = outputEntryFromAsyncResult({ agent: singleResult.agent, output: singleResult.output, structuredOutput: singleResult.structuredOutput }, stepIndex);
+			}
 			results.push({
 				agent: singleResult.agent,
 				output: singleResult.output,

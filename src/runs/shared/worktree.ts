@@ -152,7 +152,7 @@ function buildWorktreeBranch(runId: string, index: number): string {
 	return `pi-parallel-${runId}-${index}`;
 }
 
-function buildWorktreePath(runId: string, index: number): string {
+export function resolveExpectedWorktreePath(runId: string, index: number): string {
 	return path.join(os.tmpdir(), `pi-worktree-${runId}-${index}`);
 }
 
@@ -170,7 +170,7 @@ function resolveRepoCwdRelative(cwd: string): string {
 
 export function resolveExpectedWorktreeAgentCwd(cwd: string, runId: string, index: number): string {
 	const cwdRelative = resolveRepoCwdRelative(cwd);
-	const worktreePath = buildWorktreePath(runId, index);
+	const worktreePath = resolveExpectedWorktreePath(runId, index);
 	return cwdRelative ? path.join(worktreePath, cwdRelative) : worktreePath;
 }
 
@@ -322,7 +322,7 @@ function createSingleWorktree(
 	agent: string | undefined,
 ): WorktreeInfo {
 	const branch = buildWorktreeBranch(runId, index);
-	const worktreePath = buildWorktreePath(runId, index);
+	const worktreePath = resolveExpectedWorktreePath(runId, index);
 	const add = runGit(toplevel, ["worktree", "add", worktreePath, "-b", branch, "HEAD"]);
 	if (add.status !== 0) {
 		const message = add.stderr.trim() || add.stdout.trim() || `failed to create worktree ${worktreePath}`;
@@ -587,7 +587,7 @@ export function sweepOrphanedWorktrees(cwd: string, options?: { staleAfterMs?: n
 		for (const branch of branches) {
 			const match = /^pi-parallel-(.+)-(\d+)$/.exec(branch);
 			if (!match) continue;
-			const dirPath = buildWorktreePath(match[1] as string, Number(match[2]));
+			const dirPath = resolveExpectedWorktreePath(match[1] as string, Number(match[2]));
 			let dirExists = false;
 			let dirStale = false;
 			try {

@@ -23,11 +23,22 @@ const localBareJitiPkg = "/ext/node_modules/jiti/package.json";
 const localScopedJitiPkg = "/ext/node_modules/@earendil-works/jiti/package.json";
 const piBareJitiPkg = "/pi/node_modules/jiti/package.json";
 const piScopedJitiPkg = "/pi/node_modules/@earendil-works/jiti/package.json";
+const moduleSearchStart = path.join("/shared", "extensions", "pi-subagents", "src", "runs", "background");
 
 const expectedCli = (pkgPath: string) => path.join(path.dirname(pkgPath), "lib/jiti-cli.mjs");
+const expectedPiBundledCli = path.join(
+	"/shared",
+	"node_modules",
+	"@earendil-works",
+	"pi-coding-agent",
+	"node_modules",
+	"jiti",
+	"lib",
+	"jiti-cli.mjs",
+);
 
 describe("resolveJitiCliPath", () => {
-	test("returns local bare `jiti` first when all four candidates resolve and exist", () => {
+	test("returns local bare `jiti` first when all direct candidates resolve and exist", () => {
 		const deps: JitiResolverDeps = {
 			localRequire: fakeRequire({ "jiti/package.json": localBareJitiPkg, "@earendil-works/jiti/package.json": localScopedJitiPkg }),
 			piRequire: fakeRequire({ "jiti/package.json": piBareJitiPkg, "@earendil-works/jiti/package.json": piScopedJitiPkg }),
@@ -43,6 +54,17 @@ describe("resolveJitiCliPath", () => {
 			fileExists: () => true,
 		};
 		assert.strictEqual(resolveJitiCliPath(deps), expectedCli(localScopedJitiPkg));
+	});
+
+	test("finds pi-bundled jiti by walking module node_modules ancestry under node --test", () => {
+		const deps: JitiResolverDeps = {
+			localRequire: fakeRequire({}),
+			moduleRequire: fakeRequire({}),
+			moduleSearchStart,
+			piRequire: undefined,
+			fileExists: (candidate) => candidate === expectedPiBundledCli,
+		};
+		assert.strictEqual(resolveJitiCliPath(deps), expectedPiBundledCli);
 	});
 
 	test("falls back to pi-bundled @earendil-works/jiti when no local jiti is available", () => {

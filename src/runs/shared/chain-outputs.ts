@@ -29,6 +29,12 @@ export function validateChainOutputBindings(steps: ChainStep[], dynamicFanoutCon
 	const seen = new Set<string>();
 	for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
 		const step = steps[stepIndex]!;
+		// The M13.1 revert (2026-08-05) removed the gate executor but the revert left the
+		// schema accepting `gate:` and silently ignoring it — a contract lie. Reject loudly
+		// so a caller sees the error instead of a chain that never grades anything.
+		if ("gate" in step && step.gate !== undefined) {
+			throw new ChainOutputValidationError(`Chain step ${stepIndex + 1} declares an acceptance gate, which was reverted with M13.1 — remove the gate property.`);
+		}
 		if (hasDynamicFanoutFields(step)) {
 			if (!isDynamicParallelStep(step)) {
 				throw new ChainOutputValidationError(`Dynamic chain step ${stepIndex + 1} requires expand, a single parallel template object, and collect; dynamic expand/collect cannot be mixed with static parallel arrays.`);

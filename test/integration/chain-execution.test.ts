@@ -44,6 +44,7 @@ interface TestSequentialStep {
 interface TestParallelTask {
 	agent: string;
 	task?: string;
+	as?: string;
 	model?: string;
 	output?: string | false;
 	outputMode?: "inline" | "file-only";
@@ -77,6 +78,7 @@ interface ChainResultItem {
 	finalOutput?: string;
 	task?: string;
 	error?: string;
+	outputSaveError?: string;
 	detached?: boolean;
 	attemptedModels?: string[];
 	skills?: string[];
@@ -706,6 +708,59 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 
 		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
 		assert.equal(result.details.results.length, 2);
+	});
+
+	it("keeps a missing declared output diagnostic nonfatal for sequential named bindings", async () => {
+		mockPi.onCall({ output: "producer text" });
+		mockPi.onCall({ output: "consumer done" });
+		const agents = [makeAgent("producer"), makeAgent("consumer")];
+		const runId = `missing-output-${Date.now().toString(36)}`;
+		const chainBase = path.join(tempDir, "chains");
+		const chainDir = path.join(chainBase, runId);
+		fs.mkdirSync(chainDir, { recursive: true });
+		fs.writeFileSync(path.join(chainDir, "blocked"), "not a directory", "utf-8");
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{ agent: "producer", task: "Produce text", output: "blocked/out.md", as: "producer" },
+					{ agent: "consumer", task: "Consume {outputs.producer}" },
+				],
+				agents,
+				{ runId, chainDir: chainBase },
+			),
+		);
+
+		assert.equal(result.details.results[0]?.error, undefined);
+		assert.match(result.details.results[0]?.outputSaveError ?? "", /EEXIST|ENOTDIR|not a directory/i);
+		assert.match(readCallArgs(1).at(-1) ?? "", /Consume producer text/);
+	});
+
+	it("keeps a missing declared output diagnostic nonfatal for parallel named bindings", async () => {
+		mockPi.onCall({ output: "parallel producer text" });
+		mockPi.onCall({ output: "consumer done" });
+		const agents = [makeAgent("producer"), makeAgent("consumer")];
+		const runId = `missing-parallel-output-${Date.now().toString(36)}`;
+		const chainBase = path.join(tempDir, "chains");
+		const chainDir = path.join(chainBase, runId);
+		const blockedPath = path.join(chainDir, "parallel-0", "0-producer", "blocked");
+		fs.mkdirSync(path.dirname(blockedPath), { recursive: true });
+		fs.writeFileSync(blockedPath, "not a directory", "utf-8");
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{ parallel: [{ agent: "producer", task: "Produce text", output: "blocked/out.md", as: "producer" }] },
+					{ agent: "consumer", task: "Consume {outputs.producer}" },
+				],
+				agents,
+				{ runId, chainDir: chainBase },
+			),
+		);
+
+		assert.equal(result.details.results[0]?.error, undefined);
+		assert.match(result.details.results[0]?.outputSaveError ?? "", /EEXIST|ENOTDIR|not a directory/i);
+		assert.match(readCallArgs(1).at(-1) ?? "", /Consume parallel producer text/);
 	});
 
 	it("does not re-expand author tokens injected by named output in a parallel task", async () => {

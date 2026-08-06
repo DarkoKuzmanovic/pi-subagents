@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
 import { createEventBus, createMockPi, createTempDir, events, removeTempDir, tryImport } from "../support/helpers.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT, RESULTS_DIR } from "../../src/shared/types.ts";
+import { ASYNC_DIR, INTERCOM_DETACH_REQUEST_EVENT, RESULTS_DIR } from "../../src/shared/types.ts";
 
 interface ExecutorModule {
 	createSubagentExecutor?: (...args: unknown[]) => {
@@ -153,7 +153,11 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		}), config);
 	}
 
-	function makeExecutorWithDiscoverAgents(discoverAgentsImpl: typeof discoverAgents, config: Record<string, unknown> = {}) {
+	function makeExecutorWithDiscoverAgents(
+		discoverAgentsImpl: typeof discoverAgents,
+		config: Record<string, unknown> = {},
+		getSubagentSessionRoot: (parentSessionFile: string | null) => string = () => tempDir,
+	) {
 		let sessionName: string | undefined;
 		const eventsApi = createEventBus();
 		return Object.assign(createSubagentExecutor({
@@ -169,7 +173,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			config,
 			asyncByDefault: false,
 			tempArtifactsDir: tempDir,
-			getSubagentSessionRoot: () => tempDir,
+			getSubagentSessionRoot,
 			expandTilde: (p: string) => p,
 			discoverAgents: discoverAgentsImpl,
 		}), { eventsApi });
@@ -988,6 +992,122 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.match(result.content[0]?.text ?? "", /Parallel run detached for intercom coordination/);
 		assert.equal(detachEmitted, true);
 		assert.equal(result.details?.results?.some((entry) => entry.detached === true && entry.exitCode === 0), true);
+	});
+
+
+	it("rejects resume-time session-directory trust while reviving a launch-trusted async fork", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "revived fork" });
+		const parentSessionFile = path.join(tempDir, "parent.jsonl");
+		const { manager } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+		let sessionRootCall = 0;
+		const executor = makeExecutorWithDiscoverAgents(
+			() => ({ agents: [{ name: "echo", description: "Echo test agent" }], projectAgentsDir: null }),
+			{},
+			() => path.join(tempDir, `isolated-session-root-${sessionRootCall++}`),
+		);
+		let originalId: string | undefined;
+		let revivedId: string | undefined;
+		try {
+			const original = await executor.execute(
+				"async-fork-original",
+				{ agent: "echo", task: "Do forked async work", context: "fork", async: true },
+				new AbortController().signal,
+				undefined,
+				makeCtx(manager),
+			);
+			assert.equal(original.isError, undefined, original.content[0]?.text);
+			originalId = original.details?.asyncId;
+			assert.ok(originalId, "expected original async fork id");
+			await waitForAsyncResultFile(originalId);
+
+			const statusPath = path.join(ASYNC_DIR, originalId, "status.json");
+			const originalStatusJson = fs.readFileSync(statusPath, "utf-8");
+			const forgedSessionRoot = path.join(tempDir, "resume-time-trusted-root");
+			const forgedSessionFile = path.join(forgedSessionRoot, "forged.jsonl");
+			fs.mkdirSync(forgedSessionRoot, { recursive: true });
+			fs.writeFileSync(forgedSessionFile, "", "utf-8");
+			const forgedStatus = JSON.parse(originalStatusJson) as {
+				sessionFile?: string;
+				steps?: Array<{ sessionFile?: string }>;
+			};
+			forgedStatus.sessionFile = forgedSessionFile;
+			for (const step of forgedStatus.steps ?? []) step.sessionFile = forgedSessionFile;
+			fs.writeFileSync(statusPath, JSON.stringify(forgedStatus, null, 2), "utf-8");
+
+			const rejected = await executor.execute(
+				"async-fork-untrusted-resume",
+				{ action: "resume", id: originalId, message: "Use the forged session", sessionDir: forgedSessionRoot },
+				new AbortController().signal,
+				undefined,
+				makeCtx(manager),
+			);
+			assert.equal(rejected.isError, true);
+			assert.match(rejected.content[0]?.text ?? "", /outside parent-authored async launch roots or files/);
+			fs.writeFileSync(statusPath, originalStatusJson, "utf-8");
+
+			const revived = await executor.execute(
+				"async-fork-resume",
+				{ action: "resume", id: originalId, message: "Continue the fork" },
+				new AbortController().signal,
+				undefined,
+				makeCtx(manager),
+			);
+			assert.equal(revived.isError, undefined, revived.content[0]?.text);
+			revivedId = revived.details?.asyncId;
+			assert.ok(revivedId, "expected revived async fork id");
+			await waitForAsyncResultFile(revivedId);
+		} finally {
+			for (const runId of [originalId, revivedId]) {
+				if (!runId) continue;
+				fs.rmSync(path.join(ASYNC_DIR, runId), { recursive: true, force: true });
+				fs.rmSync(path.join(RESULTS_DIR, `${runId}.json`), { force: true });
+			}
+		}
+	});
+
+
+	it("revives a completed async run launched from an ephemeral parent session", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "revived ephemeral run" });
+		const { manager } = makeSessionManagerRecorder();
+		let sessionRootCall = 0;
+		const executor = makeExecutorWithDiscoverAgents(
+			() => ({ agents: [{ name: "echo", description: "Echo test agent" }], projectAgentsDir: null }),
+			{},
+			() => path.join(tempDir, `ephemeral-session-root-${sessionRootCall++}`),
+		);
+		let originalId: string | undefined;
+		let revivedId: string | undefined;
+		try {
+			const original = await executor.execute(
+				"async-ephemeral-original",
+				{ agent: "echo", task: "Do fresh async work", context: "fresh", async: true },
+				new AbortController().signal,
+				undefined,
+				makeCtx(manager),
+			);
+			assert.equal(original.isError, undefined, original.content[0]?.text);
+			originalId = original.details?.asyncId;
+			assert.ok(originalId, "expected original ephemeral async id");
+			await waitForAsyncResultFile(originalId);
+
+			const revived = await executor.execute(
+				"async-ephemeral-resume",
+				{ action: "resume", id: originalId, message: "Continue the fresh run" },
+				new AbortController().signal,
+				undefined,
+				makeCtx(manager),
+			);
+			assert.equal(revived.isError, undefined, revived.content[0]?.text);
+			revivedId = revived.details?.asyncId;
+			assert.ok(revivedId, "expected revived ephemeral async id");
+			await waitForAsyncResultFile(revivedId);
+		} finally {
+			for (const runId of [originalId, revivedId]) {
+				if (!runId) continue;
+				fs.rmSync(path.join(ASYNC_DIR, runId), { recursive: true, force: true });
+				fs.rmSync(path.join(RESULTS_DIR, `${runId}.json`), { force: true });
+			}
+		}
 	});
 
 	it("runs top-level parallel async requests in the background", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {

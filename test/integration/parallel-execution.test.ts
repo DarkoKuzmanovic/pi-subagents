@@ -363,9 +363,12 @@ Inspect`);
 			makeMinimalCtx(tempDir),
 		);
 
-		const args = readLastCallArgs();
-		assert.ok((args.at(-1) ?? "").includes(`Update progress at: ${path.join(tempDir, "progress.md")}`));
-		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), true);
+		const taskArg = readLastCallArgs().at(-1) ?? "";
+		const progressPath = taskArg.match(/progress at: ([^\n]+)/)?.[1];
+		assert.ok(progressPath, `expected progress instruction outside project cwd: ${taskArg}`);
+		assert.notEqual(progressPath, path.join(tempDir, "progress.md"));
+		assert.equal(fs.existsSync(progressPath), true);
+		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
 	});
 
 	it("top-level parallel suppresses progress when the task is review-only", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

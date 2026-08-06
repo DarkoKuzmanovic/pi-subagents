@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { ASYNC_DIR, RESULTS_DIR, type AsyncStatus } from "../../shared/types.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
 import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
+import { readAsyncResumeLaunchTrust } from "./async-resume-trust.ts";
 
 export interface AsyncResumeParams {
 	id?: string;
@@ -135,6 +136,11 @@ function assertInsideRoot(root: string, target: string, label: string): void {
 	throw new Error(`${label} must be inside ${rootPath}.`);
 }
 
+function pathWithin(root: string, candidate: string): boolean {
+	const relative = path.relative(root, candidate);
+	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 function prefixedRunIds(dir: string, prefix: string, suffix = ""): string[] {
 	if (!fs.existsSync(dir)) return [];
 	return fs.readdirSync(dir)
@@ -230,17 +236,51 @@ function validateStatusForResume(status: AsyncStatus | null, source: string): vo
 	}
 }
 
-function validateResumeSessionFile(runId: string, sessionFile: string): string {
+function validateResumeSessionFile(
+	runId: string,
+	sessionFile: string,
+	trustedSessionRoots: string[],
+	trustedSessionFiles: string[],
+): string {
 	if (path.extname(sessionFile) !== ".jsonl") throw new Error(`Async run '${runId}' session file must be a .jsonl file: ${sessionFile}`);
+	if (!path.isAbsolute(sessionFile)) throw new Error(`Async run '${runId}' session file must be absolute: ${sessionFile}`);
 	const resolved = path.resolve(sessionFile);
 	if (!fs.existsSync(resolved)) throw new Error(`Async run '${runId}' session file does not exist: ${sessionFile}`);
-	return resolved;
+	const stat = fs.lstatSync(resolved);
+	if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Async run '${runId}' session file is not a regular file: ${sessionFile}`);
+	const realSessionFile = fs.realpathSync(resolved);
+	const trustedRoots = trustedSessionRoots.flatMap((root) => {
+		try {
+			const resolvedRoot = path.resolve(root);
+			return fs.statSync(resolvedRoot).isDirectory() ? [fs.realpathSync(resolvedRoot)] : [];
+		} catch {
+			return [];
+		}
+	});
+	const trustedFiles = trustedSessionFiles.flatMap((file) => {
+		try {
+			const resolvedFile = path.resolve(file);
+			const trustedStat = fs.lstatSync(resolvedFile);
+			return trustedStat.isFile() && !trustedStat.isSymbolicLink() ? [fs.realpathSync(resolvedFile)] : [];
+		} catch {
+			return [];
+		}
+	});
+	if (!trustedFiles.includes(realSessionFile) && !trustedRoots.some((root) => pathWithin(root, realSessionFile))) {
+		throw new Error(`Async run '${runId}' session file is outside parent-authored async launch roots or files: ${sessionFile}`);
+	}
+	return realSessionFile;
 }
 
 export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncResumeDeps = {}): AsyncResumeTarget {
 	const asyncDirRoot = deps.asyncDirRoot ?? ASYNC_DIR;
 	const resultsDir = deps.resultsDir ?? RESULTS_DIR;
 	const location = resolveAsyncRunLocation(params, asyncDirRoot, resultsDir);
+	const launchTrust = location.asyncDir
+		? readAsyncResumeLaunchTrust(location.asyncDir)
+		: { trustedSessionRoots: [], trustedSessionFiles: [] };
+	const trustedSessionRoots = launchTrust.trustedSessionRoots;
+	const trustedSessionFiles = launchTrust.trustedSessionFiles;
 	if (!location.asyncDir && !location.resultPath) {
 		throw new Error("Async run not found. Provide id or dir.");
 	}
@@ -315,7 +355,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 		?? resultSteps[index]?.sessionFile
 		?? (stepCount === 1 ? status?.sessionFile ?? result?.sessionFile : undefined);
 	if (!sessionFile) throw new Error(`Async run '${runId}' child ${index} does not have a persisted session file to resume from.`);
-	const resolvedSessionFile = validateResumeSessionFile(runId, sessionFile);
+	const resolvedSessionFile = validateResumeSessionFile(runId, sessionFile, trustedSessionRoots, trustedSessionFiles);
 
 	return {
 		kind: "revive",

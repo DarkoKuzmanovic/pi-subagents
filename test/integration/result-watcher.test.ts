@@ -76,7 +76,8 @@ describe("result watcher", () => {
 	it("logs malformed result files instead of swallowing them silently", async () => {
 		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-"));
 		try {
-			fs.writeFileSync(path.join(resultsDir, "bad.json"), "{bad-json", "utf-8");
+			const resultPath = path.join(resultsDir, "bad.json");
+			fs.writeFileSync(resultPath, "{bad-json", "utf-8");
 			const emitted: unknown[] = [];
 			const pi = {
 				events: {
@@ -95,13 +96,15 @@ describe("result watcher", () => {
 			};
 			try {
 				watcher.primeExistingResults();
-				await new Promise((resolve) => setTimeout(resolve, 100));
+				await new Promise((resolve) => setTimeout(resolve, 500));
 			} finally {
 				console.error = originalError;
 				watcher.stopResultWatcher();
 			}
 
 			assert.equal(emitted.length, 0);
+			assert.equal(fs.existsSync(resultPath), false, "malformed result should be quarantined after bounded retries");
+			assert.equal(fs.readdirSync(resultsDir).some((file) => file.startsWith("bad.json.failed-")), true);
 			assert.ok(
 				logged.some((entry) => /Failed to process subagent result file/.test(String(entry[0] ?? ""))),
 				"expected watcher error to be logged",
@@ -510,7 +513,7 @@ describe("result watcher", () => {
 		}
 	});
 
-	it("re-delivers a result whose first delivery failed (mark-seen-before-delivery regression)", async () => {
+	it("automatically re-delivers a result whose first delivery failed", async () => {
 		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-redeliver-"));
 		try {
 			const emitted: Array<{ event: string; data: unknown }> = [];
@@ -538,22 +541,84 @@ describe("result watcher", () => {
 
 			const watcher = createResultWatcher(pi, state, resultsDir, 60_000);
 			try {
-				// First delivery: subscriber throws. The file must be retained AND
-				// the completion key unmarked so a retry can actually re-deliver.
+				// First delivery throws. The watcher must retain the file, unmark the completion key,
+				// and schedule its own retry — fs.watch may emit no further event.
 				watcher.primeExistingResults();
-				await new Promise((resolve) => setTimeout(resolve, 100));
+				await new Promise((resolve) => setTimeout(resolve, 25));
 				assert.equal(emitted.some((entry) => entry.event === "subagent:async-complete"), false);
 				assert.equal(fs.existsSync(resultPath), true, "result file must be retained after failed delivery");
 
-				// Retry: without the unmark fix this hits the dedupe branch and
-				// unlinks WITHOUT emitting — permanently dropping the result.
-				watcher.primeExistingResults();
-				await new Promise((resolve) => setTimeout(resolve, 100));
-				assert.equal(emitted.filter((entry) => entry.event === "subagent:async-complete").length, 1, "retry must re-deliver the result");
+				const deadline = Date.now() + 1000;
+				while (emitted.filter((entry) => entry.event === "subagent:async-complete").length === 0 && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				}
+				assert.equal(emitted.filter((entry) => entry.event === "subagent:async-complete").length, 1, "retry must re-deliver without a manual rescan");
 				assert.equal(fs.existsSync(resultPath), false, "result file is consumed after successful delivery");
 			} finally {
 				watcher.stopResultWatcher();
 			}
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not unlink a result while its first delivery is in flight", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-inflight-"));
+		try {
+			const emitted: Array<{ event: string; data: unknown }> = [];
+			const listeners = new Map<string, Set<(payload: unknown) => void>>();
+			let completionAttempts = 0;
+			let watcher: ReturnType<typeof createResultWatcher>;
+			const pi = {
+				events: {
+					on(event: string, handler: (payload: unknown) => void) {
+						const set = listeners.get(event) ?? new Set();
+						set.add(handler);
+						listeners.set(event, set);
+						return () => set.delete(handler);
+					},
+					emit(event: string, data: unknown) {
+						if (event === "subagent:async-complete") {
+							completionAttempts++;
+							if (completionAttempts === 1) throw new Error("completion subscriber exploded");
+						}
+						emitted.push({ event, data });
+						for (const handler of listeners.get(event) ?? []) handler(data);
+						if (event === "subagent:result-intercom") {
+							watcher.primeExistingResults();
+							const requestId = data && typeof data === "object" ? (data as { requestId?: unknown }).requestId : undefined;
+							if (typeof requestId === "string") {
+								setTimeout(() => pi.events.emit("subagent:result-intercom-delivery", { requestId, delivered: true }), 75);
+							}
+						}
+					},
+				},
+			};
+			const state = createState();
+			const resultPath = path.join(resultsDir, "inflight-run.json");
+			fs.writeFileSync(resultPath, JSON.stringify({
+				id: "inflight-run",
+				success: true,
+				summary: "done",
+				cwd: "/repo",
+				intercomTarget: "orchestrator",
+			}), "utf-8");
+			watcher = createResultWatcher(pi, state, resultsDir, 60_000);
+			const originalError = console.error;
+			console.error = () => {};
+			try {
+				watcher.primeExistingResults();
+				const deadline = Date.now() + 2000;
+				while (emitted.filter((entry) => entry.event === "subagent:async-complete").length === 0 && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				}
+			} finally {
+				console.error = originalError;
+				watcher.stopResultWatcher();
+			}
+			assert.equal(completionAttempts, 2, "failed first completion should retry from the retained file");
+			assert.equal(emitted.filter((entry) => entry.event === "subagent:async-complete").length, 1);
+			assert.equal(fs.existsSync(resultPath), false);
 		} finally {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 		}

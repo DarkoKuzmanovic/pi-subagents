@@ -17,6 +17,7 @@ import { createEventBus, createMockPi, createTempDir, events, makeAgent, makeMin
 import type { MockPi } from "../support/helpers.ts";
 import { DEFAULT_CONTROL_CONFIG } from "../../src/runs/shared/subagent-control.ts";
 import { createNestedRoute } from "../../src/runs/shared/nested-events.ts";
+import { ASYNC_RESUME_TRUST_DIRECTORY, ASYNC_RESUME_TRUST_FILENAME } from "../../src/runs/background/async-resume-trust.ts";
 
 interface AsyncExecutionResult {
 	content: Array<{ text?: string }>;
@@ -62,6 +63,7 @@ interface UtilsModule {
 
 interface TypesModule {
 	ASYNC_DIR: string;
+	CHAIN_RUNS_DIR: string;
 	RESULTS_DIR: string;
 	TEMP_ROOT_DIR: string;
 }
@@ -83,6 +85,7 @@ const executeAsyncSingle = asyncMod?.executeAsyncSingle;
 const executeAsyncChain = asyncMod?.executeAsyncChain;
 const readStatus = utils?.readStatus;
 const ASYNC_DIR = typesMod?.ASYNC_DIR;
+const CHAIN_RUNS_DIR = typesMod?.CHAIN_RUNS_DIR;
 const RESULTS_DIR = typesMod?.RESULTS_DIR;
 const TEMP_ROOT_DIR = typesMod?.TEMP_ROOT_DIR;
 const createSubagentExecutor = executorMod?.createSubagentExecutor;
@@ -151,14 +154,21 @@ function thinkingFloodEvent(): unknown {
 async function interruptAsyncRunner(id: string): Promise<void> {
 	const statusPath = path.join(ASYNC_DIR, id, "status.json");
 	const deadline = Date.now() + 15_000;
-	while (!fs.existsSync(statusPath)) {
-		if (Date.now() > deadline) assert.fail(`Timed out waiting for async status: ${statusPath}`);
+	while (true) {
+		if (fs.existsSync(statusPath)) {
+			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as {
+				state?: unknown;
+				pid?: unknown;
+				steps?: Array<{ status?: unknown }>;
+			};
+			if (status.state === "running" && typeof status.pid === "number" && status.steps?.some((step) => step.status === "running")) {
+				process.kill(status.pid, process.platform === "win32" ? "SIGBREAK" : "SIGUSR2");
+				return;
+			}
+		}
+		if (Date.now() > deadline) assert.fail(`Timed out waiting for async runner to start: ${statusPath}`);
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
-	const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as { state?: unknown; pid?: unknown };
-	assert.equal(status.state, "running");
-	assert.equal(typeof status.pid, "number");
-	process.kill(status.pid, process.platform === "win32" ? "SIGBREAK" : "SIGUSR2");
 }
 
 function readRunEventTypes(id: string): string[] {
@@ -231,6 +241,66 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			assert.equal(status.mode, "single");
 		} finally {
 			removeTempDir(dir);
+		}
+	});
+
+	it("fails durably when the detached output log emits an asynchronous error", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const id = `async-output-stream-error-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		fs.mkdirSync(path.join(asyncDir, "output-0.log"), { recursive: true });
+		mockPi.onCall({ output: "child would otherwise succeed", delay: 100 });
+		try {
+			const launch = executeAsyncSingle(id, {
+				agent: "worker",
+				task: "Exercise output log failure",
+				agentConfig: makeAgent("worker"),
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				cwd: tempDir,
+				artifactsDir: tempDir,
+				artifactConfig: { enabled: false },
+				shareEnabled: false,
+			});
+			assert.equal(launch.isError, undefined);
+			await waitForAsyncResultFile(id);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			assert.equal(payload.success, false);
+			assert.match(payload.results[0]?.error ?? "", /Failed to write async output log/);
+			assert.doesNotMatch(payload.results[0]?.error ?? "", /runner crashed/i);
+			const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+			assert.equal(status.state, "failed");
+		} finally {
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+			fs.rmSync(resultPath, { force: true });
+		}
+	});
+
+
+	it("persists the launch-time async session directory for safe resume", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const id = `async-resume-trust-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		const sessionRoot = path.join(tempDir, "ephemeral-session-root");
+		mockPi.onCall({ output: "resume trust recorded" });
+		try {
+			const launch = executeAsyncSingle(id, {
+				agent: "worker",
+				task: "Persist resume trust",
+				agentConfig: makeAgent("worker"),
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig: { enabled: false },
+				shareEnabled: false,
+				sessionRoot,
+				maxSubagentDepth: 2,
+			});
+			assert.equal(launch.isError, undefined, launch.content[0]?.text);
+			await waitForAsyncResultFile(id);
+			const trustPath = path.join(asyncDir, ASYNC_RESUME_TRUST_DIRECTORY, ASYNC_RESUME_TRUST_FILENAME);
+			const trust = JSON.parse(fs.readFileSync(trustPath, "utf-8")) as { trustedSessionRoots?: unknown };
+			assert.deepEqual(trust.trustedSessionRoots, [path.join(sessionRoot, `async-${id}`)]);
+		} finally {
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+			fs.rmSync(resultPath, { force: true });
 		}
 	});
 
@@ -435,11 +505,36 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
 		assert.ok(callFile, "expected a recorded mock pi call");
 		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
-		const taskArg = args.at(-1) ?? "";
+		assert.ok(args.includes("--no-context-files"), "fresh async child should skip parent context files");
+		const taskArg = args.filter((arg) => arg !== "--no-context-files").at(-1) ?? "";
+		assert.ok(CHAIN_RUNS_DIR, "CHAIN_RUNS_DIR should be available");
+		const progressPath = path.join(CHAIN_RUNS_DIR, asyncId, "progress.md");
 		assert.ok(taskArg.includes(`[Read from: ${path.join(tempDir, "input.md")}]`));
-		assert.ok(taskArg.includes(`Update progress at: ${path.join(tempDir, "progress.md")}`));
+		assert.ok(taskArg.includes(`Update progress at: ${progressPath}`));
 		assert.ok(taskArg.includes(`Write your findings to: ${outputPath}`));
-		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), true);
+		assert.equal(fs.existsSync(progressPath), true);
+		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
+	});
+
+	it("keeps context files enabled for forked async children", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Forked async report" });
+		const id = `async-fork-context-${Date.now().toString(36)}`;
+		executeAsyncChain!(id, {
+			chain: [{ agent: "worker", task: "Do forked async work" }],
+			context: "fork",
+			agents: [makeAgent("worker")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		await waitForAsyncResultFile(id, 10_000);
+		const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
+		assert.ok(callFile, "expected a recorded mock pi call");
+		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+		assert.equal(args.includes("--no-context-files"), false);
 	});
 
 	it("namespaces inherited default outputs for async chain parallel tasks", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -470,10 +565,291 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		assert.equal(payload.success, true, `run should succeed: ${JSON.stringify(payload.results)}`);
 
-		const firstOutput = path.join(tempDir, "parallel-0", "0-writer", "context.md");
-		const secondOutput = path.join(tempDir, "parallel-0", "1-writer", "context.md");
+		assert.ok(CHAIN_RUNS_DIR, "CHAIN_RUNS_DIR should be available");
+		const chainDir = path.join(CHAIN_RUNS_DIR, id);
+		const firstOutput = path.join(chainDir, "parallel-0", "0-writer", "context.md");
+		const secondOutput = path.join(chainDir, "parallel-0", "1-writer", "context.md");
 		assert.equal(fs.readFileSync(firstOutput, "utf-8"), "child one");
 		assert.equal(fs.readFileSync(secondOutput, "utf-8"), "child two");
+		assert.equal(fs.existsSync(path.join(tempDir, "parallel-0")), false);
+	});
+
+	it("rejects a static async chain namespace symlink as a structured start error", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, () => {
+		const id = `async-static-chain-symlink-${Date.now().toString(36)}`;
+		const chainBase = path.join(tempDir, "chains");
+		const chainDir = path.join(chainBase, id);
+		const outsideDir = path.join(tempDir, "outside-chain");
+		fs.mkdirSync(chainDir, { recursive: true });
+		fs.mkdirSync(outsideDir);
+		fs.symlinkSync(outsideDir, path.join(chainDir, "parallel-0"));
+
+		const result = executeAsyncChain!(id, {
+			chain: [{ parallel: [{ agent: "writer", task: "Write one" }] }],
+			chainDir: chainBase,
+			agents: [makeAgent("writer", { output: "context.md" })],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		assert.equal(result.isError, true);
+		assert.match(result.content.map((part) => part.text ?? "").join("\n"), /Relative output path escapes its base directory through a symlink/);
+		assert.equal(mockPi.callCount(), 0, "static containment must fail before a child launches");
+		assert.equal(fs.existsSync(path.join(outsideDir, "0-writer")), false, "static containment must reject before mkdir follows the symlink");
+	});
+
+	it("rejects a pre-existing async worktree root before static namespace creation", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, () => {
+		const repoDir = createRepo("pi-subagent-async-worktree-root-symlink-");
+		const id = `async-worktree-root-symlink-${Date.now().toString(36)}`;
+		const expectedWorktreePath = path.join(os.tmpdir(), `pi-worktree-${id}-s0-0`);
+		const outsideDir = path.join(tempDir, "outside-worktree-root");
+		fs.mkdirSync(outsideDir);
+		fs.symlinkSync(outsideDir, expectedWorktreePath);
+		try {
+			const result = executeAsyncChain!(id, {
+				chain: [{ parallel: [{ agent: "writer", task: "Write in worktree" }], worktree: true }],
+				chainDir: path.join(tempDir, "chains"),
+				agents: [makeAgent("writer", { output: "context.md" })],
+				ctx: { pi: { events: { emit() {} } }, cwd: repoDir, currentSessionId: "session-1" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			assert.equal(result.isError, true);
+			assert.match(result.content.map((part) => part.text ?? "").join("\n"), /async worktree path already exists/i);
+			assert.equal(mockPi.callCount(), 0, "worktree containment must fail before a child launches");
+			assert.equal(fs.existsSync(path.join(outsideDir, "parallel-0", "0-writer")), false, "worktree setup must not mkdir through the symlink");
+		} finally {
+			fs.rmSync(expectedWorktreePath, { recursive: true, force: true });
+			removeTempDir(repoDir);
+		}
+	});
+
+	it("rejects a tracked async worktree namespace symlink before launching a child", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const repoDir = createRepo("pi-subagent-async-worktree-namespace-symlink-");
+		const id = `async-worktree-namespace-symlink-${Date.now().toString(36)}`;
+		const expectedWorktreePath = path.join(os.tmpdir(), `pi-worktree-${id}-s0-0`);
+		const outsideDir = path.join(tempDir, "outside-worktree-namespace");
+		fs.mkdirSync(outsideDir);
+		fs.symlinkSync(outsideDir, path.join(repoDir, "parallel-0"));
+		git(repoDir, ["add", "parallel-0"]);
+		git(repoDir, ["commit", "-m", "add namespace symlink"]);
+		mockPi.onCall({ output: "must not launch", writeOutput: "must not escape" });
+		try {
+			const started = executeAsyncChain!(id, {
+				chain: [{ parallel: [{ agent: "writer", task: "Write in worktree" }], worktree: true }],
+				chainDir: path.join(tempDir, "chains"),
+				agents: [makeAgent("writer", { output: "context.md" })],
+				ctx: { pi: { events: { emit() {} } }, cwd: repoDir, currentSessionId: "session-1" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+			assert.notEqual(started.isError, true, started.content.map((part) => part.text ?? "").join("\n"));
+
+			const resultPath = await waitForAsyncResultFile(id, 10_000);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			assert.equal(payload.success, false);
+			assert.match(JSON.stringify(payload), /Relative output path escapes its base directory through a symlink/);
+			assert.equal(mockPi.callCount(), 0, "runner containment must fail before a worktree child launches");
+			assert.equal(fs.existsSync(path.join(outsideDir, "0-writer")), false, "runner containment must reject before mkdir follows the tracked symlink");
+			assert.equal(fs.existsSync(expectedWorktreePath), false, "failed worktree setup must remove the generated worktree path");
+			assert.equal(
+				git(repoDir, ["worktree", "list", "--porcelain"]).includes(expectedWorktreePath),
+				false,
+				"failed worktree setup must remove its Git worktree registration",
+			);
+			assert.equal(
+				git(repoDir, ["branch", "--list", `pi-parallel-${id}-s0-0`]),
+				"",
+				"failed worktree setup must delete its generated branch",
+			);
+		} finally {
+			fs.rmSync(expectedWorktreePath, { recursive: true, force: true });
+			removeTempDir(repoDir);
+		}
+	});
+
+	it("rejects a tracked top-level async worktree output symlink before launching a child", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const repoDir = createRepo("pi-subagent-async-worktree-top-output-symlink-");
+		const id = `async-worktree-top-output-symlink-${Date.now().toString(36)}`;
+		const expectedWorktreePath = path.join(os.tmpdir(), `pi-worktree-${id}-s0-0`);
+		const outsideFile = path.join(tempDir, `${id}-outside.txt`);
+		fs.writeFileSync(outsideFile, "outside sentinel", "utf-8");
+		fs.symlinkSync(outsideFile, path.join(repoDir, "report.md"));
+		git(repoDir, ["add", "report.md"]);
+		git(repoDir, ["commit", "-m", "add top-level output symlink"]);
+		mockPi.onCall({ output: "must not launch", writeOutput: "must not escape" });
+		try {
+			const started = executeAsyncChain!(id, {
+				chain: [{ parallel: [{ agent: "writer", task: "Write top-level worktree output", output: "report.md" }], worktree: true }],
+				resultMode: "parallel",
+				chainDir: path.join(tempDir, "chains"),
+				agents: [makeAgent("writer")],
+				ctx: { pi: { events: { emit() {} } }, cwd: repoDir, currentSessionId: "session-1" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+			assert.notEqual(started.isError, true, started.content.map((part) => part.text ?? "").join("\n"));
+
+			const resultPath = await waitForAsyncResultFile(id, 10_000);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			assert.equal(payload.success, false);
+			assert.match(JSON.stringify(payload), /Relative output path escapes its base directory through a symlink/);
+			assert.equal(mockPi.callCount(), 0, "output containment must fail before a top-level worktree child launches");
+			assert.equal(fs.readFileSync(outsideFile, "utf-8"), "outside sentinel");
+			assert.equal(fs.existsSync(expectedWorktreePath), false, "failed worktree setup must remove the generated worktree path");
+			assert.equal(git(repoDir, ["worktree", "list", "--porcelain"]).includes(expectedWorktreePath), false);
+			assert.equal(git(repoDir, ["branch", "--list", `pi-parallel-${id}-s0-0`]), "");
+		} finally {
+			fs.rmSync(expectedWorktreePath, { recursive: true, force: true });
+			removeTempDir(repoDir);
+		}
+	});
+
+	it("rejects a tracked static-chain async worktree output symlink before launching a child", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const repoDir = createRepo("pi-subagent-async-worktree-chain-output-symlink-");
+		const id = `async-worktree-chain-output-symlink-${Date.now().toString(36)}`;
+		const expectedWorktreePath = path.join(os.tmpdir(), `pi-worktree-${id}-s0-0`);
+		const outsideFile = path.join(tempDir, `${id}-outside.txt`);
+		const outputDir = path.join(repoDir, "parallel-0", "0-writer");
+		fs.writeFileSync(outsideFile, "outside sentinel", "utf-8");
+		fs.mkdirSync(outputDir, { recursive: true });
+		fs.symlinkSync(outsideFile, path.join(outputDir, "context.md"));
+		git(repoDir, ["add", "parallel-0"]);
+		git(repoDir, ["commit", "-m", "add static chain output symlink"]);
+		mockPi.onCall({ output: "must not launch", writeOutput: "must not escape" });
+		try {
+			const started = executeAsyncChain!(id, {
+				chain: [{ parallel: [{ agent: "writer", task: "Write static chain worktree output" }], worktree: true }],
+				chainDir: path.join(tempDir, "chains"),
+				agents: [makeAgent("writer", { output: "context.md" })],
+				ctx: { pi: { events: { emit() {} } }, cwd: repoDir, currentSessionId: "session-1" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+			assert.notEqual(started.isError, true, started.content.map((part) => part.text ?? "").join("\n"));
+
+			const resultPath = await waitForAsyncResultFile(id, 10_000);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			assert.equal(payload.success, false);
+			assert.match(JSON.stringify(payload), /Relative output path escapes its base directory through a symlink/);
+			assert.equal(mockPi.callCount(), 0, "output containment must fail before a static-chain worktree child launches");
+			assert.equal(fs.readFileSync(outsideFile, "utf-8"), "outside sentinel");
+			assert.equal(fs.existsSync(expectedWorktreePath), false, "failed worktree setup must remove the generated worktree path");
+			assert.equal(git(repoDir, ["worktree", "list", "--porcelain"]).includes(expectedWorktreePath), false);
+			assert.equal(git(repoDir, ["branch", "--list", `pi-parallel-${id}-s0-0`]), "");
+		} finally {
+			fs.rmSync(expectedWorktreePath, { recursive: true, force: true });
+			removeTempDir(repoDir);
+		}
+	});
+
+	it("preserves explicit absolute async worktree output opt-in", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const repoDir = createRepo("pi-subagent-async-worktree-absolute-output-");
+		const id = `async-worktree-absolute-output-${Date.now().toString(36)}`;
+		const expectedWorktreePath = path.join(os.tmpdir(), `pi-worktree-${id}-s0-0`);
+		const absoluteOutput = path.join(tempDir, `${id}-explicit.txt`);
+		mockPi.onCall({ output: "absolute output fallback", writeOutput: "explicit absolute output" });
+		try {
+			const started = executeAsyncChain!(id, {
+				chain: [{ parallel: [{ agent: "writer", task: "Write explicit absolute output", output: absoluteOutput }], worktree: true }],
+				resultMode: "parallel",
+				chainDir: path.join(tempDir, "chains"),
+				agents: [makeAgent("writer")],
+				ctx: { pi: { events: { emit() {} } }, cwd: repoDir, currentSessionId: "session-1" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+			assert.notEqual(started.isError, true, started.content.map((part) => part.text ?? "").join("\n"));
+
+			const resultPath = await waitForAsyncResultFile(id, 10_000);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			assert.equal(payload.success, true, JSON.stringify(payload));
+			assert.equal(mockPi.callCount(), 1);
+			assert.equal(fs.readFileSync(absoluteOutput, "utf-8"), "explicit absolute output");
+			assert.equal(fs.existsSync(expectedWorktreePath), false);
+		} finally {
+			fs.rmSync(expectedWorktreePath, { recursive: true, force: true });
+			removeTempDir(repoDir);
+		}
+	});
+
+	it("materializes safe static async chain outputs inside a worktree after checkout", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const repoDir = createRepo("pi-subagent-async-worktree-static-output-");
+		const id = `async-worktree-static-output-${Date.now().toString(36)}`;
+		const expectedWorktreePath = path.join(os.tmpdir(), `pi-worktree-${id}-s0-0`);
+		mockPi.onCall({ output: "fallback worktree output", writeOutput: "worktree child output" });
+		try {
+			const started = executeAsyncChain!(id, {
+				chain: [{ parallel: [{ agent: "writer", task: "Write safe worktree output" }], worktree: true }],
+				chainDir: path.join(tempDir, "chains"),
+				agents: [makeAgent("writer", { output: "context.md" })],
+				ctx: { pi: { events: { emit() {} } }, cwd: repoDir, currentSessionId: "session-1" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+			assert.notEqual(started.isError, true, started.content.map((part) => part.text ?? "").join("\n"));
+
+			const resultPath = await waitForAsyncResultFile(id, 10_000);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			assert.equal(payload.success, true, JSON.stringify(payload));
+			assert.equal(mockPi.callCount(), 1);
+			const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
+			assert.ok(callFile, "expected a recorded worktree child call");
+			const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+			const taskArg = args.filter((arg) => arg !== "--no-context-files").at(-1) ?? "";
+			assert.ok(taskArg.includes(`Write your findings to: ${path.join(expectedWorktreePath, "parallel-0", "0-writer", "context.md")}`));
+		} finally {
+			fs.rmSync(expectedWorktreePath, { recursive: true, force: true });
+			removeTempDir(repoDir);
+		}
+	});
+
+	it("keeps a missing declared output diagnostic nonfatal for async named bindings", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "async producer text" });
+		mockPi.onCall({ output: "consumer done" });
+		const id = `async-missing-output-${Date.now().toString(36)}`;
+		assert.ok(CHAIN_RUNS_DIR, "CHAIN_RUNS_DIR should be available");
+		const chainDir = path.join(CHAIN_RUNS_DIR, id);
+		fs.mkdirSync(chainDir, { recursive: true });
+		fs.writeFileSync(path.join(chainDir, "blocked"), "not a directory", "utf-8");
+
+		executeAsyncChain!(id, {
+			chain: [
+				{ agent: "producer", task: "Produce text", output: "blocked/out.md", as: "producer" },
+				{ agent: "consumer", task: "Consume {outputs.producer}" },
+			],
+			agents: [makeAgent("producer"), makeAgent("consumer")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 10_000);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, true, `run should succeed: ${JSON.stringify(payload.results)}`);
+		const callFiles = fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).sort();
+		const consumerCall = callFiles[1];
+		assert.ok(consumerCall, "expected consumer call");
+		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, consumerCall), "utf-8")).args as string[];
+		const task = args.filter((arg) => arg !== "--no-context-files").at(-1) ?? "";
+		assert.match(task, /Consume async producer text/);
 	});
 
 	it("does not re-expand {previous} injected by named output in an async sequential step", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -497,7 +873,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const callFiles = fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).sort();
 		const consumerCall = callFiles[1];
 		assert.ok(consumerCall, "expected consumer call");
-		const task = (JSON.parse(fs.readFileSync(path.join(mockPi.dir, consumerCall), "utf-8")).args as string[]).at(-1) ?? "";
+		const task = (JSON.parse(fs.readFileSync(path.join(mockPi.dir, consumerCall), "utf-8")).args as string[]).filter((arg) => arg !== "--no-context-files").at(-1) ?? "";
 		assert.match(task, /Consume literal \{previous\}/);
 		assert.doesNotMatch(task, /literal literal \{previous\}/);
 	});
@@ -523,7 +899,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const callFiles = fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).sort();
 		const consumerCall = callFiles[1];
 		assert.ok(consumerCall, "expected consumer call");
-		const task = (JSON.parse(fs.readFileSync(path.join(mockPi.dir, consumerCall), "utf-8")).args as string[]).at(-1) ?? "";
+		const task = (JSON.parse(fs.readFileSync(path.join(mockPi.dir, consumerCall), "utf-8")).args as string[]).filter((arg) => arg !== "--no-context-files").at(-1) ?? "";
 		assert.match(task, /Consume literal \{previous\}/);
 		assert.doesNotMatch(task, /literal literal \{previous\}/);
 	});
@@ -610,13 +986,18 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
 		assert.ok(callFile, "expected a recorded mock pi call");
 		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
-		assert.doesNotMatch(args.at(-1) ?? "", /progress\.md/);
+		assert.doesNotMatch(args.filter((arg) => arg !== "--no-context-files").at(-1) ?? "", /progress\.md/);
 		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
 	});
 
 	it("top-level async worktree parallel resolves reads and output against the worktree cwd", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		const repoDir = createRepo("pi-subagent-async-worktree-");
 		try {
+			const unrelatedNamespaceTarget = path.join(tempDir, "unrelated-top-level-worktree-namespace");
+			fs.mkdirSync(unrelatedNamespaceTarget);
+			fs.symlinkSync(unrelatedNamespaceTarget, path.join(repoDir, "parallel-0"));
+			git(repoDir, ["add", "parallel-0"]);
+			git(repoDir, ["commit", "-m", "add unrelated namespace symlink"]);
 			mockPi.onCall({ output: "Worktree report" });
 			const executor = createSubagentExecutor!({
 				pi: { events: createEventBus(), getSessionName: () => undefined },
@@ -662,7 +1043,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
 			assert.ok(callFile, "expected a recorded mock pi call");
 			const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
-			const taskArg = args.at(-1) ?? "";
+			const taskArg = args.filter((arg) => arg !== "--no-context-files").at(-1) ?? "";
 			assert.ok(taskArg.includes(`[Read from: ${path.join(worktreeCwd, "input.md")}]`));
 			assert.ok(taskArg.includes(`Write your findings to: ${path.join(worktreeCwd, "report.md")}`));
 		} finally {
@@ -1721,6 +2102,53 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8"));
 		assert.deepEqual(status.steps[0].recentTools.map((tool: { tool: string; args: string }) => ({ tool: tool.tool, args: tool.args })), [{ tool: "bash", args: "ls" }]);
 		assert.deepEqual(status.steps[0].recentOutput, ["file-a", "file-b", "Done streaming"]);
+	});
+
+	it("fails a background chain when a parallel item is killed by step inactivity", { skip: !isAsyncAvailable() ? "jiti not available" : undefined, timeout: 20_000 }, async () => {
+		mockPi.onCall({ delay: 20_000, output: "Timed-out output must not bind" });
+		mockPi.onCall({ output: "Downstream step must not run" });
+
+		const id = `async-parallel-step-inactivity-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		executeAsyncChain(id, {
+			chain: [
+				{
+					parallel: [{ agent: "slow", task: "Become inactive", as: "timed_output" }],
+					concurrency: 1,
+				},
+				{ agent: "slow", task: "Consume {outputs.timed_output}" },
+			],
+			agents: [makeAgent("slow")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+			controlConfig: {
+				...DEFAULT_CONTROL_CONFIG,
+				timeoutAction: "escalate_then_kill",
+				stepInactivityTimeoutMs: 100,
+				escalationGraceMs: 100,
+				runWallClockTimeoutMs: 30_000,
+			},
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 12_000);
+		assert.equal(mockPi.callCount(), 1, "a timed-out parallel item must stop the chain before output binding is consumed");
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, false);
+		assert.equal(payload.results.length, 1);
+		assert.equal(payload.results[0]?.success, false);
+		assert.match(payload.results[0]?.error ?? "", /step inactivity timeout/);
+
+		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.state, "failed");
+		assert.equal(status.steps?.[0]?.status, "failed");
+		assert.equal(status.steps?.[0]?.activityState, "timed_out");
+		assert.equal(status.steps?.[0]?.exitCode, 1);
+		assert.deepEqual(readStepTerminalEventTypes(id, 0), ["subagent.step.failed"]);
+		assert.ok(!readRunEventTypes(id).includes("subagent.step.completed"), "timed-out parallel item must not emit subagent.step.completed");
 	});
 
 	it("stops dispatching a background chain synchronously once the shared run wall-clock deadline fires", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

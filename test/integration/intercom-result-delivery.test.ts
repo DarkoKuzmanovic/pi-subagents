@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { ASYNC_DIR, INTERCOM_DETACH_REQUEST_EVENT, RESULTS_DIR } from "../../src/shared/types.ts";
+import { persistAsyncResumeLaunchTrust } from "../../src/runs/background/async-resume-trust.ts";
 import type { MockPi } from "../support/helpers.ts";
 import {
 	createMockPi,
@@ -413,11 +414,12 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 					{ agent: "b", status: "complete", sessionFile: secondSession },
 				],
 			}, null, 2), "utf-8");
+			persistAsyncResumeLaunchTrust(asyncDir, { trustedSessionFiles: [firstSession, secondSession] });
 			const { executor } = makeExecutor({ agents: [makeAgent("a"), makeAgent("b")] });
 
 			const result = await executor.execute(
 				"resume-revive-multi",
-				{ action: "resume", id: runId, index: 1, message: "What did b find?" },
+				{ action: "resume", id: runId, index: 1, message: "What did b find?", sessionDir: tempDir },
 				new AbortController().signal,
 				undefined,
 				makeMinimalCtx(tempDir),
@@ -452,11 +454,12 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 				sessionFile,
 				steps: [{ agent: "worker", status: "complete" }],
 			}, null, 2), "utf-8");
+			persistAsyncResumeLaunchTrust(asyncDir, { trustedSessionFiles: [sessionFile] });
 			const { executor } = makeExecutor();
 
 			const result = await executor.execute(
 				"resume-revive",
-				{ action: "resume", id: runId, message: "What changed?" },
+				{ action: "resume", id: runId, message: "What changed?", sessionDir: tempDir },
 				new AbortController().signal,
 				undefined,
 				makeMinimalCtx(tempDir),
@@ -711,6 +714,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 				cwd: tempDir,
 				steps: [{ agent: "a", status: "complete", sessionFile: asyncSession }],
 			}, null, 2), "utf-8");
+			persistAsyncResumeLaunchTrust(asyncDir, { trustedSessionFiles: [asyncSession] });
 			const { executor, state } = makeExecutor({ bridgeMode: "off", agents: [makeAgent("a")] });
 			state.foregroundRuns.set(foregroundId, {
 				runId: foregroundId,
@@ -722,7 +726,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 			const result = await executor.execute(
 				"ambiguous-resume",
-				{ action: "resume", id: base, message: "Follow up" },
+				{ action: "resume", id: base, message: "Follow up", sessionDir: tempDir },
 				new AbortController().signal,
 				undefined,
 				makeMinimalCtx(tempDir),

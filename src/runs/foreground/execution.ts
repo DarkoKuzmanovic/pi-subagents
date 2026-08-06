@@ -73,7 +73,7 @@ import { emptyUsage, sumUsage } from "../shared/usage.ts";
 import { FINAL_STOP_GRACE_MS, HARD_KILL_MS } from "../shared/exit-drain.ts";
 import { createRecentOutputBuffer } from "../shared/output-buffer.ts";
 import { createLineProcessor } from "../shared/stdio-parser.ts";
-import { getStderrTail } from "../shared/stderr-tail.ts";
+import { createBoundedStderrBuffer, getStderrTail } from "../shared/stderr-tail.ts";
 import { createStreamWatchdog } from "../shared/stream-budget.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
@@ -739,7 +739,7 @@ async function runSingleAttempt(
 			activityTimer.unref?.();
 		}
 
-		let stderrBuf = "";
+		const stderrBuffer = createBoundedStderrBuffer();
 
 		// Runaway child: record the failure and kill it, mirroring the
 		// timeout-kill escalation (SIGINT, then SIGTERM after 1s). Reached from
@@ -766,7 +766,8 @@ async function runSingleAttempt(
 			lines.forEach(processLine);
 		});
 		proc.stderr.on("data", (d) => {
-			stderrBuf += d.toString();
+			const stderrError = stderrBuffer.append(Buffer.isBuffer(d) ? d : String(d));
+			if (stderrError) handleRunawayError(stderrError);
 		});
 		proc.on("exit", () => {
 			childExited = true;
@@ -785,6 +786,7 @@ async function runSingleAttempt(
 			}
 			processClosed = true;
 			if (!streamWatchdog.tripped && buf.trim()) processLine(buf);
+			const stderrBuf = stderrBuffer.text();
 			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && cleanTerminalAssistantStopReceived && !result.error;
 			if (code !== 0 && stderrBuf.trim() && !result.error && !forcedDrainAfterFinalSuccess) {
 				const stderrTail = getStderrTail(stderrBuf);

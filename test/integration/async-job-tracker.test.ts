@@ -117,6 +117,40 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("classifies interrupted completion events as paused", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const state = createState();
+			const tracker = trackerMod!.createAsyncJobTracker(createEventRecorder().pi, state as never, asyncRoot, {
+				completionRetentionMs: 1000,
+			});
+
+			const addJob = (id: string) => state.asyncJobs.set(id, {
+				asyncId: id,
+				asyncDir: path.join(asyncRoot, id),
+				status: "running",
+				mode: "single",
+				startedAt: 0,
+				updatedAt: 0,
+			});
+
+			addJob("run-paused");
+			tracker.handleComplete({ id: "run-paused", success: false, state: "paused", exitCode: 0 });
+			assert.equal(state.asyncJobs.get("run-paused")?.status, "paused");
+
+			addJob("run-interrupted");
+			tracker.handleComplete({ id: "run-interrupted", success: false, exitCode: 0 });
+			assert.equal(state.asyncJobs.get("run-interrupted")?.status, "paused");
+
+			addJob("run-failed");
+			tracker.handleComplete({ id: "run-failed", success: false, exitCode: 1 });
+			assert.equal(state.asyncJobs.get("run-failed")?.status, "failed");
+			tracker.resetJobs();
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("uses flattened async-start agents for initial parallel group widget state", () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {

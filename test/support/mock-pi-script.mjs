@@ -143,7 +143,7 @@ function writeResponseEntries(entries, jsonMode) {
 }
 
 function resolveTaskText(args) {
-	const taskArg = args.at(-1) ?? "";
+	const taskArg = args.findLast((arg) => arg.startsWith("Task: ") || arg.startsWith("@")) ?? args.at(-1) ?? "";
 	if (taskArg.startsWith("@")) {
 		try {
 			return fs.readFileSync(taskArg.slice(1), "utf-8");

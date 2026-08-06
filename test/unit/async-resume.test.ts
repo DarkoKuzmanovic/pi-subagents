@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { buildRevivedAsyncTask, resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
+import { persistAsyncResumeLaunchTrust } from "../../src/runs/background/async-resume-trust.ts";
 
 function writeJson(filePath: string, value: object): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -28,6 +29,7 @@ describe("async resume lookup", () => {
 				sessionFile,
 				steps: [{ agent: "worker", status: "complete" }],
 			});
+			persistAsyncResumeLaunchTrust(path.join(asyncRoot, "run-abc"), { trustedSessionFiles: [sessionFile] });
 
 			const target = resolveAsyncResumeTarget({ id: "run-a" }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
 
@@ -37,6 +39,36 @@ describe("async resume lookup", () => {
 			assert.equal(target.sessionFile, sessionFile);
 			assert.equal(target.cwd, root);
 			assert.equal(target.intercomTarget, "subagent-worker-run-abc-1");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a session beneath an explicitly trusted symlinked directory", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-linked-root-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const physicalRoot = path.join(root, "physical-sessions");
+			const linkedRoot = path.join(root, "linked-sessions");
+			fs.mkdirSync(physicalRoot);
+			fs.symlinkSync(physicalRoot, linkedRoot);
+			const sessionFile = path.join(physicalRoot, "session.jsonl");
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			writeJson(path.join(asyncRoot, "run-linked-root", "status.json"), {
+				runId: "run-linked-root",
+				mode: "single",
+				state: "complete",
+				startedAt: 100,
+				sessionFile,
+				steps: [{ agent: "worker", status: "complete" }],
+			});
+			persistAsyncResumeLaunchTrust(path.join(asyncRoot, "run-linked-root"), { trustedSessionRoots: [linkedRoot] });
+
+			const target = resolveAsyncResumeTarget(
+				{ id: "run-linked-root" },
+				{ asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") },
+			);
+			assert.equal(target.sessionFile, sessionFile);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -81,6 +113,97 @@ describe("async resume lookup", () => {
 			assert.throws(
 				() => resolveAsyncResumeTarget({ dir: path.join(root, "outside") }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") }),
 				/Async run directory must be inside/,
+			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a caller-trusted session file absent from parent-authored launch trust", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-untrusted-session-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const callerTrustedRoot = path.join(root, "caller-trusted");
+			const sessionFile = path.join(callerTrustedRoot, "session.jsonl");
+			fs.mkdirSync(callerTrustedRoot, { recursive: true });
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			const asyncDir = path.join(asyncRoot, "run-untrusted");
+			writeJson(path.join(asyncDir, "status.json"), {
+				runId: "run-untrusted",
+				mode: "single",
+				state: "complete",
+				startedAt: 100,
+				sessionFile,
+				steps: [{ agent: "worker", status: "complete" }],
+			});
+			persistAsyncResumeLaunchTrust(asyncDir, {});
+			const resumeDeps = { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results"), trustedSessionRoots: [callerTrustedRoot] };
+
+			assert.throws(
+				() => resolveAsyncResumeTarget(
+					{ id: "run-untrusted" },
+					resumeDeps,
+				),
+				/outside parent-authored async launch roots or files/,
+			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects symlinked async resume session files", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-symlink-session-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const trustedRoot = path.join(root, "trusted");
+			fs.mkdirSync(trustedRoot, { recursive: true });
+			const realSessionFile = path.join(trustedRoot, "real.jsonl");
+			const linkedSessionFile = path.join(trustedRoot, "linked.jsonl");
+			fs.writeFileSync(realSessionFile, "", "utf-8");
+			fs.symlinkSync(realSessionFile, linkedSessionFile);
+			writeJson(path.join(asyncRoot, "run-symlink", "status.json"), {
+				runId: "run-symlink",
+				mode: "single",
+				state: "complete",
+				startedAt: 100,
+				sessionFile: linkedSessionFile,
+				steps: [{ agent: "worker", status: "complete" }],
+			});
+
+			assert.throws(
+				() => resolveAsyncResumeTarget(
+					{ id: "run-symlink" },
+					{ asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") },
+				),
+				/not a regular file/,
+			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects directories named like async resume session files", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-directory-session-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const trustedRoot = path.join(root, "trusted");
+			const sessionFile = path.join(trustedRoot, "session.jsonl");
+			fs.mkdirSync(sessionFile, { recursive: true });
+			writeJson(path.join(asyncRoot, "run-directory", "status.json"), {
+				runId: "run-directory",
+				mode: "single",
+				state: "complete",
+				startedAt: 100,
+				sessionFile,
+				steps: [{ agent: "worker", status: "complete" }],
+			});
+
+			assert.throws(
+				() => resolveAsyncResumeTarget(
+					{ id: "run-directory" },
+					{ asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") },
+				),
+				/not a regular file/,
 			);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
@@ -194,6 +317,7 @@ describe("async resume lookup", () => {
 					{ agent: "active", status: "running" },
 				],
 			});
+			persistAsyncResumeLaunchTrust(path.join(asyncRoot, "run-partial"), { trustedSessionFiles: [sessionFile] });
 
 			const target = resolveAsyncResumeTarget({ id: "run-partial", index: 0 }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
 			assert.equal(target.kind, "revive");
@@ -250,6 +374,7 @@ describe("async resume lookup", () => {
 					{ agent: "b", status: "complete", sessionFile: secondSession },
 				],
 			});
+			persistAsyncResumeLaunchTrust(path.join(asyncRoot, "run-multi"), { trustedSessionFiles: [firstSession, secondSession] });
 
 			assert.throws(
 				() => resolveAsyncResumeTarget({ id: "run-multi" }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") }),

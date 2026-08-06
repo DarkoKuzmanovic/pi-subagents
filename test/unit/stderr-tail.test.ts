@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { getStderrTail } from "../../src/runs/shared/stderr-tail.js";
+import { createBoundedStderrBuffer, getStderrTail } from "../../src/runs/shared/stderr-tail.js";
 
 describe("getStderrTail", () => {
 	it("returns empty string for null input", () => {
@@ -158,5 +158,40 @@ Details: The compilation failed due to syntax error
 		if (result.length > 800) {
 			assert.ok(result.endsWith("..."), "Should have ... suffix when truncated");
 		}
+	});
+});
+
+
+describe("createBoundedStderrBuffer", () => {
+	it("retains only the configured byte tail", () => {
+		const buffer = createBoundedStderrBuffer({ tailBytes: 8, hardCapBytes: 100 });
+		assert.strictEqual(buffer.append("012345"), undefined);
+		assert.strictEqual(buffer.append("6789"), undefined);
+		assert.strictEqual(buffer.totalBytes, 10);
+		assert.strictEqual(Buffer.byteLength(buffer.text(), "utf8"), 8);
+		assert.strictEqual(buffer.text(), "23456789");
+	});
+
+	it("preserves complete UTF-8 characters when chunks split a multibyte sequence", () => {
+		const buffer = createBoundedStderrBuffer({ tailBytes: 6, hardCapBytes: 100 });
+		const encoded = Buffer.from("A🙂B🙂C", "utf8");
+		assert.strictEqual(buffer.append(encoded.subarray(0, 3)), undefined);
+		assert.strictEqual(buffer.append(encoded.subarray(3, 8)), undefined);
+		assert.strictEqual(buffer.append(encoded.subarray(8)), undefined);
+		assert.strictEqual(buffer.text(), "B🙂C");
+		assert.ok(!buffer.text().includes("�"));
+	});
+
+	it("reports the hard cap exactly once and remains bounded afterward", () => {
+		const buffer = createBoundedStderrBuffer({ tailBytes: 5, hardCapBytes: 10 });
+		assert.strictEqual(buffer.append("12345"), undefined);
+		const error = buffer.append("678901");
+		assert.match(error ?? "", /runaway stderr aborted/);
+		assert.match(error ?? "", /10 bytes/);
+		assert.strictEqual(buffer.tripped, true);
+		assert.strictEqual(buffer.text(), "78901");
+		assert.strictEqual(buffer.append("ignored after trip"), undefined);
+		assert.strictEqual(buffer.totalBytes, 11);
+		assert.strictEqual(Buffer.byteLength(buffer.text(), "utf8"), 5);
 	});
 });

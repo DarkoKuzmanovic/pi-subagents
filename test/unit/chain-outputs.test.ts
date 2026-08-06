@@ -16,6 +16,10 @@ function seq(agent: string, extra: Record<string, unknown> = {}): ChainStep {
 }
 
 describe("validateChainOutputBindings", () => {
+	it("rejects chain steps declaring an acceptance gate (M13.1 revert left it silently dropped)", () => {
+		const steps: ChainStep[] = [seq("worker", { gate: { rubric: ["Adds the feature"] } })];
+		assert.throws(() => validateChainOutputBindings(steps), /declares an acceptance gate/);
+	});
 	it("accepts a producing step and a later consumer", () => {
 		const steps: ChainStep[] = [
 			seq("scout", { as: "ctx", task: "find things" }),

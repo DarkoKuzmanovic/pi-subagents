@@ -24,6 +24,7 @@ interface AsyncExecutionModule {
 }
 interface TypesModule {
 	ASYNC_DIR: string;
+	CHAIN_RUNS_DIR: string;
 	RESULTS_DIR: string;
 }
 
@@ -33,6 +34,7 @@ const available = !!(asyncMod && typesMod);
 const isAsyncAvailable = asyncMod?.isAsyncAvailable;
 const executeAsyncChain = asyncMod?.executeAsyncChain;
 const ASYNC_DIR = typesMod?.ASYNC_DIR;
+const CHAIN_RUNS_DIR = typesMod?.CHAIN_RUNS_DIR;
 const RESULTS_DIR = typesMod?.RESULTS_DIR;
 
 const FILES_SCHEMA = {
@@ -56,7 +58,7 @@ function findCallWith(dir: string, ...needles: string[]): string | undefined {
 	for (const name of fs.readdirSync(dir)) {
 		if (!name.startsWith("call-")) continue;
 		const args = JSON.parse(fs.readFileSync(path.join(dir, name), "utf-8")).args as string[];
-		const last = args.at(-1) ?? "";
+		const last = args.filter((arg) => arg !== "--no-context-files").at(-1) ?? "";
 		if (needles.every((n) => last.includes(n))) return last;
 	}
 	return undefined;
@@ -65,6 +67,7 @@ function findCallWith(dir: string, ...needles: string[]): string | undefined {
 describe("async dynamic fanout", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
 	let mockPi: MockPi;
+	let extraTempDirs: string[];
 
 	before(() => {
 		mockPi = createMockPi();
@@ -76,9 +79,11 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 	beforeEach(() => {
 		tempDir = createTempDir();
 		mockPi.reset();
+		extraTempDirs = [];
 	});
 	afterEach(() => {
 		removeTempDir(tempDir);
+		for (const dir of extraTempDirs) removeTempDir(dir);
 	});
 
 	it(
@@ -139,9 +144,12 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 	);
 
 	it(
-		"namespaces inherited default outputs for materialized fanout items",
+		"defers relative output containment until materialized fanout items are namespaced",
 		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
 		async () => {
+			const outsideDir = createTempDir();
+			extraTempDirs.push(outsideDir);
+			fs.symlinkSync(outsideDir, path.join(tempDir, "linked"));
 			mockPi!.onCall({ structured: { files: ["alpha.ts", "beta.ts"] }, output: "listed files" });
 			// Keyed to the per-item task text: materialized fanout children run concurrently,
 			// so an unkeyed queue swaps these two responses between parallel-1/0 and parallel-1/1.
@@ -149,7 +157,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			mockPi!.onCall({ taskIncludes: "Review file beta.ts", output: "fallback beta", writeOutput: "child beta" });
 
 			const id = `async-fanout-output-${Date.now().toString(36)}`;
-			executeAsyncChain!(id, {
+			const started = executeAsyncChain!(id, {
 				chain: [
 					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
 					{
@@ -158,23 +166,76 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 						collect: { as: "results" },
 					},
 				],
-				agents: [makeAgent("recon"), makeAgent("reviewer", { output: "context.md" })],
+				agents: [makeAgent("recon"), makeAgent("reviewer", { output: "linked/report.md" })],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				artifactConfig,
 				shareEnabled: false,
 				sessionRoot: path.join(tempDir, "sessions"),
 				maxSubagentDepth: 2,
 			});
+			assert.notEqual(started.isError, true, started.content.map((part) => part.text ?? "").join("\n"));
 
 			const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
 			await waitForFile(resultPath);
 			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
 			assert.equal(payload.success, true, `run should succeed: ${JSON.stringify(payload.results)}`);
 
-			const firstOutput = path.join(tempDir, "parallel-1", "0-reviewer", "context.md");
-			const secondOutput = path.join(tempDir, "parallel-1", "1-reviewer", "context.md");
+			assert.ok(CHAIN_RUNS_DIR, "CHAIN_RUNS_DIR should be available");
+			const chainDir = path.join(CHAIN_RUNS_DIR, id);
+			const firstOutput = path.join(chainDir, "parallel-1", "0-reviewer", "linked", "report.md");
+			const secondOutput = path.join(chainDir, "parallel-1", "1-reviewer", "linked", "report.md");
 			assert.equal(fs.readFileSync(firstOutput, "utf-8"), "child alpha");
 			assert.equal(fs.readFileSync(secondOutput, "utf-8"), "child beta");
+			assert.equal(fs.existsSync(path.join(tempDir, "parallel-1")), false);
+			assert.equal(fs.existsSync(path.join(outsideDir, "report.md")), false, "the child-CWD symlink target must remain untouched");
+		},
+	);
+
+	it(
+		"rejects a missing materialized item directory beneath a chain namespace symlink",
+		{ skip: !isAsyncAvailable?.() ? "jiti not available" : undefined },
+		async () => {
+			const outsideDir = createTempDir();
+			const chainBase = createTempDir();
+			extraTempDirs.push(outsideDir, chainBase);
+			mockPi!.onCall({ structured: { files: ["alpha.ts"] }, output: "listed files" });
+			mockPi!.onCall({ taskIncludes: "Review file alpha.ts", output: "fallback alpha", writeOutput: "escaped alpha" });
+
+			const id = `async-fanout-chain-symlink-${Date.now().toString(36)}`;
+			const chainDir = path.join(chainBase, id);
+			fs.mkdirSync(chainDir);
+			fs.symlinkSync(outsideDir, path.join(chainDir, "parallel-1"));
+			const started = executeAsyncChain!(id, {
+				chain: [
+					{ agent: "recon", task: "List the files", as: "plan", outputSchema: FILES_SCHEMA },
+					{
+						expand: { from: { output: "plan", path: "/files" }, item: "file", maxItems: 10 },
+						parallel: { agent: "reviewer", task: "Review file {file}" },
+						collect: { as: "results" },
+					},
+				],
+				chainDir: chainBase,
+				agents: [makeAgent("recon"), makeAgent("reviewer", { output: "report.md" })],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig,
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+			assert.notEqual(started.isError, true, started.content.map((part) => part.text ?? "").join("\n"));
+
+			assert.ok(RESULTS_DIR, "RESULTS_DIR should be available");
+			const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+			await waitForFile(resultPath);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+			assert.equal(payload.success, false, "the unsafe namespace must fail before launching the fanout child");
+			assert.match(JSON.stringify(payload), /Relative output path escapes its base directory through a symlink/);
+			assert.ok(ASYNC_DIR, "ASYNC_DIR should be available");
+			const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8"));
+			assert.equal(status.state, "failed");
+			assert.match(String(status.error ?? ""), /Relative output path escapes its base directory through a symlink/);
+			assert.equal(mockPi!.callCount(), 1, "only the producer may launch before containment rejects materialization");
+			assert.equal(fs.existsSync(path.join(outsideDir, "0-reviewer")), false, "containment must reject before mkdir follows the symlink");
 		},
 	);
 
@@ -402,7 +463,7 @@ describe("async dynamic fanout", { skip: !available ? "pi packages not available
 			for (const name of fs.readdirSync(mockPi!.dir)) {
 				if (!name.startsWith("call-")) continue;
 				const args = JSON.parse(fs.readFileSync(path.join(mockPi!.dir, name), "utf-8")).args as string[];
-				const task = args.at(-1) ?? "";
+				const task = args.filter((arg) => arg !== "--no-context-files").at(-1) ?? "";
 				if (task.includes("Review-only file")) {
 					assert.doesNotMatch(task, /progress at:/, "read-only per-item task should not include progress instructions");
 				}

@@ -79,6 +79,30 @@ test("read-only diagnostic dispatches phrased as negated edits do not expect mut
 	assert.equal(guard.triggered, false);
 });
 
+test("scoped no-edit phrases do not exempt implementation dispatches (0.45.1 regression)", () => {
+	// 0.45.1 shipped EXPLICIT_NO_EDIT_PATTERNS that matched mid-sentence, so a worker task
+	// like "Implement the feature. No edits needed to tests." was classified read-only and
+	// the completion guard silently disabled for a real implementation dispatch.
+	assert.equal(expectsImplementationMutation("worker", "Implement the feature. No edits needed to tests."), true);
+	assert.equal(expectsImplementationMutation("worker", "Implement the fix. Make no edits to the docs."), true);
+	assert.equal(expectsImplementationMutation("worker", "Fix the bug without editing the parser."), true);
+	assert.equal(expectsImplementationMutation("worker", "Refactor the module; making no edits to tests."), true);
+	assert.equal(expectsImplementationMutation("worker", "Make no edits to unrelated files. Fix the bug."), true);
+
+	// Sentence-final constraints still exempt, exactly as before.
+	assert.equal(expectsImplementationMutation("worker", "Make no edits."), false);
+	assert.equal(expectsImplementationMutation("worker", "No edits needed."), false);
+	assert.equal(expectsImplementationMutation("worker", "Check the setup without making any changes."), false);
+	assert.equal(expectsImplementationMutation("worker", "No edits needed; just report back."), false);
+
+	const guard = evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: "Implement the feature. No edits needed to tests.",
+		messages: [assistantText("Done.")],
+	});
+	assert.equal(guard.triggered, true);
+});
+
 test("worker implementation verbs win over investigative wording", () => {
 	assert.equal(expectsImplementationMutation("worker", "Investigate why the worker did not edit files and fix it"), true);
 	assert.equal(expectsImplementationMutation("worker", "Research the current code path and patch the bug"), true);

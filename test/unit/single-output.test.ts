@@ -45,6 +45,50 @@ describe("resolveSingleOutputPath", () => {
 		const resolved = resolveSingleOutputPath("reviews/report.md", "/runtime", "nested/work");
 		assert.equal(resolved, path.resolve("/runtime", "nested/work", "reviews/report.md"));
 	});
+
+	it("rejects relative output paths that escape their base directory", () => {
+		const base = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-output-base-"));
+		tempDirs.push(base);
+		assert.throws(
+			() => resolveSingleOutputPath("../outside.md", base),
+			/Relative output path escapes its base directory/,
+		);
+	});
+
+	it("allows in-base names that merely start with two dots", () => {
+		const base = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-output-dot-name-"));
+		tempDirs.push(base);
+		assert.equal(
+			resolveSingleOutputPath("..notes/report.md", base),
+			path.join(base, "..notes", "report.md"),
+		);
+	});
+
+	it("rejects relative output paths through a symlink outside their base directory", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-output-symlink-"));
+		tempDirs.push(root);
+		const base = path.join(root, "base");
+		const outside = path.join(root, "outside");
+		fs.mkdirSync(base);
+		fs.mkdirSync(outside);
+		fs.symlinkSync(outside, path.join(base, "linked"));
+		assert.throws(
+			() => resolveSingleOutputPath("linked/report.md", base),
+			/Relative output path escapes its base directory through a symlink/,
+		);
+	});
+
+	it("rejects dangling output symlinks that point outside the base directory", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-output-dangling-symlink-"));
+		tempDirs.push(root);
+		const base = path.join(root, "base");
+		fs.mkdirSync(base);
+		fs.symlinkSync(path.join(root, "missing-outside.md"), path.join(base, "report.md"));
+		assert.throws(
+			() => resolveSingleOutputPath("report.md", base),
+			/Relative output path escapes its base directory through a symlink/,
+		);
+	});
 });
 
 describe("injectSingleOutputInstruction", () => {

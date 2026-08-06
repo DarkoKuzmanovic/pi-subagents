@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.45.2] - 2026-08-06
+
+### Fixed
+
+- **Scoped no-edit wording no longer disables the completion guard for real implementation work.** Phrases such as “no edits needed to tests” now remain scoped to their target instead of suppressing mutation checks for the whole dispatch.
+- **Timeout-killed async chain steps can no longer bind garbage output or continue as successful.** Both sequential and parallel paths trust the durable `timed_out` state rather than the interrupt path's zero exit code; paused completions also render as paused instead of failed.
+- **Fresh async children now receive the same context-file isolation as foreground children.** `--no-context-files` is threaded through detached sequential, parallel, and dynamic steps, while forked and resumed-lineage children keep their inherited context.
+- **Named output bindings now stay usable when a declared output file is missing.** Foreground chains report the condition through the nonfatal `outputSaveError` channel, matching async binding behavior instead of mutating the step's hard error.
+- **Parked acceptance gates are rejected instead of silently ignored.** The dead `gate` schema surface was removed and semantic validation catches permissive-schema callers with a clear M13.1-revert error.
+- **Child diagnostics are bounded and crash-safe.** Foreground and background stderr retention now keeps a UTF-8-safe 64 KB tail with a 32 MB runaway cap, and JSONL writers handle asynchronous stream errors instead of crashing the host process.
+- **Reloads and no-worktree parallel runs no longer leak or duplicate runtime state.** Fanout-child polling has explicit `session_start`/`session_shutdown` ownership; overlapping reloads hand off delivered-but-unwritten results and completed request IDs so result-write or unlink failures cannot redeliver controls. Progress plus parallel output artifacts use dedicated chain directories rather than the real checkout.
+- **Async result delivery is retryable without deleting in-flight work.** Result files are guarded while delivery awaits acknowledgement, transient failures reschedule automatically, and repeatedly malformed JSON is quarantined after bounded retries.
+- **Async resume validates persisted session files at the trust boundary without breaking completed forked runs.** Resume requires an absolute regular non-symlink `.jsonl`, canonicalizes it, and confines it exclusively to parent-authored launch-time roots and files; resume-time configuration and current-parent roots cannot expand trust. Persisted launch trust keeps real fork-context and ephemeral-parent sessions revivable without broadening trust. Runs created before 0.45.2 have no launch-time trust manifest and therefore fail closed instead of being revivable after upgrade.
+- **Relative output paths cannot escape their declared base.** Lexical `..`, existing symlink ancestors, and dangling output symlinks are rejected for single, sequential, static-parallel, and dynamic-parallel outputs; documented absolute output paths remain an explicit opt-in. Async static and dynamic fanout check canonical namespaces before creating missing item directories and revalidate afterward. Worktree namespaces are materialized only after checkout, and every originally relative worktree output target is then revalidated before a child launches; unrelated child-CWD symlinks remain harmless.
+- **The async integration suite no longer self-skips under `node --test`.** Jiti discovery now bypasses package export maps with a bounded `node_modules` ancestry walk, and the mock Pi harness resolves task arguments correctly when flags follow the positional task.
+
+### Tests
+
+- Added regressions for all post-0.45.1 BLOCKER and SHOULD-FIX findings plus the final fork-resume, reload-handoff, and static/dynamic/worktree-output fix-back cases. Final gates: 1,375 unit tests passed with 4 intentional skips; 464 integration tests passed with only the opt-in live-model smoke test skipped.
+
 ## [0.45.1] - 2026-08-05
 
 ### Fixed

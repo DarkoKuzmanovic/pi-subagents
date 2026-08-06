@@ -17,6 +17,7 @@ class MockStream implements JsonlWriteStream {
 	writes: string[] = [];
 	ended = false;
 	private drainHandler?: () => void;
+	private errorHandler?: (err: Error) => void;
 	private readonly writeResults: boolean[];
 	constructor(writeResults: boolean[] = []) {
 		this.writeResults = writeResults;
@@ -26,8 +27,9 @@ class MockStream implements JsonlWriteStream {
 		if (this.writeResults.length === 0) return true;
 		return this.writeResults.shift() ?? true;
 	}
-	once(event: "drain", listener: () => void): JsonlWriteStream {
+	once(event: "drain" | "error", listener: (err?: Error) => void): JsonlWriteStream {
 		if (event === "drain") this.drainHandler = listener;
+		else this.errorHandler = listener;
 		return this;
 	}
 	end(callback?: () => void): void {
@@ -36,6 +38,9 @@ class MockStream implements JsonlWriteStream {
 	}
 	emitDrain(): void {
 		this.drainHandler?.();
+	}
+	emitError(err: Error): void {
+		this.errorHandler?.(err);
 	}
 }
 
@@ -49,6 +54,23 @@ describe("createJsonlWriter", () => {
 		writer.writeLine('{"type":"a"}');
 		writer.writeLine('{"type":"b"}');
 		assert.deepEqual(stream.writes, ['{"type":"a"}\n', '{"type":"b"}\n']);
+	});
+	it("survives an async stream error: resumes paused source, degrades to no-op", async () => {
+		const source = new MockSource();
+		const stream = new MockStream([false]);
+		const writer = createJsonlWriter("/tmp/out.jsonl", source, {
+			createWriteStream: () => stream,
+		});
+		writer.writeLine('{"type":"a"}');
+		assert.equal(source.paused, 1);
+		stream.emitError(new Error("EISDIR: illegal operation on a directory"));
+		// The backpressured source is resumed so the run is not wedged, and the writer
+		// degrades to a no-op: later writes are dropped, close() resolves without hanging.
+		assert.equal(source.resumed, 1);
+		writer.writeLine('{"type":"b"}');
+		assert.equal(stream.writes.length, 1);
+		await writer.close();
+		assert.equal(stream.ended, false);
 	});
 
 	it("pauses on backpressure and resumes on drain", () => {

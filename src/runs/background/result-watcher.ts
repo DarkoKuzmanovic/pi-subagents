@@ -21,8 +21,10 @@ import {
 
 const WATCHER_RESTART_DELAY_MS = 3000;
 const WATCHER_POLL_INTERVAL_MS = 3000;
+const RESULT_RETRY_DELAY_MS = 100;
+const RESULT_MAX_RETRY_ATTEMPTS = 3;
 
-type ResultWatcherFs = Pick<typeof fs, "existsSync" | "readFileSync" | "unlinkSync" | "readdirSync" | "mkdirSync" | "watch">;
+type ResultWatcherFs = Pick<typeof fs, "existsSync" | "readFileSync" | "unlinkSync" | "renameSync" | "readdirSync" | "mkdirSync" | "watch">;
 
 type ResultWatcherTimers = {
 	setTimeout: typeof setTimeout;
@@ -67,13 +69,18 @@ export function createResultWatcher(
 	const fsApi = deps.fs ?? fs;
 	const asyncRunsDir = deps.asyncRunsDir ?? ASYNC_DIR;
 	const timers = deps.timers ?? { setTimeout, clearTimeout, setInterval, clearInterval };
+	const inFlightResults = new Set<string>();
+	const resultFailureAttempts = new Map<string, number>();
 
 	const handleResult = async (file: string) => {
+		if (inFlightResults.has(file)) return;
+		inFlightResults.add(file);
 		const resultPath = path.join(resultsDir, file);
-		if (!fsApi.existsSync(resultPath)) return;
 		let completionKey: string | undefined;
 		let completionMarkedNow = false;
+		let parsedSuccessfully = false;
 		try {
+			if (!fsApi.existsSync(resultPath)) return;
 			const data = JSON.parse(fsApi.readFileSync(resultPath, "utf-8")) as {
 				id?: string;
 				runId?: string;
@@ -99,12 +106,20 @@ export function createResultWatcher(
 				budget?: BudgetSummary;
 				budgetExhausted?: boolean;
 			};
-			if (data.sessionId && data.sessionId !== state.currentSessionId) return;
-			if (!data.sessionId && data.cwd && data.cwd !== state.baseCwd) return;
+			parsedSuccessfully = true;
+			if (data.sessionId && data.sessionId !== state.currentSessionId) {
+				resultFailureAttempts.delete(file);
+				return;
+			}
+			if (!data.sessionId && data.cwd && data.cwd !== state.baseCwd) {
+				resultFailureAttempts.delete(file);
+				return;
+			}
 
 			const now = Date.now();
 			completionKey = buildCompletionKey(data, `result:${file}`);
 			if (markSeenWithTtl(state.completionSeen, completionKey, now, completionTtlMs)) {
+				resultFailureAttempts.delete(file);
 				// Same-process rescan of an already-delivered result: never unlink out from under a
 				// still-pending OM outbox — leave the OM reconcile loop (see reconcilePendingOmOutboxes)
 				// to finish the job once every outbox for this run has a validated receipt.
@@ -212,14 +227,31 @@ export function createResultWatcher(
 			if (!retainForOm) {
 				fsApi.unlinkSync(resultPath);
 			}
+			resultFailureAttempts.delete(file);
 		} catch (error) {
 			if (isNotFoundError(error)) return;
 			// Delivery failed after the completion key was marked seen. Unmark it,
 			// otherwise the retained result file would hit the dedupe branch on
-			// retry and be unlinked WITHOUT ever emitting — permanently dropping
-			// the result (mark-seen-before-delivery hazard).
+			// retry and be unlinked without ever emitting.
 			if (completionMarkedNow && completionKey) state.completionSeen.delete(completionKey);
+			const attempts = (resultFailureAttempts.get(file) ?? 0) + 1;
+			resultFailureAttempts.set(file, attempts);
 			console.error(`Failed to process subagent result file '${resultPath}':`, error);
+
+			if (!parsedSuccessfully && attempts >= RESULT_MAX_RETRY_ATTEMPTS) {
+				const quarantinePath = `${resultPath}.failed-${attempts}`;
+				try {
+					if (fsApi.existsSync(resultPath)) fsApi.renameSync(resultPath, quarantinePath);
+					resultFailureAttempts.delete(file);
+					console.error(`Quarantined malformed subagent result file at '${quarantinePath}'.`);
+				} catch (quarantineError) {
+					console.error(`Failed to quarantine malformed subagent result file '${resultPath}':`, quarantineError);
+				}
+			} else if (attempts < RESULT_MAX_RETRY_ATTEMPTS) {
+				state.resultFileCoalescer.schedule(file, RESULT_RETRY_DELAY_MS);
+			}
+		} finally {
+			inFlightResults.delete(file);
 		}
 	};
 
@@ -372,6 +404,7 @@ export function createResultWatcher(
 		}
 		state.watcherRestartTimer = null;
 		state.resultFileCoalescer.clear();
+		resultFailureAttempts.clear();
 	};
 
 	return { startResultWatcher, primeExistingResults, stopResultWatcher };

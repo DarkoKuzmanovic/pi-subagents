@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OutputMode, SavedOutputReference } from "../../shared/types.ts";
+import { resolveOutputPathWithinBase } from "../../shared/path-containment.ts";
 
 export interface SingleOutputSnapshot {
 	exists: boolean;
@@ -28,7 +29,7 @@ export function resolveSingleOutputPath(
 	const baseCwd = requestedCwd
 		? (path.isAbsolute(requestedCwd) ? requestedCwd : path.resolve(runtimeCwd, requestedCwd))
 		: runtimeCwd;
-	return path.resolve(baseCwd, output);
+	return resolveOutputPathWithinBase(output, baseCwd);
 }
 
 export function injectSingleOutputInstruction(task: string, outputPath: string | undefined): string {

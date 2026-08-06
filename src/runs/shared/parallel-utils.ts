@@ -14,11 +14,14 @@ export interface RunnerSubagentStep {
 	systemPromptMode?: "append" | "replace";
 	inheritProjectContext: boolean;
 	inheritSkills: boolean;
+	skipContextFiles?: boolean;
 	modelPromptRole?: string;
 	/** Fallback model (provider/id format) for role resolution when model is undefined */
 	modelPromptRoleFallbackModel?: string;
 	skills?: string[];
 	outputPath?: string;
+	/** Base for an originally relative output that must be revalidated after worktree checkout. */
+	relativeOutputContainmentBase?: string;
 	outputMode?: "inline" | "file-only";
 	sessionFile?: string;
 	maxSubagentDepth?: number;

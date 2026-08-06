@@ -48,20 +48,6 @@ const ReadsOverride = Type.Unsafe({
 
 const AsParam = Type.String({ description: "Store this step/task output under this name for later {outputs.name} references in the chain. Must match /^[A-Za-z_][A-Za-z0-9_]*$/ and be unique across the chain." });
 const OutputSchemaParam = Type.Unsafe<Record<string, unknown>>({ type: "object", description: "JSON Schema (object) the child's structured_output value must satisfy. When set, the step must finish by calling the structured_output tool; prose-only or schema-invalid completion fails the step." });
-const GateSpecSchema = Type.Object({
-	rubric: Type.Unsafe({
-		anyOf: [
-			{ type: "string", minLength: 1 },
-			{ type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-		],
-		description: "Non-empty acceptance rubric: one criterion string or a non-empty array of criterion strings. The grader must score every criterion independently.",
-	}),
-	grader: Type.Optional(Type.String({ minLength: 1, description: "Grader agent name. Defaults to the read-only builtin grader." })),
-	maxIterations: Type.Optional(Type.Integer({ minimum: 1, description: "Maximum total producer attempts, including the first attempt. Default: 2; 1 grades once without retrying." })),
-	threshold: Type.Optional(Type.Number({ minimum: 0, maximum: 1, description: "Minimum fraction of rubric criteria that must be met for the gate to pass. Default: 1.0." })),
-	onExhausted: Type.Optional(Type.String({ enum: ["fail", "accept-last"], description: "Action after all producer attempts are exhausted: fail the step (default) or continue with the final attempt." })),
-	evidence: Type.Optional(Type.String({ enum: ["worktree", "report-only"], description: "Evidence given to the grader: worktree (default) provides the changed files in the attempt worktree; report-only provides only the producer's output." })),
-}, { additionalProperties: false, description: "Acceptance gate for a sequential chain step. By default the grader reads the produced files in the attempt worktree, not the real working tree; choose report-only only when prose output is sufficient." });
 
 const TaskItem = Type.Object({
 	agent: Type.String(), 
@@ -113,7 +99,6 @@ const ChainItem = Type.Object({
 	thinking: Type.Optional(Type.String({ enum: [...THINKING_LEVELS], description: "Thinking level override for this chain step" })),
 	as: Type.Optional(AsParam),
 	outputSchema: Type.Optional(OutputSchemaParam),
-	gate: Type.Optional(GateSpecSchema),
 	parallel: Type.Optional(Type.Union([Type.Array(ParallelTaskSchema, { minItems: 1 }), ParallelTaskSchema, Type.String()], { description: "Tasks to run in parallel (array), or a single parallel template object when used with expand/collect for dynamic fanout. Prefer literal JSON; a JSON-stringified array is tolerated and parsed." })),
 	expand: Type.Optional(Type.Object({
 		from: Type.Object({

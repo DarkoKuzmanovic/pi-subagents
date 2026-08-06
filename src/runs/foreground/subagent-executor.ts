@@ -20,6 +20,7 @@ import { aggregateParallelOutputs } from "../shared/parallel-utils.ts";
 import { recordRun } from "../shared/run-history.ts";
 import {
 	buildChainInstructions,
+	createChainDir,
 	writeInitialProgressFile,
 	getStepAgents,
 	isDynamicParallelStep,
@@ -662,6 +663,11 @@ async function resumeAsyncRun(input: {
 
 	let target: ResumeSourceTarget;
 	const parentSessionFile = input.ctx.sessionManager.getSessionFile() ?? null;
+	const trustedSessionRoots = [
+		...(input.params.sessionDir ? [path.resolve(input.deps.expandTilde(input.params.sessionDir))] : []),
+		...(input.deps.config.defaultSessionDir ? [path.resolve(input.deps.expandTilde(input.deps.config.defaultSessionDir))] : []),
+		...(parentSessionFile ? [input.deps.getSubagentSessionRoot(parentSessionFile)] : []),
+	];
 	try {
 		const requestedId = input.params.id ?? input.params.runId;
 		const resolved = requestedId ? resolveSubagentRunId(requestedId, { state: input.deps.state, nested: nestedResolutionScopeForExecutor(input.deps) }) : undefined;
@@ -669,10 +675,6 @@ async function resumeAsyncRun(input: {
 			if (resolved.match.run.state === "running" || resolved.match.run.state === "queued") {
 				return resumeLiveNestedRun({ target: resolved, message: followUp });
 			}
-			const trustedSessionRoots = [
-				...(input.deps.config.defaultSessionDir ? [path.resolve(input.deps.expandTilde(input.deps.config.defaultSessionDir))] : []),
-				...(parentSessionFile ? [input.deps.getSubagentSessionRoot(parentSessionFile)] : []),
-			];
 			target = resolveNestedResumeTarget(resolved, trustedSessionRoots);
 		} else {
 			target = resolveResumeTarget(input.params, input.deps.state);
@@ -742,6 +744,7 @@ async function resumeAsyncRun(input: {
 		agent: target.agent,
 		task: buildRevivedAsyncTask(target, followUp),
 		agentConfig,
+		context: "lineage",
 		ctx: {
 			pi: input.deps.pi,
 			cwd: input.requestCwd,
@@ -1414,6 +1417,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const omLaunchManifest = resolveAsyncOmLaunchManifest(params, inheritedNestedRoute, ctx, effectiveCwd, id, asyncChain);
 		return executeAsyncChain(id, {
 			chain: asyncChain,
+			chainDir: params.chainDir,
+			context: params.context,
 			omLaunchManifest,
 			resultMode: "parallel",
 			agents,
@@ -1445,6 +1450,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const omLaunchManifest = resolveAsyncOmLaunchManifest(params, inheritedNestedRoute, ctx, effectiveCwd, id, chain);
 		return executeAsyncChain(id, {
 			chain,
+			chainDir: params.chainDir,
+			context: params.context,
 			omLaunchManifest,
 			task: params.task,
 			agents,
@@ -1494,6 +1501,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			agent: params.agent!,
 			task: params.context === "fork" ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			agentConfig: a,
+			context: params.context,
 			omLaunchManifest,
 			ctx: asyncCtx,
 			availableModels,
@@ -1599,6 +1607,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		const omLaunchManifest = resolveAsyncOmLaunchManifest(params, data.inheritedNestedRoute, ctx, effectiveCwd, id, asyncChain);
 		return executeAsyncChain(id, {
 			chain: asyncChain,
+			chainDir: params.chainDir,
+			context: params.context,
 			omLaunchManifest,
 			task: params.task,
 			agents,
@@ -1664,6 +1674,7 @@ interface ForegroundParallelRunInput {
 	artifactsDir: string;
 	maxOutput?: MaxOutputConfig;
 	paramsCwd: string;
+	progressDir: string;
 	maxSubagentDepths: number[];
 	availableModels: ModelInfo[];
 	modelOverrides: (string | undefined)[];
@@ -1794,7 +1805,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			? buildChainInstructions({ ...behavior, output: false, progress: false }, taskCwd, false)
 			: { prefix: "", suffix: "" };
 		const progressInstructions = behavior
-			? buildChainInstructions({ ...behavior, output: false, reads: false }, input.paramsCwd, index === input.firstProgressIndex)
+			? buildChainInstructions({ ...behavior, output: false, reads: false }, input.progressDir, index === input.firstProgressIndex)
 			: { prefix: "", suffix: "" };
 		const outputPath = resolveSingleOutputPath(behavior?.output, input.ctx.cwd, taskCwd);
 		const taskText = injectSingleOutputInstruction(
@@ -2057,6 +2068,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			const omLaunchManifest = resolveAsyncOmLaunchManifest(params, data.inheritedNestedRoute, ctx, effectiveCwd, id, asyncChain);
 			return executeAsyncChain(id, {
 				chain: asyncChain,
+				chainDir: params.chainDir,
+				context: params.context,
 				omLaunchManifest,
 				resultMode: "parallel",
 				agents,
@@ -2114,7 +2127,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		}
 
 		const parallelProgressPrecreated = firstProgressIndex !== -1;
-		if (parallelProgressPrecreated) writeInitialProgressFile(effectiveCwd);
+		const parallelProgressDir = parallelProgressPrecreated ? createChainDir(runId, params.chainDir) : effectiveCwd;
+		if (parallelProgressPrecreated) writeInitialProgressFile(parallelProgressDir);
 
 		if (params.context === "fork") {
 			for (let i = 0; i < taskTexts.length; i++) {
@@ -2139,6 +2153,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			artifactsDir,
 			maxOutput: params.maxOutput,
 			paramsCwd: effectiveCwd,
+			progressDir: parallelProgressDir,
 			context: params.context,
 			availableModels,
 			modelOverrides,
@@ -2339,6 +2354,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				agent: params.agent!,
 				task: params.context === "fork" ? wrapForkTask(task) : task,
 				agentConfig,
+				context: params.context,
 				ctx: asyncCtx,
 				omLaunchManifest,
 				availableModels,

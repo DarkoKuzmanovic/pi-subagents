@@ -6,9 +6,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "../agents/agents.ts";
-import type { GateSpec } from "../runs/shared/acceptance-gate.ts";
 import { normalizeSkillInput } from "../agents/skills.ts";
 import { CHAIN_RUNS_DIR, type JsonSchemaObject, type OutputMode } from "./types.ts";
+import { assertRelativeOutputPathWithinBase, materializeDirectoryWithinRoot, resolveOutputPathWithinBase } from "./path-containment.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const INITIAL_PROGRESS_CONTENT = "# Progress\n\n## Status\nIn Progress\n\n## Tasks\n\n## Files Changed\n\n## Notes\n";
 
@@ -55,7 +55,6 @@ export interface SequentialStep {
 	label?: string;
 	as?: string;
 	outputSchema?: JsonSchemaObject;
-	gate?: GateSpec;
 	cwd?: string;
 	output?: string | false;
 	outputMode?: OutputMode;
@@ -565,7 +564,7 @@ export function buildChainInstructions(
 
 	// OUTPUT - prepend so agent knows where to write
 	if (behavior.output) {
-		const outputPath = resolveChainPath(behavior.output, chainDir);
+		const outputPath = resolveOutputPathWithinBase(behavior.output, chainDir);
 		prefixParts.push(`[Write to: ${outputPath}]`);
 	}
 
@@ -629,10 +628,12 @@ export function resolveParallelBehaviors(
 			} else if (path.isAbsolute(taskOutput)) {
 				output = taskOutput; // Absolute path: use as-is
 			} else {
+				assertRelativeOutputPathWithinBase(taskOutput, subdir);
 				output = path.join(subdir, taskOutput); // Relative: namespace under subdir
 			}
 		} else if (configOutput) {
 			// Agent defaults are always relative, so namespace them
+			assertRelativeOutputPathWithinBase(configOutput, subdir);
 			output = path.join(subdir, configOutput);
 		}
 
@@ -678,7 +679,8 @@ export function resolveParallelItemOutputPath(
 ): string | undefined {
 	if (typeof output !== "string" || !output) return undefined;
 	if (path.isAbsolute(output)) return output;
-	return path.join(chainDir, `parallel-${stepIndex}`, `${taskIndex}-${agentName}`, output);
+	const taskDir = path.join(chainDir, `parallel-${stepIndex}`, `${taskIndex}-${agentName}`);
+	return resolveOutputPathWithinBase(output, taskDir, chainDir);
 }
 
 /**
@@ -692,7 +694,7 @@ export function createParallelDirs(
 ): void {
 	for (let i = 0; i < taskCount; i++) {
 		const subdir = path.join(chainDir, `parallel-${stepIndex}`, `${i}-${agentNames[i]}`);
-		fs.mkdirSync(subdir, { recursive: true });
+		materializeDirectoryWithinRoot(subdir, chainDir);
 	}
 }
 
