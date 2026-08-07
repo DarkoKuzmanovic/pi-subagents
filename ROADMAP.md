@@ -22,6 +22,8 @@
 - **M13** — Acceptance gates and bounded rubric-driven revision loops — **M13.1 stopped 2026-08-05** by user decision after 18 dispatches / 7 review rounds, each finding a new path by which the real tree could change despite report-only intent; reverted to the T1 gate contract only (which ships). Automatic apply-back is deferred behind a written re-entry bar (4 named defects + re-review from scratch) — full record in `PLAN.md`'s gate log. Revisit only if usage argues for it.
 
 ## Planned
+
+- **M14** — Full-coverage green CI: recover the ~67 environmentally-skipped integration tests in the isolated CI environment (add `jiti` as a devDependency for the ~42 loader-gated tests; evaluate shims or install strategy for the `@earendil-works/*`-gated remainder). Ship with the next feature (minor) version bump.
 ## Debt
 
 Known, accepted, and deliberately unbundled. Each entry states why it was not fixed in the milestone
