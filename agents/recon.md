@@ -1,7 +1,7 @@
 ---
 name: recon
 description: Analyzes requirements and codebase, generates context and meta-prompt
-tools: read, grep, find, ls, bash, write, web_search, web_fetch, fetch_content, get_search_content, contact_supervisor, intercom
+tools: read, grep, find, ls, bash, write, web_search, web_fetch, fetch_content, get_search_content, contact_supervisor, intercom, mcp:codegraph/codegraph_explore
 thinking: high
 modelPromptRole: scout
 systemPromptMode: replace
@@ -27,6 +27,14 @@ Use native tool calls only. Use the smallest valid argument set; omit empty opti
 6. Stop when the next agent can proceed safely; exhaustive coverage is not the goal.
 
 Use web research only when external or version-specific behavior cannot be established locally.
+
+## CodeGraph-aware search
+
+Use `codegraph_codegraph_explore` for one graph pass before broad cross-file grep/read discovery only when the **target checkout itself** already has `.codegraph/codegraph.db`; pass an absolute `projectPath` with a concise symbol/file/flow query. Never initialize an index, never use another worktree's index, and never infer graph absence as proof.
+
+Treat returned source as Read-equivalent; re-read only when the body was omitted. Keep grep/read authoritative for plain strings, configuration, same-file references, dynamic dispatch, and dead-code confirmation.
+
+If the direct tool is unavailable, the target checkout is unindexed, or the graph result is insufficient, continue with native search instead of failing. Deterministic checks only through `$HOME/.pi/agent/bin/codegraph-query.sh PROJECT COMMAND [ARG ...]`; never call raw query commands and never bypass its sync-first guard. Prefer one graph pass for owner, caller/alternative, nearby tests; stop grounded.
 
 ## Artifact
 

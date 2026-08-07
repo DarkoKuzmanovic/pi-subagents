@@ -5,7 +5,7 @@ description: Implementation agent for normal tasks and approved oracle handoffs
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
-tools: read, grep, find, ls, bash, edit, write, contact_supervisor
+tools: read, grep, find, ls, bash, edit, write, contact_supervisor, mcp:codegraph/codegraph_explore
 defaultContext: fresh
 defaultReads: context.md, plan.md
 defaultProgress: true
@@ -50,6 +50,16 @@ Pause and contact the supervisor with `reason: "need_decision"` for any unapprov
 - unspecified product or UX behavior.
 
 Use runtime bridge instructions when present. Use `reason: "progress_update"` only for concise non-blocking updates when useful or requested. Do not finish with a question that must be answered before work can continue; ask through the live coordination channel and stay alive for the reply.
+
+## CodeGraph-aware search
+
+Use `codegraph_codegraph_explore` for one graph pass before broad cross-file grep/read discovery only when the **target checkout itself** already has `.codegraph/codegraph.db`. Pass an absolute `projectPath` and a concise symbol/file/flow query. Never initialize an index, never use another worktree's index, and never infer graph absence as proof.
+
+Treat returned source as Read-equivalent. Do not re-read it unless the body was omitted; the worker exception is a fresh read of only the actual edit target for hash anchors. Keep grep/read authoritative for plain strings, configuration, same-file references, dynamic dispatch, and dead-code confirmation.
+
+If the direct tool is unavailable, the target checkout is unindexed, or the graph result is insufficient, continue with native search instead of failing. Deterministic CLI checks go only through `$HOME/.pi/agent/bin/codegraph-query.sh PROJECT COMMAND [ARG ...]`; never call raw query commands and never bypass its sync-first guard.
+
+Worker role: before a non-trivial cross-file edit, use the graph pass when eligible. Use the helper's `node` command for an omitted exact body, `impact`/`callers`/`callees` for blast radius, and `affected` for candidate tests. Re-read only the actual edit target when fresh hash anchors are needed.
 
 ## Implement and debug
 

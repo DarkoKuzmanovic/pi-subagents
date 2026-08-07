@@ -368,9 +368,9 @@ Do work
 		}
 	});
 
-	it("implementation-family builtins expose the current child-facing tool sets", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-supervisor-tool-"));
-		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-supervisor-tool-home-"));
+	it("selects one optional CodeGraph tool only for recon, worker, and reviewer", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-codegraph-frontmatter-"));
+		const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-codegraph-frontmatter-home-"));
 		tempDirs.push(dir);
 		tempDirs.push(homeDir);
 		const previousHome = process.env.HOME;
@@ -380,12 +380,56 @@ Do work
 			process.env.HOME = homeDir;
 			process.env.USERPROFILE = homeDir;
 			const agents = discoverAgentsAll(dir).builtin;
-			const workerTools = ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"];
-			for (const name of ["worker", "worker-light", "worker-heavy"]) {
+			const selectedTools: Record<string, string[]> = {
+				recon: ["read", "grep", "find", "ls", "bash", "write", "web_search", "web_fetch", "fetch_content", "get_search_content", "contact_supervisor", "intercom"],
+				worker: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
+				reviewer: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor", "intercom"],
+			};
+			const commonPromptChecks = [
+				/codegraph_codegraph_explore/,
+				/one graph pass before broad cross-file grep\/read discovery only when the \*\*target checkout itself\*\* already has `\.codegraph\/codegraph\.db`/,
+				/absolute `projectPath`/,
+				/Never initialize an index, never use another worktree's index, and never infer graph absence as proof\./,
+				/returned source as Read-equivalent/,
+				/body was omitted/,
+				/grep\/read authoritative for plain strings, configuration, same-file references, dynamic dispatch, and dead-code confirmation/,
+				/direct tool is unavailable, the target checkout is unindexed, or the graph result is insufficient, continue with native search instead of failing/,
+				/\$HOME\/\.pi\/agent\/bin\/codegraph-query\.sh PROJECT COMMAND \[ARG \.\.\.\]/,
+				/never call raw query commands and never bypass its sync-first guard/,
+			];
+
+			for (const [name, tools] of Object.entries(selectedTools)) {
 				const agent = agents.find((candidate) => candidate.name === name);
 				assert.ok(agent, `${name} builtin should be discovered`);
-				assert.deepEqual(agent?.tools, workerTools);
+				assert.deepEqual(agent?.tools, tools, `${name} builtin tools should retain their order`);
+				assert.deepEqual(agent?.mcpDirectTools, ["codegraph/codegraph_explore"], `${name} should select exactly one direct MCP tool`);
+				for (const check of commonPromptChecks) assert.match(agent?.systemPrompt ?? "", check, `${name} should include the common CodeGraph contract`);
 			}
+
+			const worker = agents.find((candidate) => candidate.name === "worker");
+			assert.match(worker?.systemPrompt ?? "", /before a non-trivial cross-file edit, use the graph pass when eligible/);
+			assert.match(worker?.systemPrompt ?? "", /`node` command for an omitted exact body/);
+			assert.match(worker?.systemPrompt ?? "", /`impact`\/`callers`\/`callees` for blast radius/);
+			assert.match(worker?.systemPrompt ?? "", /`affected` for candidate tests/);
+			assert.match(worker?.systemPrompt ?? "", /only the actual edit target when fresh hash anchors are needed/);
+
+			const reviewer = agents.find((candidate) => candidate.name === "reviewer");
+			assert.match(reviewer?.systemPrompt ?? "", /inspect changed public symbols and dependents when eligible/);
+			assert.match(reviewer?.systemPrompt ?? "", /`affected` results as an inclusion floor/);
+			assert.match(reviewer?.systemPrompt ?? "", /never permission to skip required full test gates/);
+			assert.match(reviewer?.systemPrompt ?? "", /A no-result graph query is unknown, not a clean bill of health/);
+
+			for (const agent of agents) {
+				if (Object.hasOwn(selectedTools, agent.name)) continue;
+				assert.ok(!agent.mcpDirectTools?.includes("codegraph/codegraph_explore"), `${agent.name} must not select CodeGraph`);
+			}
+
+			const workerLight = agents.find((candidate) => candidate.name === "worker-light");
+			assert.ok(workerLight, "worker-light builtin should be discovered");
+			assert.deepEqual(workerLight?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);
+			const workerHeavy = agents.find((candidate) => candidate.name === "worker-heavy");
+			assert.ok(workerHeavy, "worker-heavy builtin should be discovered");
+			assert.deepEqual(workerHeavy?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);
 			const testWriter = agents.find((candidate) => candidate.name === "test-writer");
 			assert.ok(testWriter, "test-writer builtin should be discovered");
 			assert.deepEqual(testWriter?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Optional CodeGraph guidance for packaged recon, worker, and reviewer roles.** The selected roles use one direct exploration tool when the target checkout is indexed, with sync-first helper and native-search fallbacks.
+
 ## [0.45.2] - 2026-08-06
 
 ### Fixed

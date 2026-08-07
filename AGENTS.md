@@ -8,6 +8,7 @@
 - Verify the current branch/worktree and shared-checkout ownership before editing. Workers do not commit; the orchestrator owns staging, verification, and close-out.
 - Executors stop on ambiguity. The orchestrator or user owns architecture choices, tradeoffs, approvals, and remote actions.
 - User-settings writes preserve unrelated fields, reject malformed shapes, use atomic replacement, create the parent directory when needed, and end JSON with a trailing newline.
+- CodeGraph packaged-role invariant: only `recon`, `worker`, and `reviewer` select `mcp:codegraph/codegraph_explore` (parsed as `mcpDirectTools: ["codegraph/codegraph_explore"]`); keep their builtin tool order and every compatibility role unchanged. Their prompts require the target checkout's own existing database, one optional graph pass, no init or cross-worktree index sharing, native fallback, and deterministic checks only through `$HOME/.pi/agent/bin/codegraph-query.sh`; frontmatter tests must assert this narrow selection and fallback contract.
 - Live-control actions (`steer`, `follow-up`, `wrap-up`) report only the durable Pi disposition (`accepted-by-pi` with `started-turn`/`queued-steer`/`queued-follow-up`, `rejected`, `submitted`, `outcome-unknown`) — never claim model delivery, never silently downgrade steer to follow-up, and never replay `outcome-unknown`. `wrap-up` rides the steer path with the canonical `WRAP_UP_DIRECTIVE`; the M12.1 wire protocol in `src/runs/shared/nested-events.ts` is frozen.
 
 ### Async integration tests

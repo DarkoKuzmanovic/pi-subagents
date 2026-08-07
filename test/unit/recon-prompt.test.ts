@@ -10,7 +10,7 @@ const reconBody = reconSource.split("---").slice(2).join("---").trim();
 
 describe("builtin recon prompt", () => {
 	it("keeps reconnaissance concise and artifact-driven", () => {
-		assert.ok(reconBody.length <= 1_800, `recon prompt is ${reconBody.length} characters`);
+		assert.ok(reconBody.length <= 3_200, `recon prompt is ${reconBody.length} characters`);
 		assert.doesNotMatch(reconBody, /Hard cap|at most \d+ `read` calls/i);
 		assert.match(reconSource, /^modelPromptRole: scout$/m);
 		assert.match(reconBody, /Write the artifact as soon as the main flow is clear/);

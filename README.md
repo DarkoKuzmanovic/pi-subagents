@@ -167,6 +167,14 @@ Compatibility agents (`scout`, `researcher`, `synthesizer`, `test-writer`, `work
 
 A simple rule of thumb: use `recon` before you understand the code or external facts, `planner` before a bigger change, `worker` to implement, `reviewer` to check or synthesize, `oracle` when the decision itself feels risky, and `janitor` for cleanup.
 
+### Optional CodeGraph search for packaged roles
+
+Packaged `recon`, `worker`, and `reviewer` have one optional direct CodeGraph MCP selection: `mcp:codegraph/codegraph_explore`. This is additive guidance, not a prerequisite; a missing MCP server or cache leaves each role usable through its native tools.
+
+The direct exploration path is eligible only when the **target checkout itself** already contains `.codegraph/codegraph.db`. Pass an absolute `projectPath`, use one graph pass before broad cross-file discovery, and never initialize an index or use another worktree's index. Returned source is Read-equivalent, while grep/read remain authoritative for plain strings, configuration, same-file references, dynamic dispatch, and dead-code confirmation.
+
+When deterministic structural checks are needed, use only `$HOME/.pi/agent/bin/codegraph-query.sh PROJECT COMMAND [ARG ...]`; it provides the sync-first guard and native fallback contract. Never call raw CodeGraph query commands. An unavailable direct tool, missing index, or insufficient graph result is a reason to continue with native search, not to fail. `affected` results identify candidate tests only; they never replace required full test gates.
+
 Packaged `worker` and `oracle` default to forked context when a launch omits `context`; planning and context roles default to fresh context. Pass `context: "fresh"` when you intentionally want a fresh child run.
 
 ## Common workflows
