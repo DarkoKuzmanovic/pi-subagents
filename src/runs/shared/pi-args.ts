@@ -197,32 +197,34 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		args.push("--model", modelArg);
 	}
 
-	const declaredBuiltinTools = input.tools?.filter((tool) => !(tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js"))) ?? [];
-	const fanoutAuthorized = declaredBuiltinTools.includes("subagent");
 	const toolExtensionPaths: string[] = [];
-	if (input.tools?.length) {
-		const builtinTools: string[] = [];
-		for (const tool of input.tools) {
-			if (tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js")) {
-				toolExtensionPaths.push(tool);
-			} else {
-				builtinTools.push(tool);
-			}
+	const declaredBuiltinTools: string[] = [];
+	for (const tool of input.tools ?? []) {
+		if (tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js")) {
+			toolExtensionPaths.push(tool);
+		} else {
+			declaredBuiltinTools.push(tool);
 		}
-		if (input.disallowedTools?.length) {
-			const denied = new Set(input.disallowedTools);
-			const filtered = builtinTools.filter((t) => !denied.has(t));
-			builtinTools.length = 0;
-			builtinTools.push(...filtered);
+	}
+	const denied = new Set(input.disallowedTools ?? []);
+	const effectiveBuiltinTools = declaredBuiltinTools.filter((tool) => !denied.has(tool));
+	// Fanout authorization must reflect the post-denylist effective set: a child
+	// whose `subagent` tool was denied must not load the fanout runtime.
+	const fanoutAuthorized = effectiveBuiltinTools.includes("subagent");
+	if (input.tools !== undefined) {
+		const effectiveToolNames = [...effectiveBuiltinTools];
+		if (input.mcpDirectTools?.length) {
+			effectiveToolNames.push(...resolveMcpDirectToolNames(input.mcpDirectTools, input.cwd));
 		}
-		if (builtinTools.length > 0) {
-			if (input.mcpDirectTools?.length) {
-				builtinTools.push(...resolveMcpDirectToolNames(input.mcpDirectTools, input.cwd));
-			}
-			if (input.structuredOutput && !builtinTools.includes("structured_output")) {
-				builtinTools.push("structured_output");
-			}
-			args.push("--tools", builtinTools.join(","));
+		if (input.structuredOutput && !effectiveToolNames.includes("structured_output")) {
+			effectiveToolNames.push("structured_output");
+		}
+		if (effectiveToolNames.length > 0) {
+			args.push("--tools", effectiveToolNames.join(","));
+		} else {
+			// An explicitly supplied allowlist whose effective set is empty must fail
+			// closed. Omitting the flag would hand the child Pi's default toolset.
+			args.push("--no-builtin-tools");
 		}
 	}
 
