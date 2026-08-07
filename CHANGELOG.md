@@ -6,6 +6,10 @@
 
 - **Optional CodeGraph guidance for packaged recon, worker, and reviewer roles.** The selected roles use one direct exploration tool when the target checkout is indexed, with sync-first helper and native-search fallbacks.
 
+### Fixed
+
+- **Direct MCP tool names are resolved against the pi-mcp-adapter 2.18.0 contract again.** The duplicated cache-hash identity now includes `socket`, the validated/interpolated `url`, and `includeTools`, and honours `!`/`!!` and `{env:VAR}` interpolation, so adapter-written cache entries validate instead of missing every lookup and dropping `mcp:` tools from the child `--tools` allowlist. Name selection also matches the adapter: disabled servers are skipped, per-server `toolPrefix` (including the `mcp` mode) is applied, dotted tool names are sanitized, `includeTools`/`excludeTools` match exactly or by glob across all adapter candidate names, and resource tools are named `read_<resource>`. Missing, stale, and malformed cache entries still fail closed per server.
+
 ## [0.45.2] - 2026-08-06
 
 ### Fixed

@@ -21,12 +21,13 @@ const IMPORT_PATHS = {
 	vscode: [".vscode/mcp.json"],
 } as const;
 
-type ToolPrefix = "server" | "none" | "short";
+type ToolPrefix = "server" | "none" | "short" | "mcp";
 type ImportKind = keyof typeof IMPORT_PATHS;
 
 interface ServerEntry {
 	command?: string;
 	args?: string[];
+	socket?: string;
 	env?: Record<string, string>;
 	cwd?: string;
 	url?: string;
@@ -35,7 +36,10 @@ interface ServerEntry {
 	bearerToken?: string;
 	bearerTokenEnv?: string;
 	exposeResources?: boolean;
+	includeTools?: string[];
 	excludeTools?: string[];
+	toolPrefix?: ToolPrefix;
+	disabled?: boolean;
 	directTools?: boolean | string[];
 }
 
@@ -210,6 +214,8 @@ function resolveDirectToolNames(config: McpConfig, cache: MetadataCache, prefix:
 		// Skip a malformed/null server entry so one bad definition can't crash resolution and drop
 		// EVERY direct tool via the outer catch-all in resolveMcpDirectToolNames.
 		if (!definition || typeof definition !== "object") continue;
+		// Only the literal boolean `true` disables a server (pi-mcp-adapter's isServerDisabled).
+		if (definition.disabled === true) continue;
 		const serverCache = cache.servers[serverName];
 		if (!isServerCacheValid(serverCache, definition)) continue;
 
@@ -218,11 +224,14 @@ function resolveDirectToolNames(config: McpConfig, cache: MetadataCache, prefix:
 			: selectedTools.get(serverName);
 		if (!toolFilter) continue;
 
+		// Per-server toolPrefix overrides the global mode (pi-mcp-adapter's resolveToolPrefix).
+		const effectivePrefix = getToolPrefix(definition.toolPrefix ?? prefix);
+
 		for (const tool of Array.isArray(serverCache.tools) ? serverCache.tools : []) {
 			if (typeof tool?.name !== "string" || !tool.name) continue;
 			if (toolFilter !== true && !toolFilter.has(tool.name)) continue;
-			if (isToolExcluded(tool.name, serverName, prefix, definition.excludeTools)) continue;
-			const prefixedName = formatToolName(tool.name, serverName, prefix);
+			if (!isToolAllowed(tool.name, serverName, effectivePrefix, definition.includeTools, definition.excludeTools)) continue;
+			const prefixedName = formatToolName(tool.name, serverName, effectivePrefix);
 			if (BUILTIN_TOOL_NAMES.has(prefixedName) || seenNames.has(prefixedName)) continue;
 			seenNames.add(prefixedName);
 			names.push(prefixedName);
@@ -230,11 +239,13 @@ function resolveDirectToolNames(config: McpConfig, cache: MetadataCache, prefix:
 
 		if (definition.exposeResources === false) continue;
 		for (const resource of Array.isArray(serverCache.resources) ? serverCache.resources : []) {
-			if (typeof resource?.name !== "string" || !resource.name || typeof resource.uri !== "string" || !resource.uri) continue;
-			const baseName = `get_${resourceNameToToolName(resource.name)}`;
+			// The adapter's direct-tool path keys resource tools off the name alone (`read_<resource>`),
+			// so requiring a uri here would drop names the child actually registers.
+			if (typeof resource?.name !== "string" || !resource.name) continue;
+			const baseName = `read_${resourceNameToToolName(resource.name)}`;
 			if (toolFilter !== true && !toolFilter.has(baseName)) continue;
-			if (isToolExcluded(baseName, serverName, prefix, definition.excludeTools)) continue;
-			const prefixedName = formatToolName(baseName, serverName, prefix);
+			if (!isToolAllowed(baseName, serverName, effectivePrefix, definition.includeTools, definition.excludeTools)) continue;
+			const prefixedName = formatToolName(baseName, serverName, effectivePrefix);
 			if (BUILTIN_TOOL_NAMES.has(prefixedName) || seenNames.has(prefixedName)) continue;
 			seenNames.add(prefixedName);
 			names.push(prefixedName);
@@ -266,7 +277,15 @@ function parseSelections(selections: string[]): { servers: Set<string>; tools: M
 }
 
 function isServerCacheValid(entry: ServerCacheEntry | undefined, definition: ServerEntry): entry is ServerCacheEntry {
-	if (!entry || entry.configHash !== computeMcpServerHash(definition)) return false;
+	// Per-server fail-closed, exactly like the adapter: a malformed definition invalidates only its own
+	// cache entry instead of throwing out every other server's direct tools.
+	let configHash: string;
+	try {
+		configHash = computeMcpServerHash(definition);
+	} catch {
+		return false;
+	}
+	if (!entry || entry.configHash !== configHash) return false;
 	if (!entry.cachedAt || typeof entry.cachedAt !== "number") return false;
 	return Date.now() - entry.cachedAt <= CACHE_MAX_AGE_MS;
 }
@@ -276,24 +295,27 @@ export function computeMcpServerHash(definition: ServerEntry): string {
 	// validate the adapter-written cache entry's configHash. `directTools` is intentionally excluded
 	// (it affects tool EXPOSURE, not which tools a server discovers/caches); including it here would
 	// diverge from the adapter's hash and make every cache lookup miss for servers that set it.
+	// Verified against pi-mcp-adapter 2.18.0; test/unit/pi-args.test.ts pins one adapter-produced digest.
 	const identity: Record<string, unknown> = {
 		command: definition.command,
 		args: definition.args,
+		socket: resolveConfigPath(definition.socket),
 		env: interpolateEnvRecord(definition.env),
 		cwd: resolveConfigPath(definition.cwd),
-		url: definition.url,
+		url: resolveServerUrl(definition),
 		headers: interpolateEnvRecord(definition.headers),
 		auth: definition.auth,
 		bearerToken: resolveBearerToken(definition),
 		bearerTokenEnv: definition.bearerTokenEnv,
 		exposeResources: definition.exposeResources,
+		includeTools: definition.includeTools,
 		excludeTools: definition.excludeTools,
 	};
 	return createHash("sha256").update(stableStringify(identity)).digest("hex");
 }
 
 function getToolPrefix(value: unknown): ToolPrefix {
-	return value === "none" || value === "short" || value === "server" ? value : "server";
+	return value === "none" || value === "short" || value === "server" || value === "mcp" ? value : "server";
 }
 
 function isImportKind(value: unknown): value is ImportKind {
@@ -306,23 +328,57 @@ function getServerPrefix(serverName: string, mode: ToolPrefix): string {
 		const short = serverName.replace(/-?mcp$/i, "").replace(/-/g, "_");
 		return short || "mcp";
 	}
+	if (mode === "mcp") return `mcp__${serverName.replace(/-/g, "_")}`;
 	return serverName.replace(/-/g, "_");
 }
 
 function formatToolName(toolName: string, serverName: string, prefix: ToolPrefix): string {
 	const serverPrefix = getServerPrefix(serverName, prefix);
-	return serverPrefix ? `${serverPrefix}_${toolName}` : toolName;
+	const sanitized = toolName.replace(/\./g, "_");
+	return serverPrefix ? `${serverPrefix}_${sanitized}` : sanitized;
 }
 
-function isToolExcluded(toolName: string, serverName: string, prefix: ToolPrefix, excludeTools: unknown): boolean {
-	if (!Array.isArray(excludeTools) || excludeTools.length === 0) return false;
-	const candidates = new Set([
+function getToolNameCandidates(toolName: string, serverName: string, prefix: ToolPrefix): Set<string> {
+	return new Set<string>([
 		normalizeToolName(toolName),
 		normalizeToolName(formatToolName(toolName, serverName, prefix)),
 		normalizeToolName(formatToolName(toolName, serverName, "server")),
 		normalizeToolName(formatToolName(toolName, serverName, "short")),
+		normalizeToolName(formatToolName(toolName, serverName, "mcp")),
 	]);
-	return excludeTools.some((excluded) => typeof excluded === "string" && candidates.has(normalizeToolName(excluded)));
+}
+
+function globToRegExp(pattern: string): RegExp {
+	const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+	return new RegExp(`^${escaped}$`);
+}
+
+// Exact match plus `*`/`?` globs over every adapter candidate name, matching pi-mcp-adapter's
+// matchesToolPattern (types.ts).
+function matchesToolPattern(candidates: Set<string>, patterns: unknown): boolean {
+	if (!Array.isArray(patterns) || patterns.length === 0) return false;
+	for (const pattern of patterns) {
+		if (typeof pattern !== "string") continue;
+		const normalized = normalizeToolName(pattern);
+		const isGlob = normalized.includes("*") || normalized.includes("?");
+		if (!isGlob && candidates.has(normalized)) return true;
+		if (isGlob && [...candidates].some((candidate) => globToRegExp(normalized).test(candidate))) return true;
+	}
+	return false;
+}
+
+function isToolAllowed(
+	toolName: string,
+	serverName: string,
+	prefix: ToolPrefix,
+	includeTools: unknown,
+	excludeTools: unknown,
+): boolean {
+	const candidates = getToolNameCandidates(toolName, serverName, prefix);
+	const included = !Array.isArray(includeTools) || includeTools.length === 0
+		? true
+		: matchesToolPattern(candidates, includeTools);
+	return included && !matchesToolPattern(candidates, excludeTools);
 }
 
 function normalizeToolName(value: string): string {
@@ -340,23 +396,55 @@ function resourceNameToToolName(name: string): string {
 	return result;
 }
 
+// pi-mcp-adapter's interpolateEnvRecord/interpolateSecretExpression (utils.ts): `!!` escapes a leading
+// `!`, a single leading `!` marks a command secret that stays verbatim in the hash (the adapter only
+// executes it at connect time; we never execute anything), and everything else is env-interpolated.
 function interpolateEnvRecord(values: Record<string, string> | undefined): Record<string, string> | undefined {
-	if (!values || typeof values !== "object" || Array.isArray(values)) return undefined;
-	const resolved: Record<string, string> = {};
-	for (const [key, value] of Object.entries(values)) {
-		if (typeof value === "string") resolved[key] = interpolateEnvVars(value);
-	}
-	return resolved;
+	if (!values) return undefined;
+	return Object.fromEntries(
+		Object.entries(values).map(([key, value]) => [key, interpolateSecretExpression(value)]),
+	);
+}
+
+function interpolateSecretExpression(value: string): string {
+	if (value.startsWith("!!")) return interpolateEnvVars(value.slice(1));
+	return value.startsWith("!") ? value : interpolateEnvVars(value);
 }
 
 function interpolateEnvVars(value: string): string {
 	return value
 		.replace(/\$\{(\w+)\}/g, (_, name: string) => process.env[name] ?? "")
-		.replace(/\$env:(\w+)/g, (_, name: string) => process.env[name] ?? "");
+		.replace(/\$env:(\w+)/g, (_, name: string) => process.env[name] ?? "")
+		.replace(/\{env:(\w+)\}/g, (_, name: string) => process.env[name] ?? "");
+}
+
+function getMissingEnvVars(value: string): string[] {
+	const missing = new Set<string>();
+	for (const match of value.matchAll(/\$\{(\w+)\}|\$env:(\w+)|\{env:(\w+)\}/g)) {
+		const name = match[1] ?? match[2] ?? match[3];
+		if (name && process.env[name] === undefined) missing.add(name);
+	}
+	return [...missing];
+}
+
+// Mirrors pi-mcp-adapter's resolveServerUrl: a missing env var or an invalid interpolated URL throws,
+// which fails the cache check closed for that server instead of silently hashing a different value.
+function resolveServerUrl(definition: Pick<ServerEntry, "url">): string | undefined {
+	if (definition.url == null) return undefined;
+	if (typeof definition.url !== "string") throw new Error("MCP server URL must be a string");
+
+	const missing = getMissingEnvVars(definition.url);
+	if (missing.length > 0) {
+		throw new Error(`Missing environment variable${missing.length === 1 ? "" : "s"} in MCP server URL: ${missing.join(", ")}`);
+	}
+
+	const resolved = interpolateEnvVars(definition.url);
+	new URL(resolved);
+	return resolved;
 }
 
 function resolveConfigPath(value: string | undefined): string | undefined {
-	if (typeof value !== "string") return undefined;
+	if (value === undefined) return undefined;
 	const resolved = interpolateEnvVars(value);
 	if (resolved === "~") return os.homedir();
 	if (resolved.startsWith("~/") || resolved.startsWith("~\\")) return path.join(os.homedir(), resolved.slice(2));
@@ -364,8 +452,8 @@ function resolveConfigPath(value: string | undefined): string | undefined {
 }
 
 function resolveBearerToken(definition: Pick<ServerEntry, "bearerToken" | "bearerTokenEnv">): string | undefined {
-	if (typeof definition.bearerToken === "string") return interpolateEnvVars(definition.bearerToken);
-	return typeof definition.bearerTokenEnv === "string" ? process.env[definition.bearerTokenEnv] : undefined;
+	if (definition.bearerToken !== undefined) return interpolateSecretExpression(definition.bearerToken);
+	return definition.bearerTokenEnv ? process.env[definition.bearerTokenEnv] : undefined;
 }
 
 function stableStringify(value: unknown): string {

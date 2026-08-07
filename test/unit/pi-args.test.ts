@@ -460,7 +460,188 @@ describe("buildPiArgs system prompt mode wiring", () => {
 			mcpDirectTools: ["browser-mcp"],
 		});
 
-		assert.equal(args[args.indexOf("--tools") + 1], "read,browser_mcp_navigate,browser_mcp_get_console_logs");
+		assert.equal(args[args.indexOf("--tools") + 1], "read,browser_mcp_navigate,browser_mcp_read_console_logs");
+	});
+
+	// Fixed adapter-produced fixture: pi-mcp-adapter 2.18.0's computeServerHash emitted this digest for
+	// { command: "codegraph", args: ["serve", "--mcp"] }. It is a literal constant on purpose — never
+	// recompute it with computeMcpServerHash, or the test can only prove self-consistency. It must move
+	// with a pi-mcp-adapter upgrade that changes the hashed identity fields.
+	const ADAPTER_2_18_0_CODEGRAPH_HASH = "c1d656a30f0da2139f939b01cbd0707c1d3d50a507236f8280837c65ba52135f";
+	const CODEGRAPH_DEFINITION = { command: "codegraph", args: ["serve", "--mcp"] };
+
+	function writeAdapterCodegraphFixture(fixture: McpFixture, entry: Record<string, unknown> = {}): void {
+		writeJson(path.join(fixture.agentDir, "mcp.json"), { mcpServers: { codegraph: CODEGRAPH_DEFINITION } });
+		writeJson(path.join(fixture.agentDir, "mcp-cache.json"), {
+			version: 1,
+			servers: {
+				codegraph: {
+					configHash: ADAPTER_2_18_0_CODEGRAPH_HASH,
+					cachedAt: Date.now(),
+					tools: [{ name: "codegraph_explore" }, { name: "codegraph_files" }],
+					resources: [],
+					...entry,
+				},
+			},
+		});
+	}
+
+	it("matches the pi-mcp-adapter 2.18.0 cache hash for a fixed adapter-produced fixture", () => {
+		assert.equal(computeMcpServerHash(CODEGRAPH_DEFINITION), ADAPTER_2_18_0_CODEGRAPH_HASH);
+	});
+
+	it("adds exactly the selected codegraph direct tool to an explicit builtin allowlist", () => {
+		const fixture = createMcpFixture();
+		writeAdapterCodegraphFixture(fixture);
+
+		const { args, env } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read", "bash", "grep"],
+			mcpDirectTools: ["codegraph/codegraph_explore"],
+		});
+
+		assert.equal(args[args.indexOf("--tools") + 1], "read,bash,grep,codegraph_codegraph_explore");
+		assert.equal(env.MCP_DIRECT_TOOLS, "codegraph/codegraph_explore");
+	});
+
+	it("keeps the adapter-produced fixture fail-closed when the cache is stale or malformed", () => {
+		const staleFixture = createMcpFixture();
+		writeAdapterCodegraphFixture(staleFixture, { cachedAt: Date.now() - 8 * 24 * 60 * 60 * 1000 });
+		const stale = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read", "bash"],
+			mcpDirectTools: ["codegraph/codegraph_explore"],
+		});
+		assert.equal(stale.args[stale.args.indexOf("--tools") + 1], "read,bash");
+
+		const malformedFixture = createMcpFixture();
+		writeAdapterCodegraphFixture(malformedFixture, { configHash: "not-the-adapter-hash" });
+		const malformed = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read", "bash"],
+			mcpDirectTools: ["codegraph/codegraph_explore"],
+		});
+		assert.equal(malformed.args[malformed.args.indexOf("--tools") + 1], "read,bash");
+	});
+
+	it("skips disabled servers like the adapter does", () => {
+		const fixture = createMcpFixture();
+		writeMcpFixture(fixture, { definition: { disabled: true } });
+
+		const { args } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read"],
+			mcpDirectTools: ["chrome-devtools"],
+		});
+
+		assert.equal(args[args.indexOf("--tools") + 1], "read");
+	});
+
+	it("applies includeTools and glob excludeTools across adapter candidate names", () => {
+		const includeFixture = createMcpFixture();
+		writeMcpFixture(includeFixture, {
+			definition: { includeTools: ["*_screenshot"] },
+			tools: [{ name: "take_screenshot" }, { name: "click" }],
+		});
+		const included = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read"],
+			mcpDirectTools: ["chrome-devtools"],
+		});
+		assert.equal(included.args[included.args.indexOf("--tools") + 1], "read,chrome_devtools_take_screenshot");
+
+		const excludeFixture = createMcpFixture();
+		writeMcpFixture(excludeFixture, {
+			definition: { excludeTools: ["chrome_devtools_take_*"] },
+			tools: [{ name: "take_screenshot" }, { name: "click" }],
+		});
+		const excluded = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read"],
+			mcpDirectTools: ["chrome-devtools"],
+		});
+		assert.equal(excluded.args[excluded.args.indexOf("--tools") + 1], "read,chrome_devtools_click");
+	});
+
+	it("honours the mcp prefix mode and per-server toolPrefix override", () => {
+		const mcpModeFixture = createMcpFixture();
+		writeMcpFixture(mcpModeFixture, {
+			serverName: "linear-mcp",
+			settings: { toolPrefix: "mcp" },
+			tools: [{ name: "list_issues" }],
+		});
+		const mcpMode = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read"],
+			mcpDirectTools: ["linear-mcp"],
+		});
+		assert.equal(mcpMode.args[mcpMode.args.indexOf("--tools") + 1], "read,mcp__linear_mcp_list_issues");
+
+		const overrideFixture = createMcpFixture();
+		writeMcpFixture(overrideFixture, {
+			serverName: "linear-mcp",
+			settings: { toolPrefix: "server" },
+			definition: { toolPrefix: "none" },
+			tools: [{ name: "list_issues" }],
+		});
+		const override = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read"],
+			mcpDirectTools: ["linear-mcp"],
+		});
+		assert.equal(override.args[override.args.indexOf("--tools") + 1], "read,list_issues");
+	});
+
+	it("sanitizes dotted MCP tool names like the adapter", () => {
+		const fixture = createMcpFixture();
+		writeMcpFixture(fixture, {
+			serverName: "browser-mcp",
+			tools: [{ name: "page.click" }],
+		});
+
+		const { args } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read"],
+			mcpDirectTools: ["browser-mcp/page.click"],
+		});
+
+		assert.equal(args[args.indexOf("--tools") + 1], "read,browser_mcp_page_click");
 	});
 
 	it("falls back to explicit builtins when direct MCP cache or config is missing or invalid", () => {
