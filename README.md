@@ -59,6 +59,7 @@
 - [Prompt-template integration](#prompt-template-integration)
 - [Changes from upstream](#changes-from-upstream)
 - [Runtime files](#runtime-files)
+- [License](#license)
 
 ## Quick start
 
@@ -73,7 +74,7 @@ That is the only required step. You can add optional pieces later.
 To pin a specific release once a tag is available:
 
 ```bash
-pi install git:github.com/DarkoKuzmanovic/pi-subagents@v0.44.0
+pi install git:github.com/DarkoKuzmanovic/pi-subagents@v0.45.2
 ```
 
 ### Try this first
@@ -1216,3 +1217,7 @@ The main runtime files are:
 | `src/extension/schemas.ts` / `src/shared/types.ts`                          | Tool schemas, shared types, and event constants.                                                       |
 | `src/runs/shared/structured-output.ts` / `chain-outputs.ts` / `dynamic-fanout.ts` | Structured-output capture and validation, `{outputs.name}` resolution, and dynamic-fanout materialization. |
 | `test/unit/` / `test/integration/`                                          | Unit and loader-based integration tests.                                                               |
+
+## License
+
+[MIT](LICENSE) © Darko Kuzmanovic
