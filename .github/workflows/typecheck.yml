@@ -1,4 +1,4 @@
-name: Type check
+name: CI
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  typecheck:
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -15,13 +15,15 @@ jobs:
         with:
           node-version: 24
       - name: Install dependencies
-        run: npm install --ignore-scripts
-      - name: Verify imports resolve
-        run: |
-          npx tsc --noEmit --moduleResolution NodeNext --target ESNext \
-            --skipLibCheck --allowImportingTsExtensions \
-            --module NodeNext \
-            src/extension/index.ts 2>&1 | grep -i "Cannot find module\|Could not resolve" && exit 1 || echo "All imports resolve ✓"
+        # .npmrc sets omit=dev, so dev dependencies (TypeScript) must be
+        # requested explicitly or the typecheck would run an unpinned tsc.
+        run: npm ci --include=dev --ignore-scripts
+      - name: Type check
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Integration tests
+        run: npm run test:integration
       - name: Check for stale @mariozechner namespace
         run: |
           found=$(grep -r "@mariozechner" --include="*.ts" --include="*.mjs" --include="*.json" src/ 2>/dev/null || true)
