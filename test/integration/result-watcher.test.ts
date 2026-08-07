@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
+import { createResultWatcher, RESULT_DEAD_LETTER_DIRNAME } from "../../src/runs/background/result-watcher.ts";
 import { buildCompletionOutbox, publishCompletionOutbox, resolveOmOutboxPath } from "../../src/runs/background/async-om-outbox.ts";
 import { resolveOmReceiptPath, resolveOmReceiptsDir } from "../../src/runs/background/async-om-retention.ts";
 import { hasDeliveredIntercomMarker } from "../../src/runs/background/async-om-delivery-marker.ts";
@@ -104,10 +104,59 @@ describe("result watcher", () => {
 
 			assert.equal(emitted.length, 0);
 			assert.equal(fs.existsSync(resultPath), false, "malformed result should be quarantined after bounded retries");
-			assert.equal(fs.readdirSync(resultsDir).some((file) => file.startsWith("bad.json.failed-")), true);
+			const deadLetterDir = path.join(resultsDir, RESULT_DEAD_LETTER_DIRNAME);
+			assert.equal(fs.existsSync(deadLetterDir), true, "dead-letter directory should be created on first quarantine");
+			assert.equal(fs.readdirSync(deadLetterDir).some((file) => file.startsWith("bad.json.failed-")), true);
 			assert.ok(
 				logged.some((entry) => /Failed to process subagent result file/.test(String(entry[0] ?? ""))),
 				"expected watcher error to be logged",
+			);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("dead-letters valid JSON whose shape is unusable instead of emitting or retrying forever", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-shape-"));
+		try {
+			const resultPath = path.join(resultsDir, "shape.json");
+			// Parses fine, but summary/success carry the wrong types — permanently unusable.
+			fs.writeFileSync(resultPath, JSON.stringify({ summary: 42, success: "yes", sessionId: "session-1" }), "utf-8");
+			const emitted: unknown[] = [];
+			const pi = {
+				events: {
+					on: () => () => {},
+					emit(_event: string, data: unknown) {
+						emitted.push(data);
+					},
+				},
+			};
+			const state = createState();
+			state.currentSessionId = "session-1";
+			const watcher = createResultWatcher(pi, state, resultsDir, 60_000);
+			const originalError = console.error;
+			const logged: unknown[][] = [];
+			console.error = (...args: unknown[]) => {
+				logged.push(args);
+			};
+			const deadLetterDir = path.join(resultsDir, RESULT_DEAD_LETTER_DIRNAME);
+			try {
+				watcher.primeExistingResults();
+				const deadline = Date.now() + 2000;
+				while (fs.existsSync(resultPath) && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				}
+			} finally {
+				console.error = originalError;
+				watcher.stopResultWatcher();
+			}
+
+			assert.equal(emitted.length, 0, "a shape-invalid result must never emit completion events");
+			assert.equal(fs.existsSync(resultPath), false, "shape-invalid result should leave the watched namespace");
+			assert.equal(fs.readdirSync(deadLetterDir).some((file) => file.startsWith("shape.json.failed-")), true);
+			assert.ok(
+				logged.some((entry) => /InvalidResultShapeError|must be a/.test(String(entry[1] ?? entry[0] ?? ""))),
+				"expected the shape violation to be logged",
 			);
 		} finally {
 			fs.rmSync(resultsDir, { recursive: true, force: true });

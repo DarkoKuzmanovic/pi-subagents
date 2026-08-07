@@ -23,6 +23,8 @@ const WATCHER_RESTART_DELAY_MS = 3000;
 const WATCHER_POLL_INTERVAL_MS = 3000;
 const RESULT_RETRY_DELAY_MS = 100;
 const RESULT_MAX_RETRY_ATTEMPTS = 3;
+/** Subdirectory of the results dir where permanently malformed result files are parked for inspection. */
+export const RESULT_DEAD_LETTER_DIRNAME = "dead-letter";
 
 type ResultWatcherFs = Pick<typeof fs, "existsSync" | "readFileSync" | "unlinkSync" | "renameSync" | "readdirSync" | "mkdirSync" | "watch">;
 
@@ -39,6 +41,81 @@ type ResultWatcherDeps = {
 	asyncRunsDir?: string;
 	timers?: ResultWatcherTimers;
 };
+
+/** Permanent input error: the result file's content can never become valid by retrying. */
+export class InvalidResultShapeError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "InvalidResultShapeError";
+	}
+}
+
+interface AsyncResultFile {
+	id?: string;
+	runId?: string;
+	agent?: string;
+	success?: boolean;
+	state?: string;
+	mode?: string;
+	summary?: string;
+	results?: Array<{
+		agent?: string;
+		output?: string;
+		error?: string;
+		success?: boolean;
+		sessionFile?: string;
+		artifactPaths?: { outputPath?: string };
+		intercomTarget?: string;
+	}>;
+	sessionId?: string;
+	cwd?: string;
+	sessionFile?: string;
+	asyncDir?: string;
+	intercomTarget?: string;
+	budget?: BudgetSummary;
+	budgetExhausted?: boolean;
+}
+
+const STRING_RESULT_FIELDS = ["id", "runId", "agent", "state", "mode", "summary", "sessionId", "cwd", "sessionFile", "asyncDir", "intercomTarget"] as const;
+const BOOLEAN_RESULT_FIELDS = ["success", "budgetExhausted"] as const;
+
+/**
+ * Parse and shape-validate a result file. JSON that parses but is not a usable
+ * result object (null, arrays, wrong field types) throws InvalidResultShapeError
+ * so it is classified as a permanent input error and quarantined after bounded
+ * retries instead of being retried as if it could recover.
+ */
+export function parseResultFile(raw: string): AsyncResultFile {
+	const parsed: unknown = JSON.parse(raw);
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new InvalidResultShapeError("Result file must contain a JSON object");
+	}
+	const record = parsed as Record<string, unknown>;
+	for (const field of STRING_RESULT_FIELDS) {
+		if (record[field] !== undefined && typeof record[field] !== "string") {
+			throw new InvalidResultShapeError(`Result field '${field}' must be a string when present`);
+		}
+	}
+	for (const field of BOOLEAN_RESULT_FIELDS) {
+		if (record[field] !== undefined && typeof record[field] !== "boolean") {
+			throw new InvalidResultShapeError(`Result field '${field}' must be a boolean when present`);
+		}
+	}
+	if (record.results !== undefined) {
+		if (!Array.isArray(record.results)) {
+			throw new InvalidResultShapeError("Result field 'results' must be an array when present");
+		}
+		for (const entry of record.results) {
+			if (entry !== undefined && (entry === null || typeof entry !== "object" || Array.isArray(entry))) {
+				throw new InvalidResultShapeError("Result 'results' entries must be objects when present");
+			}
+		}
+	}
+	if (record.budget !== undefined && (record.budget === null || typeof record.budget !== "object" || Array.isArray(record.budget))) {
+		throw new InvalidResultShapeError("Result field 'budget' must be an object when present");
+	}
+	return record as AsyncResultFile;
+}
 
 function getErrorCode(error: unknown): string | undefined {
 	return typeof error === "object" && error !== null && "code" in error
@@ -81,31 +158,7 @@ export function createResultWatcher(
 		let parsedSuccessfully = false;
 		try {
 			if (!fsApi.existsSync(resultPath)) return;
-			const data = JSON.parse(fsApi.readFileSync(resultPath, "utf-8")) as {
-				id?: string;
-				runId?: string;
-				agent?: string;
-				success?: boolean;
-				state?: string;
-				mode?: string;
-				summary?: string;
-				results?: Array<{
-					agent?: string;
-					output?: string;
-					error?: string;
-					success?: boolean;
-					sessionFile?: string;
-					artifactPaths?: { outputPath?: string };
-					intercomTarget?: string;
-				}>;
-				sessionId?: string;
-				cwd?: string;
-				sessionFile?: string;
-				asyncDir?: string;
-				intercomTarget?: string;
-				budget?: BudgetSummary;
-				budgetExhausted?: boolean;
-			};
+			const data = parseResultFile(fsApi.readFileSync(resultPath, "utf-8"));
 			parsedSuccessfully = true;
 			if (data.sessionId && data.sessionId !== state.currentSessionId) {
 				resultFailureAttempts.delete(file);
@@ -239,11 +292,17 @@ export function createResultWatcher(
 			console.error(`Failed to process subagent result file '${resultPath}':`, error);
 
 			if (!parsedSuccessfully && attempts >= RESULT_MAX_RETRY_ATTEMPTS) {
-				const quarantinePath = `${resultPath}.failed-${attempts}`;
+				// Dead-letter instead of unlink: the payload is preserved for inspection, but moved
+				// out of the watched namespace so it can never be re-primed or retried again. The
+				// timestamp suffix keeps a later same-named result from colliding with the corpse.
+				const quarantinePath = path.join(resultsDir, RESULT_DEAD_LETTER_DIRNAME, `${file}.failed-${Date.now()}`);
 				try {
-					if (fsApi.existsSync(resultPath)) fsApi.renameSync(resultPath, quarantinePath);
+					if (fsApi.existsSync(resultPath)) {
+						fsApi.mkdirSync(path.join(resultsDir, RESULT_DEAD_LETTER_DIRNAME), { recursive: true });
+						fsApi.renameSync(resultPath, quarantinePath);
+						console.error(`Quarantined malformed subagent result file at '${quarantinePath}'.`);
+					}
 					resultFailureAttempts.delete(file);
-					console.error(`Quarantined malformed subagent result file at '${quarantinePath}'.`);
 				} catch (quarantineError) {
 					console.error(`Failed to quarantine malformed subagent result file '${resultPath}':`, quarantineError);
 				}
