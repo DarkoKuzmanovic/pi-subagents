@@ -273,10 +273,20 @@ export function readSettingsFileStrict(filePath: string): Record<string, unknown
 
 export function writeSettingsFile(filePath: string, settings: Record<string, unknown>): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	// Atomic replace would otherwise reset permissions: the temp file is created with
+	// umask-default mode (usually 0644), so a user-tightened settings file (e.g. 0600)
+	// silently widens on every write. Carry the existing mode onto the replacement.
+	let existingMode: number | undefined;
+	try {
+		existingMode = (fs.statSync(filePath) as unknown as { mode: number }).mode & 0o777;
+	} catch {
+		// No existing file (or stat failed): keep default permissions for a fresh file.
+	}
 	const content = JSON.stringify(settings, null, 2) + "\n";
 	const tmpPath = `${filePath}.tmp.${process.pid}`;
 	try {
 		fs.writeFileSync(tmpPath, content, "utf-8");
+		if (existingMode !== undefined) fs.chmodSync(tmpPath, existingMode);
 		try {
 			fs.renameSync(tmpPath, filePath);
 		} catch (renameErr: unknown) {

@@ -9,6 +9,7 @@ import {
 	selectEditorArgv,
 	openSettingsInEditor,
 } from "../../src/slash/subagents-config.ts";
+import { writeSettingsFile } from "../../src/agents/agents.ts";
 
 let tempDir = "";
 const originalHome = process.env.HOME;
@@ -199,5 +200,33 @@ describe("openSettingsInEditor", () => {
 		fs.writeFileSync(sp, "{}\n", "utf-8");
 		const result = openSettingsInEditor(sp);
 		assert.equal(result.error, null);
+	});
+});
+
+describe("writeSettingsFile", () => {
+	const modeOf = (p: string): number => fs.statSync(p).mode & 0o7777;
+
+	it("preserves restrictive permissions of an existing settings file", { skip: process.platform === "win32" }, () => {
+		const sp = settingsPath();
+		writeSettings({ keep: true });
+		fs.chmodSync(sp, 0o600);
+		writeSettingsFile(sp, { keep: true, added: 1 });
+		assert.equal(modeOf(sp), 0o600, "atomic replace must not widen a 0600 settings file");
+		assert.deepEqual(readSettings(), { keep: true, added: 1 });
+	});
+
+	it("creates a new file with default permissions and parent directory", () => {
+		const sp = path.join(tempDir, "nested", "dir", "settings.json");
+		writeSettingsFile(sp, { fresh: true });
+		assert.deepEqual(JSON.parse(fs.readFileSync(sp, "utf-8")), { fresh: true });
+		assert.ok(fs.readFileSync(sp, "utf-8").endsWith("\n"), "file must end with trailing newline");
+	});
+
+	it("leaves no temp file behind after a successful write", () => {
+		const sp = settingsPath();
+		writeSettings({ a: 1 });
+		writeSettingsFile(sp, { a: 2 });
+		const leftovers = fs.readdirSync(tempDir).filter((n) => n.includes(".tmp."));
+		assert.deepEqual(leftovers, []);
 	});
 });
