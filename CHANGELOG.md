@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Automatic GitHub Releases on tag push.** A new `release.yml` workflow creates a GitHub Release from the tag's CHANGELOG section whenever a `v*` tag is pushed (generated notes as fallback). Idempotent: it skips when a Release already exists, so it coexists with agent- or manually-created releases. Closes the gap that left v0.43.0–v0.45.2 as bare tags with the repo advertising v0.42.2 as Latest.
+
 ### Fixed
 
 - **CI typecheck and tests now pass in a truly isolated environment.** The 0.45.3 CI pipeline's first real run failed: the local `node:fs` typecheck shim lacked `chmodSync` (used by the settings permission-preservation fix), and `typebox` — an optional peer — was absent from the lockfile, so `npm ci` installed neither its types nor its runtime for the test suites. Both had been masked locally by the shared dev-tools `node_modules`. The shim gains `chmodSync`, and `typebox` is pinned as a devDependency.

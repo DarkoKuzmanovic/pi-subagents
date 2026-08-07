@@ -1,0 +1,48 @@
+# Creates a GitHub Release from the CHANGELOG section whenever a v* tag is
+# pushed. Idempotent: skips if a Release for the tag already exists (e.g. an
+# agent already created it), so it is safe alongside manual/agent release flows.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  github-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Extract CHANGELOG section
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" { on=1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md" || true
+          if grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "NOTES_MODE=file" >> "$GITHUB_ENV"
+          else
+            echo "No CHANGELOG section for $ver — will use generated notes"
+            echo "NOTES_MODE=generate" >> "$GITHUB_ENV"
+          fi
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists — skipping"
+            exit 0
+          fi
+          if [ "$NOTES_MODE" = "file" ]; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" --notes-file "$RUNNER_TEMP/notes.md" \
+              --latest --verify-tag
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" --generate-notes --latest --verify-tag
+          fi
