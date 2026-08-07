@@ -49,6 +49,7 @@ declare module "node:fs" {
 	export interface Stats { isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; size: number; mtimeMs: number; }
 	export interface Dirent { name: string; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; }
 	export const accessSync: (...args: unknown[]) => unknown;
+	export const chmodSync: (path: string, mode: number) => void;
 	export const closeSync: (...args: unknown[]) => void;
 	export const constants: Record<string, number>;
 	export const createWriteStream: (...args: unknown[]) => any;
