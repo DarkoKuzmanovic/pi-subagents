@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.45.3] - 2026-08-07
 
 ### Added
 
@@ -8,6 +8,11 @@
 
 ### Fixed
 
+- **An emptied tool allowlist now fails closed instead of granting the full builtin toolset.** When `disallowedTools` removed every remaining tool, `buildPiArgs` omitted `--tools` entirely and the child defaulted to Pi's complete builtin set — the opposite of what the denylist asked for. An empty effective allowlist now emits `--no-builtin-tools`, and fanout authorization derives from the post-denylist set.
+- **The installer can no longer silently divert a local install to upstream.** `install.mjs` hardcoded the upstream repository URL; it now derives the URL from `package.json` and verifies the remote's identity before updating.
+- **CI runs a real typecheck and the test suites.** The workflow previously grepped `tsc` output through a pipeline that could mask failures; it now runs `npm run typecheck` and both test suites against a committed `package-lock.json` with TypeScript pinned to 5.9.3.
+- **Malformed async result files are quarantined instead of crashing the watcher.** The result watcher validates result-file shape before delivery; files that parse as JSON but violate the result contract move to a `dead-letter/` subdirectory for inspection rather than being retried forever or crashing the poll loop.
+- **Settings writes no longer widen a user-tightened file mode.** `writeSettingsFile`'s atomic replace created the temp file with umask-default permissions (usually 0644), resetting e.g. a 0600 `settings.json` on every write. The existing file's mode is now carried onto the replacement.
 - **Direct MCP tool names are resolved against the pi-mcp-adapter 2.18.0 contract again.** The duplicated cache-hash identity now includes `socket`, the validated/interpolated `url`, and `includeTools`, and honours `!`/`!!` and `{env:VAR}` interpolation, so adapter-written cache entries validate instead of missing every lookup and dropping `mcp:` tools from the child `--tools` allowlist. Name selection also matches the adapter: disabled servers are skipped, per-server `toolPrefix` (including the `mcp` mode) is applied, dotted tool names are sanitized, `includeTools`/`excludeTools` match exactly or by glob across all adapter candidate names, and resource tools are named `read_<resource>`. Missing, stale, and malformed cache entries still fail closed per server.
 
 ## [0.45.2] - 2026-08-06
