@@ -323,7 +323,9 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("resume action sends a follow-up to a live async child when the target is registered", async () => {
+	// This run exists on disk but was never tracked in this session's state, so it has no live-control
+	// owner. Resume then falls back to intercom — and must say so rather than implying the child got it.
+	it("resume falls back to a labelled intercom delivery for an untracked live async child", async () => {
 		const runId = `resume-live-${Date.now()}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);
 		try {
@@ -347,7 +349,8 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			);
 
 			assert.equal(result.isError, undefined);
-			assert.match(result.content[0]?.text ?? "", /Delivered follow-up to live async child/);
+			assert.match(result.content[0]?.text ?? "", /Live control was unavailable for this run.*routed the follow-up over intercom instead/s);
+			assert.match(result.content[0]?.text ?? "", /Intercom accepted the message for routing only/);
 			const payload = events.emitted.find((entry) => entry.channel === "subagent:result-intercom")?.payload as { to?: string; message?: string } | undefined;
 			assert.equal(payload?.to, `subagent-worker-${runId}-1`);
 			assert.match(payload?.message ?? "", /Can you clarify the last change\?/);

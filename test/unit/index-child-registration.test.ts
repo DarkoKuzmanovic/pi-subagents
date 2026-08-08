@@ -18,10 +18,10 @@ describe("subagent extension child mode", () => {
 		const script = String.raw`
 			import registerSubagentExtension from "./src/extension/index.ts";
 			const events = { on() { return () => {}; }, emit() {} };
-			let registeredTool;
+			const registeredTools = new Map();
 			const fakePi = new Proxy({
 				events,
-				registerTool(tool) { registeredTool = tool; },
+				registerTool(tool) { registeredTools.set(tool.name, tool); },
 				registerCommand() {},
 				registerShortcut() {},
 				registerMessageRenderer() {},
@@ -34,7 +34,9 @@ describe("subagent extension child mode", () => {
 				},
 			});
 			registerSubagentExtension(fakePi);
-			if (!registeredTool) throw new Error("tool not registered");
+			// Select by name: the parent registers more than one tool, so "the last one registered" is not the subagent tool.
+			const registeredTool = registeredTools.get("subagent");
+			if (!registeredTool) throw new Error("subagent tool not registered, got: " + JSON.stringify([...registeredTools.keys()]));
 			const calls = [];
 			const ctx = {
 				cwd: process.cwd(),

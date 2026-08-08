@@ -100,4 +100,15 @@ describe("sanitizeConfig", () => {
 			},
 		});
 	});
+
+	// Regression (2026-08-08): `toolBudget` was accepted in config.json and silently discarded by
+	// sanitizeConfig, so a configured budget never reached any child.
+	it("keeps a valid toolBudget and drops an unusable one", () => {
+		assert.deepEqual(
+			sanitizeConfig({ toolBudget: { soft: 12, hard: 20, block: ["read", "grep", "find", "ls"] } }),
+			{ toolBudget: { soft: 12, hard: 20, block: ["read", "grep", "find", "ls"] } },
+		);
+		assert.deepEqual(sanitizeConfig({ toolBudget: { soft: 12 } }), {});
+		assert.deepEqual(sanitizeConfig({ toolBudget: "20" }), {});
+	});
 });

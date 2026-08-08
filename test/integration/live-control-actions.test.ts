@@ -265,4 +265,73 @@ describe("subagent live-control management actions", { skip: !createSubagentExec
 		assert.match(result.message, /Outcome is unknown/);
 		assert.doesNotMatch(result.message, /accepted by/);
 });
+
+	// Regression (2026-08-08): action='resume' against a *live* async child used to fire a bare
+	// pi-intercom event and report `Delivered follow-up to live async child.` on the routing receipt
+	// alone. A child that was busy mid-turn dropped the message while the parent believed it landed.
+	// Resume on a live child now rides the same M12.1 live-control transport as steer.
+	it("routes a resume follow-up for a live async child through live control instead of a bare intercom event", async () => {
+		const { executor, state } = makeExecutor();
+		assert.ok(executor);
+		const asyncId = `async-resume-live-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, asyncId);
+		fs.mkdirSync(asyncDir, { recursive: true });
+		asyncDirs.push(asyncDir);
+		fs.writeFileSync(
+			path.join(asyncDir, "status.json"),
+			JSON.stringify({
+				runId: asyncId,
+				mode: "single",
+				state: "running",
+				startedAt: Date.now(),
+				lastUpdate: Date.now(),
+				steps: [{ agent: "worker", status: "running" }],
+			}),
+			"utf-8",
+		);
+		const route = trackRoute(asyncId);
+		state.asyncJobs.set(asyncId, {
+			asyncId,
+			asyncDir,
+			status: "running",
+			mode: "single",
+			nestedRoute: route,
+		});
+		const owner = publishLiveControlOwnerEpoch(route, "0");
+		seedResult(route, "0", owner.epoch, "async-resume-id", "accepted-by-pi", "queued-steer");
+
+		const result = await executeAction(executor, { action: "resume", id: asyncId, message: "Escalate instead of guessing", requestId: "async-resume-id" });
+
+		assert.equal(result.isError, undefined);
+		assert.match(result.content[0]?.text ?? "", /Steer accepted.*queued as a steer/);
+		assert.doesNotMatch(result.content[0]?.text ?? "", /Delivered follow-up to live async child/);
+	});
+
+	it("labels the intercom fallback when a live async child has no live-control route", async () => {
+		const { executor } = makeExecutor();
+		assert.ok(executor);
+		const asyncId = `async-resume-nolive-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, asyncId);
+		fs.mkdirSync(asyncDir, { recursive: true });
+		asyncDirs.push(asyncDir);
+		fs.writeFileSync(
+			path.join(asyncDir, "status.json"),
+			JSON.stringify({
+				runId: asyncId,
+				mode: "single",
+				state: "running",
+				startedAt: Date.now(),
+				lastUpdate: Date.now(),
+				steps: [{ agent: "worker", status: "running" }],
+			}),
+			"utf-8",
+		);
+
+		// The run is live on disk but untracked in this session's state, so no live-control owner exists.
+		const result = await executeAction(executor, { action: "resume", id: asyncId, message: "Follow up" });
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /Live control: Async run .* is not live in this session/);
+		assert.match(result.content[0]?.text ?? "", /could not be delivered/);
+	});
 });

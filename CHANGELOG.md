@@ -1,14 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [0.46.0] - 2026-08-09
 
 ### Added
 
 - **Automatic GitHub Releases on tag push.** A new `release.yml` workflow creates a GitHub Release from the tag's CHANGELOG section whenever a `v*` tag is pushed (generated notes as fallback). Idempotent: it skips when a Release already exists, so it coexists with agent- or manually-created releases. Closes the gap that left v0.43.0–v0.45.2 as bare tags with the repo advertising v0.42.2 as Latest.
+- **Per-child tool budgets (`toolBudget`), backported from upstream 0.33.0.** `subagents.toolBudget: { soft?, hard, block? }` now reaches children instead of being parsed and discarded. The budget is enforced inside the child process, where `tool_call` can still veto a call: crossing `soft` appends a one-time nudge to the next tool result, and reaching `hard` blocks the budgeted tools so a runaway explorer still finishes with a final text answer. `block` names the tools to cut off; omit it and everything is blocked except `structured_output`, `contact_supervisor`, and `intercom`, so a child can always report back. Blocked attempts do not consume budget, so the reported count stays truthful.
+- **A parent-side `subagent_wait` tool, backported from upstream 0.33.0.** `subagent_wait()` blocks until the first tracked async run settles, `{ all: true }` drains every run, `{ id }` targets one, and `{ timeoutMs }` caps the block (default 10min, hard maximum 30min). A run raising `needs_attention` counts as settled so an escalation cannot be slept through. Timeouts and aborts return honestly and never interrupt the runs. This is what lets a non-interactive `pi -p` run or a background-launching skill collect async children in the same turn instead of polling `action: "status"` or exiting while children are still going.
 
 ### Fixed
 
 - **CI typecheck and tests now pass in a truly isolated environment.** The 0.45.3 CI pipeline's first real run failed: the local `node:fs` typecheck shim lacked `chmodSync` (used by the settings permission-preservation fix), and `typebox` — an optional peer — was absent from the lockfile, so `npm ci` installed neither its types nor its runtime for the test suites. Both had been masked locally by the shared dev-tools `node_modules`. The shim gains `chmodSync`, and `typebox` is pinned as a devDependency.
+- **`action: "resume"` against a live async child no longer reports a routing receipt as delivery.** The live branch fired a bare pi-intercom event and, on the broker's acceptance alone, returned `Delivered follow-up to live async child.` A child that was busy mid-turn dropped the message while the parent believed it had landed — reproduced end to end: an identical follow-up was ignored by a mid-turn child and obeyed by the same child when idle. Resume on a live child now rides the same M12.1 live-control transport as `steer`, so it is queued against the child's own owner epoch and reports the durable disposition (`queued-steer`, `started-turn`, …). Children with no registered live-control owner still fall back to intercom, but the result says so and states plainly that routing is not receipt. Upstream fixed the same class of bug in 0.30.0 by interrupting the child first; this fork's live-control transport makes the signal unnecessary. `resume` also forwards `requestId` now, so a retried follow-up is idempotent.
 
 ## [0.45.3] - 2026-08-07
 

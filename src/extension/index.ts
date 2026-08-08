@@ -23,10 +23,12 @@ import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "..
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs, setInlineReadMaxBytes } from "../shared/settings.ts";
 import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "../tui/render.ts";
-import { SubagentParams } from "./schemas.ts";
+import { SubagentParams, SubagentWaitParams } from "./schemas.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
+import { formatAsyncWaitResult, waitForAsyncRuns } from "../runs/background/async-wait.ts";
+import { readStatus } from "../shared/utils.ts";
 import { registerSlashCommands } from "../slash/slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "../slash/prompt-template-bridge.ts";
 import { registerSlashSubagentBridge } from "../slash/slash-bridge.ts";
@@ -466,6 +468,35 @@ DIAGNOSTICS:
 	};
 
 	pi.registerTool(tool);
+
+	// Parent-side blocking wait. Without it, a parent that launched async children can only poll
+	// action:"status" in a loop or end its turn and hope a notification lands — which never works in
+	// a non-interactive `pi -p` run, where the process can exit with children still going.
+	const waitTool: ToolDefinition<typeof SubagentWaitParams, Details> = {
+		name: "subagent_wait",
+		label: "Subagent Wait",
+		description: [
+			"Block until detached async subagent runs finish or need attention.",
+			"subagent_wait() returns as soon as the first tracked run settles; { all: true } drains every run; { id } targets one run; { timeoutMs } caps the block.",
+			"A timeout or abort returns honestly and never interrupts the runs. This tool only waits — read results with subagent({ action: 'status' }).",
+		].join("\n"),
+		parameters: SubagentWaitParams,
+		async execute(_id, params, signal) {
+			const result = await waitForAsyncRuns(params, {
+				listJobs: () => [...state.asyncJobs.values()],
+				readStatus,
+				now: () => Date.now(),
+				sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+				signal,
+			});
+			return {
+				content: [{ type: "text", text: formatAsyncWaitResult(result) }],
+				details: { mode: "management", results: [] },
+			};
+		},
+	};
+
+	pi.registerTool(waitTool);
 	registerSlashCommands(pi, state);
 
 	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";

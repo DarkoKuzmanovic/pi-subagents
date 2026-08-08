@@ -6,6 +6,8 @@ import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV, validateSt
 import { createLiveControlOwnerListener, type LiveControlOwnerListener } from "./live-control-owner.ts";
 import { isSafeNestedId, resolveInheritedNestedRouteFromEnv } from "./nested-events.ts";
 import { SUBAGENT_CHILD_INDEX_ENV } from "./pi-args.ts";
+import { createToolBudgetEnforcer } from "./tool-budget.ts";
+import { loadConfig } from "../../extension/config.ts";
 
 const SUBAGENT_INHERIT_PROJECT_CONTEXT_ENV = "PI_SUBAGENT_INHERIT_PROJECT_CONTEXT";
 const SUBAGENT_INHERIT_SKILLS_ENV = "PI_SUBAGENT_INHERIT_SKILLS";
@@ -196,6 +198,23 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 					terminate: true,
 				};
 			},
+		});
+	}
+
+	// Tool budget (upstream 0.33.0 parity). Enforced here rather than parent-side because only the
+	// child process sees `tool_call` before execution and can veto it; the parent's run watcher sees
+	// `tool_execution_start` after the fact. `subagents.toolBudget` used to be read from config and
+	// silently discarded, so a configured budget did nothing at all.
+	const toolBudget = loadConfig().toolBudget;
+	if (toolBudget) {
+		const enforcer = createToolBudgetEnforcer(toolBudget);
+		pi.on("tool_call", (event) => {
+			const decision = enforcer.onToolCall(event.toolName);
+			return decision.blocked ? { block: true, reason: decision.reason } : undefined;
+		});
+		pi.on("tool_result", (event) => {
+			const nudge = enforcer.takeSoftNudge();
+			return nudge ? { content: [...event.content, { type: "text", text: nudge }] } : undefined;
 		});
 	}
 	pi.on("context", (event) => {

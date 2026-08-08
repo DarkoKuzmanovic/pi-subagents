@@ -646,6 +646,74 @@ async function resumeLiveNestedRun(input: { target: ResolvedSubagentRunId & { ki
 	return { content: [{ type: "text", text: `Nested run ${run.id} appears live but its owner route is not reachable. Wait for completion, then retry action='resume'.` }], isError: true, details: { mode: "management", results: [] } };
 }
 
+/**
+ * Deliver an `action: "resume"` follow-up to a still-running async child.
+ *
+ * Prefers the M12.1 live-control transport (steer): it queues the message against the child's own
+ * owner epoch and reports a durable disposition, so a child that is busy mid-turn still receives it
+ * after its current tool calls. The intercom event is only a routing hop into the child's session —
+ * a mid-turn child drops it while the parent still sees a `delivered` receipt, which made silently
+ * dropped follow-ups look successful. Intercom therefore remains only as an explicitly labelled
+ * fallback for live children with no registered live-control owner.
+ */
+async function deliverLiveAsyncFollowUp(input: {
+	/** Callers must have narrowed `kind === "live"`. AsyncResumeTarget is not a discriminated union, so that cannot be expressed here. */
+	target: AsyncResumeSourceTarget;
+	followUp: string;
+	/** Optional caller-supplied idempotency key, so a retried resume does not deliver twice. */
+	requestId?: string;
+	deps: ExecutorDeps;
+}): Promise<AgentToolResult<Details>> {
+	const { target, followUp, deps } = input;
+	let liveControlUnavailable = "no live-control route is registered for this run";
+	try {
+		const controlTarget = resolveLiveControlTarget({ action: "steer", id: target.runId, index: target.index }, deps);
+		const result = await performLiveControlAction({ ...controlTarget, action: "steer", text: followUp, ...(input.requestId ? { requestId: input.requestId } : {}) });
+		return {
+			content: [{ type: "text", text: [result.message, `Run: ${target.runId}`, `Agent: ${target.agent}`, `Child: ${target.index}`].join("\n") }],
+			...(result.ok ? {} : { isError: true }),
+			details: { mode: "management", results: [] },
+		};
+	} catch (error) {
+		liveControlUnavailable = error instanceof Error ? error.message : String(error);
+	}
+
+	const delivered = await deliverSubagentIntercomMessageEvent(
+		deps.pi.events,
+		target.intercomTarget,
+		`Follow-up for async run ${target.runId} (${target.agent}):\n\n${followUp}`,
+		500,
+		{ source: "async-resume", runId: target.runId, agent: target.agent, index: target.index },
+	);
+	if (delivered) {
+		return {
+			content: [{
+				type: "text",
+				text: [
+					`Live control was unavailable for this run (${liveControlUnavailable}); routed the follow-up over intercom instead.`,
+					`Intercom accepted the message for routing only. A child that is busy mid-turn can still drop it, so confirm the child acted on it before assuming it landed.`,
+					`Run: ${target.runId}`,
+					`Intercom target: ${target.intercomTarget}`,
+				].join("\n"),
+			}],
+			details: { mode: "management", results: [] },
+		};
+	}
+	return {
+		content: [{
+			type: "text",
+			text: [
+				`Async child appears live but the follow-up could not be delivered.`,
+				`Live control: ${liveControlUnavailable}`,
+				`Intercom target '${target.intercomTarget}' is not registered.`,
+				`Run: ${target.runId}`,
+				`Wait for completion, then retry action='resume'.`,
+			].join("\n"),
+		}],
+		isError: true,
+		details: { mode: "management", results: [] },
+	};
+}
 async function resumeAsyncRun(input: {
 	params: SubagentParamsLike;
 	requestCwd: string;
@@ -685,24 +753,7 @@ async function resumeAsyncRun(input: {
 	}
 
 	if (target.kind === "live") {
-		const delivered = await deliverSubagentIntercomMessageEvent(
-			input.deps.pi.events,
-			target.intercomTarget,
-			`Follow-up for async run ${target.runId} (${target.agent}):\n\n${followUp}`,
-			500,
-			{ source: "async-resume", runId: target.runId, agent: target.agent, index: target.index },
-		);
-		if (delivered) {
-			return {
-				content: [{ type: "text", text: [`Delivered follow-up to live async child.`, `Run: ${target.runId}`, `Intercom target: ${target.intercomTarget}`].join("\n") }],
-				details: { mode: "management", results: [] },
-			};
-		}
-		return {
-			content: [{ type: "text", text: [`Async child appears live but its intercom target is not registered.`, `Run: ${target.runId}`, `Intercom target: ${target.intercomTarget}`, `Wait for completion, then retry action='resume'.`].join("\n") }],
-			isError: true,
-			details: { mode: "management", results: [] },
-		};
+		return deliverLiveAsyncFollowUp({ target, followUp, requestId: input.params.requestId, deps: input.deps });
 	}
 
 	const { blocked, depth, maxDepth } = checkSubagentDepth(input.deps.config.maxSubagentDepth);

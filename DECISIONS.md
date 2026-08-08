@@ -99,3 +99,30 @@ Append-only project decisions. Historical workflow decisions remain here even wh
 - *Leaving `notifyOn` defaults alone:* rejected. `appendControlEvent` filters on `notifyOn`, so the new nudge would have been dropped before reaching anyone and the change would have shipped as a no-op.
 
 **Accepted cost:** `timeoutAction: "notify"` removes the run-duration backstop entirely. Documented in README, CHANGELOG, and the tool schema; `interrupt` is the stated way to stop such a run.
+
+## 2026-08-08 — Route live-child `resume` through the M12.1 live-control transport instead of upstream's process interrupt
+
+**Decision:** `action: "resume"` against a *live* async child submits a `steer` on the M12.1 live-control transport and reports the durable disposition. The pi-intercom event survives only as a fallback for live children with no registered live-control owner, and that fallback is labelled as routing rather than receipt. `requestId` is forwarded so a retried resume is idempotent.
+
+**Rationale:** The old path emitted one intercom event and returned `Delivered follow-up to live async child.` as soon as the broker accepted it. Delivery to a *session* is not delivery to a *model*: a child busy mid-turn dropped the message. Reproduced end to end — the same follow-up was ignored by a mid-turn child and obeyed by the same child when idle. Live control already solves exactly this, queuing against the child's own owner epoch and distinguishing `queued-steer` from `started-turn`.
+
+**Alternatives considered:**
+
+- *Upstream 0.30.0's fix (interrupt the child before delivering):* rejected. Our `ASYNC_INTERRUPT_SIGNAL` handler pauses the entire run — it sets `state: "paused"`, marks running steps paused, and interrupts every active child. Borrowing it to make a nudge land would stop the work the nudge is meant to redirect. Upstream's runner does not carry our pause semantics, so the same fix is not portable.
+- *Keeping intercom as the primary path and only softening the wording:* rejected. Honest wording on a channel that silently drops mid-turn messages still leaves the parent unable to steer a busy child, which is the case that matters.
+- *Using `follow-up` rather than `steer` semantics:* rejected. `follow-up` is queued until the child's current turn ends; the failure being fixed is precisely a child that will not yield for minutes.
+
+**Accepted cost:** live-child resume now requires the run to be tracked in this session's state (that is where `nestedRoute` lives). Runs discovered only on disk take the intercom fallback and say so.
+
+## 2026-08-08 — Enforce tool budgets inside the child, from global config only
+
+**Decision:** `toolBudget` is read by the child's own prompt-runtime extension via `loadConfig()` and enforced with `pi.on("tool_call")` / `pi.on("tool_result")`. No per-run, per-step, or per-agent override ships in this change.
+
+**Rationale:** Only the child sees `tool_call` before execution and can return `{ block: true }`; the parent's runner observes `tool_execution_start` after the fact and can merely watch. Reading the same global config file the parent reads keeps the first landing free of payload plumbing through both the foreground executor and the async runner's spawn payload.
+
+**Alternatives considered:**
+
+- *Propagating the budget through `buildPiArgs` env:* deferred, not rejected. It is the right home for per-run overrides and should land with them, rather than shipping now as an unused parameter.
+- *Blocking every tool at the hard limit:* rejected. A child that cannot call `structured_output` or `contact_supervisor` cannot report back, so an exhausted budget would convert a slow result into no result.
+
+**Accepted cost:** a mid-run edit to `config.json` changes the budget of children that start afterwards, and two children of the same run can observe different budgets. Acceptable while the value is global; per-run overrides must snapshot at launch.

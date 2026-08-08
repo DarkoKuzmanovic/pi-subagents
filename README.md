@@ -48,6 +48,7 @@
   - [Parameter reference](#parameter-reference)
   - [Live run control: steer, follow-up, wrap-up](#live-run-control-steer-follow-up-wrap-up)
   - [Recovery and inspection](#recovery-and-inspection)
+  - [Waiting for async runs](#waiting-for-async-runs)
 - [Worktree isolation](#worktree-isolation)
 - [Configuration reference](#configuration-reference)
 - [Files, logs, and observability](#files-logs-and-observability)
@@ -974,6 +975,21 @@ subagent({ action: "detach", attachmentId: "<attachment-id>" });
 
 Nested descendants are not recorded as separate handles: a nested run is rediscovered via its parent's route and the durable file-based nested registry, so `recover`/`inspect` reach it through the parent.
 
+### Waiting for async runs
+
+A detached async run outlives the turn that launched it. In an interactive session a completion notification eventually arrives, but a non-interactive `pi -p` run can exit with children still going, and a skill that launches work then needs the results has nothing to block on. `subagent_wait` is that block.
+
+```javascript
+subagent_wait()                                  // return when the first tracked run settles
+subagent_wait({ all: true })                     // drain every tracked run
+subagent_wait({ id: "a451bd3f" })                // wait for one run
+subagent_wait({ all: true, timeoutMs: 120000 })  // cap the block at two minutes
+```
+
+A run counts as settled when it reaches `complete`, `failed`, or `paused` — or when it raises `needs_attention`, so an escalation waiting on a decision cannot be slept through. Run state is read from each run's own `status.json` rather than the session's in-memory projection.
+
+The default timeout is 10 minutes and the hard maximum is 30. A timeout or an aborted turn returns honestly and **never interrupts the runs**; they keep going and can be waited on again. `subagent_wait` reports state only — read output with `subagent({ action: "status" })`.
+
 ## Worktree isolation
 
 Parallel agents can clobber each other if they edit the same checkout. `worktree: true` gives each parallel child its own git worktree branched from `HEAD`.
@@ -1035,6 +1051,9 @@ After a worktree parallel step completes, per-agent diff stats are appended to t
 | `worktreeSetupHookTimeoutMs`     | number  | `30000`    | Timeout for the worktree setup hook.                                                                                                                                                                                                                          |
 | `inlineReadMaxBytes`             | number  | `204800`   | Max bytes for inline-read content in fresh-context children. Range: `[1024, 8MB]`.                                                                                                                                                                            |
 | `dynamicFanoutMaxItems`          | number  | none       | Default cap on dynamic-fanout expanded items when a step omits `expand.maxItems`. A dynamic step with no effective cap (neither here nor on the step) is rejected before execution.                                                                            |
+| `toolBudget.hard`                | number  | none       | Tool-call ceiling for each child. Once a child has made this many tool calls, budgeted tools are blocked for the rest of its run so a runaway explorer still finishes with a final text answer. Blocked attempts do not consume budget. Enforced inside the child process; omit the whole `toolBudget` object to leave children uncapped.                                            |
+| `toolBudget.soft`                | number  | none       | Nudge threshold. The first tool result after this many calls carries a one-time `[tool budget]` line telling the child to start converging. Ignored unless it is below `hard`.                                                                                |
+| `toolBudget.block`               | array   | none       | Tool names blocked at the hard limit. Omit it and every tool is blocked except `structured_output`, `contact_supervisor`, and `intercom`, so a child can always report back.                                                                                  |
 | `subagents.modelLanes`           | object  | none       | Named model/thinking pairs in `subagents.modelLanes.<agentName>.<laneName> = { model?, thinking? }`. Lives in `~/.pi/agent/settings.json` (user scope, editable in the `/subagents` TUI) or `.pi/settings.json` (project scope, display-only in the TUI). Project lanes override user lanes at dispatch time. Users must write project lanes by hand. Lane names created or renamed via the TUI must match `/^[a-z0-9][a-z0-9-]*$/`; pre-existing free-form lane names are accepted on read and remain editable in place. TUI persistence is atomic and merge-preserving. See [Model lanes and the `/subagents` lane editor](#model-lanes-and-the-subagents-lane-editor).                                                                                                                                                          |
 
 Bridge activation requires `pi-intercom` to be installed and enabled, a targetable session name, and `pi-intercom` in any explicit agent `extensions` allowlist. The default injected guidance tells children to use `contact_supervisor` with `reason: "need_decision"` when blocked and `reason: "progress_update"` for meaningful updates.

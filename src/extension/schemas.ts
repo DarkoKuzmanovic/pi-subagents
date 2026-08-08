@@ -215,3 +215,15 @@ export const SubagentParams = Type.Object({
 	thinking: Type.Optional(Type.String({ enum: [...THINKING_LEVELS], description: "Thinking level override for single agent dispatch. Takes precedence over agent config for this dispatch only." })),
 	reads: Type.Optional(ReadsOverride),
 });
+
+/**
+ * Parameters for the parent-side `subagent_wait` tool. Deliberately tiny: waiting is not a place to
+ * hide orchestration options, and every extra knob is one more thing a model can get wrong while a
+ * turn is blocked.
+ */
+export const SubagentWaitParams = Type.Object({
+	id: Type.Optional(Type.String({ description: "Wait for this async run id only. Omit to wait on every async run tracked in this session." })),
+	all: Type.Optional(Type.Boolean({ description: "Wait until every watched run has settled instead of returning as soon as the first one does (default: false)." })),
+	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Cap the wait in milliseconds (default: 600000 = 10min, maximum: 1800000 = 30min). A timeout returns honestly and never interrupts the runs." })),
+	pollMs: Type.Optional(Type.Integer({ minimum: 1, description: "How often to re-read run status, in milliseconds (default: 500)." })),
+});

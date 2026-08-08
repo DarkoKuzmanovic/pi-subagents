@@ -644,6 +644,15 @@ interface TopLevelParallelConfig {
 	concurrency?: number;
 }
 
+/** Per-child tool-call budget. Enforcement lives in src/runs/shared/tool-budget.ts, inside the child process. */
+export interface ToolBudget {
+	/** Nudge the child once it has made this many tool calls. Ignored unless it is below `hard`. */
+	soft?: number;
+	/** Once this many tool calls have been made, budgeted tools are blocked for the rest of the run. */
+	hard: number;
+	/** Tool names to block at the hard limit. Omit to block everything except the always-allowed tools. */
+	block?: string[];
+}
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	forceTopLevelAsync?: boolean;
@@ -659,6 +668,8 @@ export interface ExtensionConfig {
 	inlineReadMaxBytes?: number;
 	/** Default cap on dynamic-fanout expanded items when a step omits expand.maxItems. */
 	dynamicFanoutMaxItems?: number;
+	/** Per-child tool-call budget, enforced inside the child process. See src/runs/shared/tool-budget.ts. */
+	toolBudget?: ToolBudget;
 }
 // ============================================================================
 // Nested run types (upstream v0.25.0 fanout feature)

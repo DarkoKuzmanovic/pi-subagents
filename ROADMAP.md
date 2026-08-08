@@ -14,6 +14,7 @@
 - **M11** — Restore chain-default clarify precedence and add the routing truth-table regression — v0.42.2 (2026-07-20)
 - **M12** — Live run handles: acknowledged cross-process steering/follow-up/wrap-up transport, durable run-handle recovery, and compact attach/detach inspection across live and completed runs — v0.43.0 (2026-07-22)
 - **M2** — Lane-editing TUI over user-scope `subagents.modelLanes`: staged create/rename/edit/delete with per-role undo, read-only project rows with shadow labeling, and an atomic merge-preserving user-only lane store — v0.45.0 (2026-07-31)
+- **M15** — Upstream backports rebuilt on this fork's own architecture: live-child `resume` moved onto the M12.1 live-control transport, in-child `toolBudget` enforcement, and the `subagent_wait` settle-barrier — v0.46.0 (2026-08-09)
 
 ## Current
 
@@ -23,7 +24,7 @@
 
 ## Planned
 
-- **M14** — Full-coverage green CI: recover the ~67 environmentally-skipped integration tests in the isolated CI environment (add `jiti` as a devDependency for the ~42 loader-gated tests; evaluate shims or install strategy for the `@earendil-works/*`-gated remainder). Ship with the next feature (minor) version bump.
+- **M14** — Full-coverage green CI: recover the ~67 environmentally-skipped integration tests in the isolated CI environment (add `jiti` as a devDependency for the ~42 loader-gated tests; evaluate shims or install strategy for the `@earendil-works/*`-gated remainder). Originally slated to ship with the next minor bump; it **did not ship in v0.46.0**, which went to the M15 backports instead. Deliberately not re-promised to a version — take it when the skip count next obstructs a release or hides a real failure.
 ## Debt
 
 Known, accepted, and deliberately unbundled. Each entry states why it was not fixed in the milestone

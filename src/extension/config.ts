@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ControlConfig, ControlEventType, ControlNotificationChannel, ExtensionConfig, IntercomBridgeConfig } from "../shared/types.ts";
+import { sanitizeToolBudget } from "../runs/shared/tool-budget.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -64,6 +65,8 @@ export function sanitizeConfig(value: unknown): ExtensionConfig {
 	}
 	const intercomBridge = sanitizeIntercomBridge(value.intercomBridge);
 	if (intercomBridge) config.intercomBridge = intercomBridge;
+	const toolBudget = sanitizeToolBudget(value.toolBudget);
+	if (toolBudget) config.toolBudget = toolBudget;
 	return config;
 }
 
