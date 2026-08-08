@@ -63,6 +63,25 @@ that surfaced it, so a future reader does not mistake it for an oversight.
   implementation-mutation default. `src/runs/shared/completion-guard.ts` now also recognizes "edit
   nothing", "make/making no edits", "without editing/making edits/making changes", and "no edits
   needed/required/necessary". Regression test reproduces the exact repro phrasing plus the new variants.
+- **Subagent run transcripts (`<parent-id>/<hash>/run-N/session.jsonl`) are never pruned** — surfaced 2026-08-08.
+  `getSubagentSessionRoot()` (`src/extension/index.ts:68`, mirrored in `fanout-child.ts:66`) derives a per-parent
+  session base dir (`sessions/<parent>_<parentId>/`), and `subagent-executor.ts:2910` joins a `runId` onto it,
+  then `sessionDirForIndex` (`:2921`) writes `<hash>/run-N/session.jsonl` under it. The dirs are created with
+  `fs.mkdirSync` and **nothing ever removes them**: `cleanupOldArtifacts` (`src/shared/artifacts.ts:43`) sweeps
+  only `subagent-artifacts/`, `cleanupOldChainDirs` (`src/shared/settings.ts:170`) sweeps only tmp chain dirs, and
+  worktree sweeping touches only git branches. On this machine the leak is 36 dated dirs / 263 child-run dirs /
+  399 `session.jsonl` files ≈ **411 MB**, and it grows one dir per subagent-spawning parent session, surviving even
+  if the parent `.jsonl` is later deleted.
+  **Proposed fix (next minor milestone):** extend the existing housekeeping pattern so run transcripts are covered.
+  Add a `cleanupRunTranscripts(sessionsBase, maxAgeDays)` analog in `src/shared/artifacts.ts` that walks each
+  dated dir, deletes child hashes whose run transcripts are older than `maxAgeDays` (reusing the marker-file
+  rate-limit idiom from `cleanupOldArtifacts`), and also removes a dated parent dir once it has zero children AND
+  its parent `.jsonl` is gone (true orphan). Wire it alongside the existing `cleanupAllArtifactDirs`/`cleanupOldChainDirs`
+  startup call (`src/extension/index.ts:228`-`234`) and the `session_start` hook (`cleanupSessionArtifacts`, `:514`),
+  gated by the same-or-new `modelLanes`-adjacent config defaulting to a conservative cutoff (e.g. 30 days).
+  Conservative defaults: never delete children referenced by a still-open parent session; only prune by age, and
+  only fully remove a dated dir when its parent `.jsonl` is verified absent. Regression: unit test on the walk/
+  prune logic with a seeded temp layout, asserting both age cutoff and orphan-parent removal. — effort:S
 ## Deferred decisions
 
 Settled by explicit user decision, not oversight. Revisit only if usage argues otherwise.
